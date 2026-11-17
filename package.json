@@ -15,6 +15,7 @@
     "dev": "node scripts/dev.mjs",
     "dev:mock": "node scripts/dev.mjs --mock",
     "pack:plugin": "pnpm build && pnpm --dir packages/flowspace pack --pack-destination ../../artifacts",
+    "install:market": "node scripts/install.mjs --profile web --github",
     "test:integration": "tsx scripts/integration.ts"
   },
   "devDependencies": {

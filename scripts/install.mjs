@@ -5,13 +5,20 @@ import { spawn } from "node:child_process";
 const root = resolve(import.meta.dirname, "..");
 const index = process.argv.indexOf("--profile");
 const profileName = index < 0 ? "flowspace" : process.argv[index + 1];
+const useGithub = process.argv.includes("--github");
+const githubSpec =
+  "github:the-snowpear/dsh-flowspace#master&path:/packages/flowspace";
 if (!profileName || !/^[a-zA-Z0-9_-]+$/.test(profileName))
   throw new Error("Supply a valid --profile name");
-const files = (await readdir(join(root, "artifacts")))
-  .filter((n) => /^dsh-flowspace-.*\.tgz$/.test(n))
-  .sort();
-const artifact = files.at(-1);
-if (!artifact) throw new Error("Run pnpm pack:plugin first");
+let targetSpec = githubSpec;
+if (!useGithub) {
+  const files = (await readdir(join(root, "artifacts")))
+    .filter((n) => /^dsh-flowspace-.*\.tgz$/.test(n))
+    .sort();
+  const artifact = files.at(-1);
+  if (!artifact) throw new Error("Run pnpm pack:plugin first");
+  targetSpec = join(root, "artifacts", artifact);
+}
 const dshHome = process.env.DSH_HOME || join(homedir(), ".dsh");
 const profile = join(dshHome, "profiles", profileName);
 const backup = join(
@@ -42,7 +49,7 @@ const globalCli =
     : undefined;
 if (!globalCli)
   throw new Error(
-    `Install manually: dsh plugin --profile ${profileName} add ${join(root, "artifacts", artifact)}`,
+    `Install manually: dsh plugin --profile ${profileName} add "${targetSpec}"`,
   );
 const child = spawn(
   process.execPath,
@@ -52,7 +59,7 @@ const child = spawn(
     "--profile",
     profileName,
     "add",
-    join(root, "artifacts", artifact),
+    targetSpec,
   ],
   { stdio: "inherit", windowsHide: true },
 );
