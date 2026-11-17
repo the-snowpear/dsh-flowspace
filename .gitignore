@@ -1,0 +1,11 @@
+node_modules/
+**/lib/
+.local/
+.backups/
+artifacts/
+test-results/
+*.tsbuildinfo
+*.tgz
+.env
+.playwright-cli/
+output/

@@ -1,0 +1,30 @@
+{
+  "name": "dsh-flowspace-workspace",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.21.0",
+  "engines": {
+    "node": ">=24.9.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p packages/flowspace/tsconfig.host.json --noEmit && tsc -p packages/flowspace/tsconfig.client.json --noEmit",
+    "test": "tsx --test packages/flowspace/test/*.test.ts",
+    "check": "pnpm build && pnpm typecheck && pnpm test",
+    "test:real": "tsx scripts/real-smoke.ts",
+    "dev": "node scripts/dev.mjs",
+    "dev:mock": "node scripts/dev.mjs --mock",
+    "pack:plugin": "pnpm build && pnpm --dir packages/flowspace pack --pack-destination ../../artifacts",
+    "test:integration": "tsx scripts/integration.ts"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-typert-generator": "0.2.2-rc.3",
+    "@types/node": "^24.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.20.0",
+    "typescript": "~5.9.3"
+  }
+}

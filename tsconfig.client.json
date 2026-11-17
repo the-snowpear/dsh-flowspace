@@ -1,0 +1,4 @@
+{
+  "files": [],
+  "references": [{ "path": "./packages/flowspace/tsconfig.client.json" }]
+}
