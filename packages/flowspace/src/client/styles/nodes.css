@@ -1,0 +1,1608 @@
+/* ============================================================
+   FlowSpace · Node Cards, Ports, Embedded DSH Session, Groups & Floating Windows
+   Migrated from omp-studio agent-canvas prototype (nodes.css)
+   ============================================================ */
+
+.fs-root .node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-8);
+  color: var(--text);
+  user-select: none;
+  --kc: var(--text-3);
+  transition:
+    width var(--dur-slow) var(--ease-out),
+    height var(--dur-slow) var(--ease-out),
+    border-color var(--dur-fast) var(--ease),
+    background-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    opacity var(--dur) var(--ease);
+}
+.fs-root .node:hover {
+  border-color: color-mix(in srgb, var(--kc) 55%, var(--border-strong));
+}
+.fs-root .node.selected {
+  z-index: 4;
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 3px var(--accent-soft),
+    0 18px 40px -18px color-mix(in srgb, var(--accent) calc(55% * var(--glow)), transparent);
+}
+.fs-root .node:focus {
+  outline: none;
+}
+.fs-root .node:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.fs-root .node-enter {
+  animation: cv-node-in var(--dur-slower) var(--ease-out) backwards;
+}
+.fs-root .is-dragging .node,
+.fs-root .is-dragging .workflow-group {
+  transition-duration: 0s;
+}
+/* Pointer hover glow on card */
+.fs-root .node::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    260px circle at var(--px, 50%) var(--py, 0%),
+    color-mix(in srgb, var(--kc) calc(13% * var(--glow)), transparent),
+    transparent 70%
+  );
+  opacity: 0;
+  transition: opacity var(--dur-slow) var(--ease);
+}
+.fs-root .node:hover::after {
+  opacity: 1;
+}
+
+.fs-root .node-agent {
+  --kc: var(--text-3);
+}
+.fs-root .node.status-draft {
+  --kc: var(--accent);
+  border-style: dashed;
+  border-color: var(--accent-border);
+}
+.fs-root .node.status-running,
+.fs-root .node.status-completed,
+.fs-root .node.status-done {
+  --kc: var(--green);
+}
+.fs-root .node.status-waiting,
+.fs-root .node.status-input,
+.fs-root .node.status-paused,
+.fs-root .node.needs-confirmation {
+  --kc: var(--amber);
+}
+.fs-root .node.status-error,
+.fs-root .node.status-aborted,
+.fs-root .node.status-interrupted {
+  --kc: var(--red);
+}
+.fs-root .node-file {
+  --kc: var(--k-file);
+}
+.fs-root .node-display {
+  --kc: var(--k-display);
+}
+.fs-root .node-board {
+  --kc: var(--k-board);
+}
+.fs-root .node-detail {
+  --kc: var(--k-detail);
+}
+.fs-root .node-note {
+  --kc: var(--k-note);
+  background: var(--note-bg);
+  border-color: var(--note-border);
+}
+
+/* Running conic beam & Waiting breathing aura */
+.fs-root .node.status-running {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--green) 45%, var(--border-strong));
+  box-shadow: 0 0 34px -10px color-mix(in srgb, var(--green) calc(60% * var(--glow)), transparent);
+}
+.fs-root .node.status-running::before {
+  content: "";
+  position: absolute;
+  inset: -1.5px;
+  border-radius: inherit;
+  padding: 1.5px;
+  pointer-events: none;
+  background: conic-gradient(
+    from var(--beam),
+    transparent 0 58%,
+    color-mix(in srgb, var(--green) 60%, transparent) 76%,
+    var(--green) 90%,
+    color-mix(in srgb, var(--green) 40%, #fff) 96%,
+    transparent 100%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+  animation: cv-beam var(--loop-drift) linear infinite;
+}
+.fs-root .node.status-waiting,
+.fs-root .node.status-input,
+.fs-root .node.needs-confirmation {
+  border-color: var(--amber);
+  border-style: solid;
+  --ring: var(--amber-soft);
+}
+.fs-root .node.status-waiting::before,
+.fs-root .node.status-input::before,
+.fs-root .node.needs-confirmation::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: cv-breathe var(--loop-drift) var(--ease-loop) infinite;
+}
+.fs-root .node.is-pinned .node-avatar::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+/* ---------- Card Header ---------- */
+.fs-root .node-header {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 8px 0 11px;
+  flex: none;
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  position: relative;
+}
+.fs-root .node-avatar {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--kc);
+  background: color-mix(in srgb, var(--kc) 14%, var(--surface));
+  transition:
+    color var(--dur) var(--ease),
+    background-color var(--dur) var(--ease);
+}
+.fs-root .node-avatar .ic {
+  width: 15px;
+  height: 15px;
+}
+.fs-root .agent-avatar {
+  border-radius: 50%;
+}
+.fs-root .status-draft .node-avatar {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--accent-border);
+}
+.fs-root .status-running .agent-avatar::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  border-top-color: var(--kc);
+  border-right-color: var(--kc);
+  animation: omp-spin var(--loop-spin) linear infinite;
+}
+.fs-root .status-waiting .node-avatar,
+.fs-root .status-input .node-avatar,
+.fs-root .needs-confirmation .node-avatar {
+  animation: omp-pulse var(--loop-pulse) var(--ease-loop) infinite;
+}
+.fs-root .node-heading {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+.fs-root .node-heading strong {
+  font: 600 14px/1.3 var(--font-display);
+  letter-spacing: -0.1px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.fs-root .node-heading small {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  padding: 1px 7px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  translate: 0 -1px;
+}
+.fs-root .node-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: none;
+}
+.fs-root .node-actions .icon-button {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+.fs-root .node-actions .ic {
+  width: 13px;
+  height: 13px;
+}
+.fs-root .node-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 0 0 11px 11px;
+}
+.fs-root .node.full .node-body {
+  animation: var(--motion-unfold);
+}
+
+/* ---------- Compact Card ---------- */
+.fs-root .node.compact .node-header {
+  height: 42px;
+  border-bottom: 0;
+}
+.fs-root .node.compact .node-avatar {
+  width: 24px;
+  height: 24px;
+}
+.fs-root .node.compact .node-heading strong {
+  font-size: 13px;
+}
+.fs-root .node.compact .node-actions {
+  position: absolute;
+  right: 6px;
+  top: 9px;
+  padding-left: 16px;
+  background: linear-gradient(90deg, transparent, var(--surface) 14px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.fs-root .node-note.compact .node-actions {
+  background: linear-gradient(90deg, transparent, var(--note-bg) 14px);
+}
+.fs-root .node.compact:hover .node-actions,
+.fs-root .node.compact.selected .node-actions,
+.fs-root .node.compact:focus-within .node-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.fs-root .semantic-zoom .node.compact .node-heading strong {
+  font-size: calc(13px * var(--type-scale, 1));
+}
+.fs-root .semantic-zoom .compact-status .status {
+  font-size: calc(11px * var(--type-scale, 1));
+  height: auto;
+  padding: 1px 8px;
+}
+.fs-root .semantic-zoom .compact-status > span:last-child,
+.fs-root .semantic-zoom .compact-summary,
+.fs-root .semantic-zoom .compact-tool {
+  display: none;
+}
+.fs-root .semantic-zoom .node.compact .node-avatar {
+  scale: var(--type-scale, 1);
+  margin-right: calc(8px * (var(--type-scale, 1) - 1));
+}
+.fs-root .compact-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 11px;
+}
+.fs-root .compact-status > span:last-child {
+  margin-left: auto;
+  color: var(--text-faint);
+  font: 10.5px var(--font-mono);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.fs-root .compact-summary {
+  margin: 6px 12px 0 11px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.fs-root .node-note .compact-summary {
+  margin-top: 0;
+  color: var(--text);
+}
+.fs-root .compact-tool {
+  padding: 0 12px 0 44px;
+  line-height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+.fs-root .compact-tool span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fs-root .compact-tool b {
+  color: var(--text);
+  font-weight: 600;
+}
+.fs-root .compact-display-mode {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  color: var(--k-display);
+  font-size: 10.5px;
+  padding: 0 7px;
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--k-display) 12%, transparent);
+}
+.fs-root .compact-release {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 10px 0 8px;
+  border-radius: var(--r-full);
+  color: var(--surface);
+  background: var(--amber);
+  font-size: 11px;
+  font-weight: 600;
+  box-shadow: 0 6px 14px -6px var(--amber);
+}
+.fs-root .compact-release .ic {
+  width: 11px;
+  height: 11px;
+}
+
+/* ---------- Full Agent Card ---------- */
+.fs-root .agent-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.fs-root .agent-status-row {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 11px;
+  gap: 7px;
+  flex: none;
+}
+.fs-root .agent-workspace-tag {
+  margin-left: auto;
+  color: var(--text-faint);
+  font: 500 10.5px var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+.fs-root .queue-count {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--r-full);
+  font: 500 10.5px var(--font-mono);
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+.fs-root .queue-count .ic {
+  width: 11px;
+  height: 11px;
+}
+.fs-root .node-tabs {
+  height: 28px;
+  display: flex;
+  align-items: stretch;
+  margin: 0 10px 8px;
+  padding: 2px;
+  gap: 2px;
+  flex: none;
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+.fs-root .node-tabs button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--text-3);
+  font-size: 12px;
+  white-space: nowrap;
+  border-radius: 7px;
+}
+.fs-root .node-tabs button:hover {
+  color: var(--text);
+}
+.fs-root .node-tabs button[aria-selected="true"] {
+  color: var(--text);
+  font-weight: 600;
+  background: var(--surface);
+  box-shadow:
+    0 0 0 1px var(--border-strong),
+    0 1px 3px var(--shadow);
+}
+.fs-root .node-tabs button > span {
+  font: 500 10px var(--font-mono);
+  color: var(--text-faint);
+  padding: 0 5px;
+  border-radius: var(--r-full);
+  background: var(--surface-3);
+}
+.fs-root .node-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 12px 12px;
+  user-select: text;
+  border-top: 1px solid var(--border);
+}
+.fs-root .agent-embedded-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+}
+.fs-root .fs-embedded {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.fs-root .fs-embedded > div {
+  flex: 1;
+  min-height: 0;
+}
+.fs-root .fs-loading {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+.fs-root .quote-selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 10px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--accent-border);
+  font-size: 11.5px;
+  color: var(--accent);
+}
+.fs-root .task-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 12px;
+}
+.fs-root .task-label {
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+.fs-root .task-editor {
+  width: 100%;
+  flex: 1;
+  min-height: 92px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.7;
+  user-select: text;
+  caret-color: var(--accent);
+}
+.fs-root .task-editor::placeholder,
+.fs-root .note-editor::placeholder,
+.fs-root .followup-editor::placeholder {
+  color: var(--text-faint);
+}
+.fs-root .latest-output-preview {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  border-left: 2px solid var(--green);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-2);
+  max-height: 92px;
+  overflow: auto;
+}
+.fs-root .context-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  margin-top: auto;
+  padding-top: 6px;
+}
+.fs-root .context-label .ic {
+  width: 12px;
+  height: 12px;
+}
+.fs-root .context-label button {
+  margin-left: auto;
+  width: 22px;
+  height: 20px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+}
+.fs-root .context-label button:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.fs-root .reference-tray {
+  min-height: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.fs-root .empty-reference {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-faint);
+  border-radius: var(--r-full);
+  padding: 0 10px 0 8px;
+  font-size: 11px;
+}
+.fs-root .empty-reference:hover {
+  border-color: var(--accent-border);
+  color: var(--accent);
+  background: var(--accent-softer);
+}
+.fs-root .empty-reference .ic {
+  width: 11px;
+  height: 11px;
+}
+
+/* 4-State Context Reference Capsules */
+.fs-root .capsule {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 0 9px 0 7px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-full);
+  color: var(--text);
+  font-size: 11.5px;
+  background: var(--accent-softer);
+  cursor: grab;
+  animation: cv-mark-in var(--dur) var(--ease-spring) backwards;
+}
+.fs-root .capsule:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  translate: 0 -1px;
+}
+.fs-root .capsule .ic {
+  width: 12px;
+  height: 12px;
+  color: var(--accent);
+}
+.fs-root .capsule span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 145px;
+}
+.fs-root .capsule-sent {
+  background: transparent;
+  color: var(--text-faint);
+  border-color: var(--border-strong);
+  border-style: dashed;
+}
+.fs-root .capsule-sent .ic {
+  color: var(--glyph);
+}
+.fs-root .capsule-updated {
+  color: var(--green);
+  background: var(--green-soft);
+  border-color: var(--green);
+}
+.fs-root .capsule-updated .ic {
+  color: var(--green);
+}
+.fs-root .capsule-always {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent-border);
+}
+
+.fs-root .agent-footer {
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: 44px;
+  padding: 0 8px 0 10px;
+  gap: 5px;
+  border-top: 1px solid var(--border);
+}
+.fs-root .model-picker,
+.fs-root .mode-picker {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--r-full);
+  color: var(--text-3);
+  font-size: 11px;
+}
+.fs-root .model-picker .ic,
+.fs-root .mode-picker .ic {
+  width: 12px;
+  height: 12px;
+}
+.fs-root .model-picker span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.fs-root .model-picker:hover,
+.fs-root .mode-picker:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.fs-root .mode-picker {
+  flex: none;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.fs-root .agent-controls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.fs-root .agent-controls .button {
+  min-height: 28px;
+  padding: 0 11px;
+  font-size: 12px;
+}
+.fs-root .agent-controls .button .ic {
+  width: 12px;
+  height: 12px;
+}
+
+/* Bottom Progress Sweep Bar */
+.fs-root .progress-line {
+  height: 3px;
+  position: absolute;
+  bottom: 0;
+  left: 12px;
+  right: 12px;
+  overflow: hidden;
+  opacity: 0;
+  border-radius: 3px 3px 0 0;
+  background: var(--surface-3);
+  transition: opacity var(--dur) var(--ease);
+}
+.fs-root .progress-line.is-running {
+  opacity: 1;
+}
+.fs-root .progress-line i {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--green),
+    color-mix(in srgb, var(--green) 60%, var(--accent-2))
+  );
+  box-shadow: 0 0 10px var(--green);
+}
+.fs-root .progress-line i::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--sheen), transparent);
+  animation: omp-sweep var(--loop-pulse) linear infinite;
+}
+
+.fs-root .node-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.fs-root .node-empty > .ic {
+  width: 22px;
+  height: 22px;
+  opacity: 0.6;
+}
+.fs-root .node-empty p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+/* Approval & Continuation Gate Box */
+.fs-root .approval-box {
+  position: relative;
+  background: var(--amber-soft);
+  border: 1px solid color-mix(in srgb, var(--amber) 55%, transparent);
+  border-radius: 10px;
+  padding: 10px 11px;
+  margin: 4px 0 6px;
+  color: var(--text-2);
+  font-size: 12px;
+  animation: var(--motion-reveal);
+}
+.fs-root .approval-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--amber);
+  font-size: 11.5px;
+  margin-bottom: 5px;
+}
+.fs-root .approval-heading .ic {
+  width: 13px;
+  height: 13px;
+}
+.fs-root .approval-box p {
+  margin: 4px 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+.fs-root .approval-snippet {
+  font-size: 11px;
+  color: var(--text-3);
+  background: var(--bg);
+  border-radius: 6px;
+  padding: 6px 8px;
+  max-height: 76px;
+  overflow: auto;
+  margin: 6px 0;
+}
+.fs-root .button-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.fs-root .button-row .button {
+  min-height: 26px;
+  font-size: 11.5px;
+  padding: 0 11px;
+}
+
+/* ---------- Ports: Continuation Arrow (Header) & Reference Circle (Below) ---------- */
+.fs-root .port {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  top: calc(var(--port-y) - 10px);
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  color: var(--border-float);
+  cursor: crosshair;
+  opacity: 0;
+  scale: 0.5;
+  transition:
+    color var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease),
+    scale var(--dur) var(--ease-spring);
+}
+.fs-root .port::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+}
+.fs-root .port-in {
+  left: -11px;
+}
+.fs-root .port-out {
+  right: -11px;
+}
+.fs-root .port-reference {
+  --pc: var(--accent);
+}
+.fs-root .port-continuation {
+  --pc: var(--text);
+}
+.fs-root .node:hover > .port,
+.fs-root .node.selected > .port,
+.fs-root .port.is-linked,
+.fs-root .connecting .port,
+.fs-root .semantic-zoom .port.is-linked {
+  opacity: 1;
+  scale: 1;
+}
+.fs-root .node:hover > .port,
+.fs-root .node.selected > .port,
+.fs-root .port.is-linked {
+  color: var(--pc);
+}
+.fs-root .port > i {
+  display: block;
+  width: 10px;
+  height: 10px;
+  background: var(--surface);
+  border: 1.75px solid currentColor;
+  border-radius: 50%;
+  transition:
+    scale var(--dur) var(--ease-spring),
+    background-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.fs-root .node-note > .port > i {
+  background: var(--note-bg);
+}
+.fs-root .port.is-linked > i {
+  background: currentColor;
+}
+.fs-root .port-continuation > i {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 0;
+  background: currentColor;
+  clip-path: polygon(0 8%, 52% 8%, 100% 50%, 52% 92%, 0 92%, 26% 50%);
+}
+.fs-root .port:hover > i,
+.fs-root .port-target > i {
+  scale: 1.45;
+  background: currentColor;
+  box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 22%, transparent);
+}
+.fs-root .port:hover,
+.fs-root .port-target {
+  color: var(--pc);
+}
+.fs-root .connecting-continuation .port-reference,
+.fs-root .connecting-reference .port-continuation {
+  opacity: 0.15;
+}
+.fs-root .connecting-reference .port-reference.port-in,
+.fs-root .connecting-continuation .port-continuation.port-in {
+  color: var(--pc);
+  scale: 1.2;
+}
+.fs-root .connecting-reference .port-reference.port-in > i,
+.fs-root .connecting-continuation .port-continuation.port-in > i {
+  animation: omp-pulse var(--loop-pulse) var(--ease-loop) infinite;
+}
+.fs-root .semantic-zoom .port {
+  scale: var(--type-scale, 1);
+}
+.fs-root .node-resizer,
+.fs-root .window-resizer,
+.fs-root .group-resizer {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 14px;
+  height: 14px;
+  border-right: 2px solid var(--border-strong);
+  border-bottom: 2px solid var(--border-strong);
+  border-radius: 0 0 8px 0;
+  cursor: nwse-resize;
+  opacity: 0;
+  z-index: 3;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.fs-root .node:hover > .node-resizer,
+.fs-root .node:hover > .window-resizer,
+.fs-root .workflow-group:hover > .group-resizer,
+.fs-root .workflow-group.selected > .group-resizer {
+  opacity: 0.7;
+}
+.fs-root .node-resizer:hover,
+.fs-root .window-resizer:hover,
+.fs-root .group-resizer:hover {
+  border-color: var(--accent);
+  opacity: 1 !important;
+}
+
+/* ---------- Note, Display, Detail, File & Board Cards ---------- */
+.fs-root .node-note .node-header {
+  border-bottom-color: var(--note-border);
+}
+.fs-root .note-editor {
+  background: transparent;
+  border: 0;
+  flex: 1;
+  min-height: 0;
+  padding: 11px 13px;
+  line-height: 1.7;
+  user-select: text;
+  caret-color: var(--k-note);
+}
+.fs-root .display-content {
+  flex: 1;
+  min-height: 0;
+  margin: 12px 13px;
+  padding: 1px 0 1px 12px;
+  border-left: 2px solid var(--k-display);
+  overflow-y: auto;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+  user-select: text;
+}
+.fs-root .display-footer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 0 12px;
+  border-top: 1px solid var(--border);
+  flex: none;
+  height: 38px;
+}
+.fs-root .display-footer > :last-child {
+  margin-left: auto;
+}
+.fs-root .display-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px 0 7px;
+  border-radius: var(--r-full);
+  color: var(--k-display);
+  background: color-mix(in srgb, var(--k-display) 12%, transparent);
+  font-size: 11px;
+}
+.fs-root .display-mode:hover {
+  background: color-mix(in srgb, var(--k-display) 20%, transparent);
+}
+.fs-root .display-mode .ic {
+  width: 12px;
+  height: 12px;
+}
+.fs-root .detail-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
+  font-size: 11px;
+}
+.fs-root .detail-summary > span:last-child {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+.fs-root .detail-result {
+  font-size: 12.5px;
+  line-height: 1.65;
+  margin-top: 10px;
+  border-top: 1px dashed var(--border-strong);
+  padding-top: 10px;
+}
+.fs-root .tool-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+.fs-root .tool-summary {
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 9px 12px 6px;
+}
+.fs-root .file-input-bar {
+  display: flex;
+  gap: 6px;
+  padding: 0 10px 8px;
+}
+.fs-root .file-input-bar input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  font: 11.5px var(--font-mono);
+}
+.fs-root .tool-footer {
+  margin-top: auto;
+  padding: 8px 13px;
+  color: var(--text-faint);
+  font-size: 11px;
+  border-top: 1px solid var(--border);
+}
+.fs-root .file-tree {
+  padding: 0 6px 8px;
+  overflow: auto;
+  flex: 1;
+}
+.fs-root .file-row {
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+}
+.fs-root .file-row:hover {
+  background: var(--hover);
+}
+.fs-root .file-row.selected {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+.fs-root .file-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 29px;
+  text-align: left;
+  min-width: 0;
+  flex: 1;
+  padding-left: 7px;
+}
+.fs-root .file-select > span {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: 11.5px var(--font-mono);
+}
+.fs-root .file-select .ic {
+  width: 13px;
+  height: 13px;
+  color: var(--k-file);
+}
+.fs-root .checkbox {
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid var(--glyph);
+  border-radius: 4px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.fs-root .file-row.selected .checkbox {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.fs-root .file-row.selected .checkbox::after {
+  content: "";
+  width: 6px;
+  height: 3px;
+  border-left: 1.5px solid var(--on-accent);
+  border-bottom: 1.5px solid var(--on-accent);
+  rotate: -45deg;
+  translate: 0 -1px;
+  animation: cv-mark-in var(--dur) var(--ease-spring) backwards;
+}
+.fs-root .file-row .icon-button {
+  width: 24px;
+  height: 24px;
+  opacity: 0;
+}
+.fs-root .file-row:hover .icon-button,
+.fs-root .file-row:focus-within .icon-button {
+  opacity: 1;
+}
+.fs-root .file-row .icon-button .ic {
+  width: 12px;
+  height: 12px;
+}
+
+/* Kanban Board Card */
+.fs-root .board-columns {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+  padding: 8px;
+}
+.fs-root .board-column {
+  background: var(--surface-2);
+  border-radius: 9px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px;
+  overflow: auto;
+}
+.fs-root .board-column > header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 3px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.fs-root .board-column > header > span {
+  margin-left: auto;
+  font: 10.5px var(--font-mono);
+  color: var(--text-faint);
+}
+.fs-root .board-column > header .icon-button {
+  width: 20px;
+  height: 20px;
+}
+.fs-root .board-column > header .ic {
+  width: 11px;
+  height: 11px;
+}
+.fs-root .column-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--glyph);
+}
+.fs-root .column-1 {
+  background: var(--accent);
+}
+.fs-root .column-2 {
+  background: var(--green);
+}
+.fs-root .board-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 4px 2px 8px;
+  margin-top: 5px;
+  font-size: 12px;
+  animation: cv-mark-in var(--dur) var(--ease-out) backwards;
+}
+.fs-root .board-card:hover {
+  border-color: var(--border-float);
+  translate: 0 -1px;
+  box-shadow: 0 6px 14px -8px var(--shadow);
+}
+.fs-root .board-card > div {
+  display: flex;
+  justify-content: flex-end;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.fs-root .board-card:hover > div,
+.fs-root .board-card:focus-within > div {
+  opacity: 1;
+}
+.fs-root .board-card .icon-button {
+  width: 20px;
+  height: 20px;
+}
+.fs-root .board-card .ic {
+  width: 11px;
+  height: 11px;
+}
+.fs-root .board-card-text {
+  display: block;
+  text-align: left;
+  width: 100%;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.fs-root .board-card.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ---------- Workflow Groups & Collapsed Composite Nodes ---------- */
+.fs-root .color-violet {
+  --group-color: var(--accent);
+}
+.fs-root .color-teal {
+  --group-color: var(--teal);
+}
+.fs-root .color-blue {
+  --group-color: var(--blue);
+}
+.fs-root .color-amber {
+  --group-color: var(--amber);
+}
+.fs-root .workflow-group {
+  position: absolute;
+  border: 1.5px dashed color-mix(in srgb, var(--group-color) 50%, transparent);
+  border-radius: var(--r-12);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--group-color) 8%, transparent),
+    color-mix(in srgb, var(--group-color) 2.5%, transparent) 120px
+  );
+  pointer-events: none;
+  animation: var(--motion-fade);
+  transition:
+    width var(--dur-slow) var(--ease-out),
+    height var(--dur-slow) var(--ease-out),
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+.fs-root .workflow-group.selected {
+  border-color: var(--group-color);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--group-color) 12%, transparent);
+}
+.fs-root .group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 14px;
+  height: 42px;
+  color: var(--text-2);
+  pointer-events: auto;
+  cursor: grab;
+}
+.fs-root .group-mark {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--group-color);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--group-color) calc(80% * var(--glow)), transparent);
+  flex: none;
+}
+.fs-root .group-header > strong {
+  font: 600 13px var(--font-display);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fs-root .group-header > span {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.fs-root .group-header > div {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  flex: none;
+}
+.fs-root .group-header .icon-button {
+  width: 24px;
+  height: 24px;
+}
+.fs-root .group-header .ic {
+  width: 12px;
+  height: 12px;
+}
+.fs-root .group-run {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px 0 8px;
+  height: 24px;
+  margin-right: 4px;
+  border-radius: var(--r-full);
+  color: var(--group-color);
+  background: color-mix(in srgb, var(--group-color) 12%, transparent);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.fs-root .group-run:hover {
+  background: color-mix(in srgb, var(--group-color) 22%, transparent);
+}
+.fs-root .group-resizer {
+  pointer-events: auto;
+  right: 6px;
+  bottom: 6px;
+}
+.fs-root .nested-group {
+  border-style: dotted;
+  border-color: color-mix(in srgb, var(--group-color) 40%, var(--border-strong));
+  background: color-mix(in srgb, var(--group-color) 3%, transparent);
+}
+.fs-root .semantic-zoom .group-header > strong {
+  font-size: calc(13px * var(--type-scale, 1));
+}
+.fs-root .semantic-zoom .group-header > span,
+.fs-root .semantic-zoom .group-header > div {
+  display: none;
+}
+/* Collapsed Composite Group */
+.fs-root .workflow-group.composite {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--group-color) 55%, var(--border-strong));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--group-color) 10%, var(--surface)),
+    var(--surface) 70px
+  );
+  pointer-events: auto;
+  box-shadow: 0 14px 30px -18px color-mix(in srgb, var(--group-color) calc(60% * var(--glow)), transparent);
+}
+.fs-root .composite .group-header {
+  height: 46px;
+  border-bottom: 1px solid var(--border);
+}
+.fs-root .composite .group-header > span {
+  display: none;
+}
+.fs-root .composite .group-header > strong {
+  flex: 1;
+}
+.fs-root .composite-ports {
+  display: flex;
+  gap: 14px;
+  padding: 18px 12px 12px;
+}
+.fs-root .composite-ports > div {
+  flex: 1;
+  min-width: 0;
+}
+.fs-root .composite-port-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  width: 100%;
+  position: relative;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+.fs-root .composite-port-row:hover {
+  color: var(--text);
+}
+.fs-root .composite-port-row > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.fs-root .composite-out {
+  flex-direction: row-reverse;
+  text-align: right;
+}
+.fs-root .composite-summary {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 8px;
+}
+.fs-root .proxy-pin {
+  width: 10px;
+  height: 10px;
+  border: 1.75px solid var(--accent);
+  background: var(--surface);
+  border-radius: 50%;
+  flex: none;
+  transition: scale var(--dur) var(--ease-spring);
+}
+.fs-root .proxy-continuation {
+  border: 0;
+  background: var(--text-2);
+  clip-path: polygon(0 8%, 52% 8%, 100% 50%, 52% 92%, 0 92%, 26% 50%);
+  width: 12px;
+  height: 12px;
+  border-radius: 0;
+}
+.fs-root .composite-port-row:hover .proxy-pin {
+  scale: 1.4;
+}
+.fs-root .composite-in .proxy-pin {
+  position: absolute;
+  left: -18px;
+}
+.fs-root .composite-out .proxy-pin {
+  position: absolute;
+  right: -18px;
+}
+.fs-root .template-association {
+  position: absolute;
+  bottom: -24px;
+  left: 14px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-full);
+  color: var(--text-faint);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 10.5px;
+  pointer-events: auto;
+}
+.fs-root .template-association:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+.fs-root .template-association .ic {
+  width: 11px;
+  height: 11px;
+}
+
+/* ---------- Floating Window & Canvas Stub ---------- */
+.fs-root .floating-window {
+  pointer-events: auto;
+  min-width: 288px;
+  min-height: 260px;
+  border-radius: 14px;
+  border-color: var(--border-float);
+  box-shadow:
+    0 30px 70px -18px var(--shadow),
+    0 8px 20px -8px var(--shadow),
+    0 0 0 1px var(--glass-border);
+  animation: var(--motion-sheet);
+}
+.fs-root .floating-window .node-header {
+  background: var(--surface-2);
+  border-radius: 13px 13px 0 0;
+}
+.fs-root .floating-window > .window-resizer {
+  opacity: 0.7;
+}
+.fs-root .window-stub {
+  position: absolute;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--r-8);
+  padding: 12px 13px;
+  color: var(--text-faint);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 8px,
+    var(--hover) 8px 9px
+  );
+}
+.fs-root .window-stub > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+}
+.fs-root .window-stub .ic {
+  width: 13px;
+  height: 13px;
+}
+.fs-root .window-stub strong {
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+/* ---------- Full-Page Focused Conversation Surface ---------- */
+.fs-root .fs-conversation-surface {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  background: var(--bg);
+  z-index: 16;
+  display: flex;
+  flex-direction: column;
+  --enter-x: calc(var(--shift-lg) * -1);
+  animation: omp-enter var(--dur-slower) var(--ease-nav) backwards;
+}
+.fs-root .conversation-heading {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 860px;
+  width: 100%;
+  padding: 0 22px;
+  margin: 0 auto;
+}
+.fs-root .conversation-heading > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  font: 600 15px var(--font-display);
+}
+.fs-root .conversation-heading > span .ic {
+  color: var(--accent);
+  width: 16px;
+  height: 16px;
+}
+.fs-root .conversation-node-host {
+  flex: 1;
+  min-height: 0;
+  padding: 0 22px 20px;
+  max-width: 860px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+}
+.fs-root .node.conversation-agent {
+  position: relative;
+  width: 100%;
+  min-height: 360px;
+  flex: 1;
+  border-radius: var(--r-10);
+  border-style: solid;
+}
+.fs-root .conversation-agent::after {
+  display: none;
+}
+.fs-root .conversation-agent .node-header,
+.fs-root .conversation-agent .port {
+  display: none;
+}
+.fs-root .conversation-agent .node-tabs {
+  height: 32px;
+  margin: 0 20px 10px;
+  max-width: 320px;
+}
+.fs-root .conversation-agent .agent-status-row {
+  padding: 0 20px;
+  height: 46px;
+}
+.fs-root .conversation-agent .node-scroll {
+  padding: 12px 20px 20px;
+}
+.fs-root .conversation-agent .agent-footer {
+  padding: 0 20px;
+  height: 52px;
+}

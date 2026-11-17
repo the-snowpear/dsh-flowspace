@@ -1,3 +1,5 @@
+import { readdir, readFile, stat } from "node:fs/promises";
+import { resolve, relative, isAbsolute } from "node:path";
 import { Context, Service } from "@deepseek-ai/cordis";
 import { TypertRemoteService, Remote } from "@deepseek-ai/dsh-typert-protocol";
 import type { Domain } from "@deepseek-ai/dsh-storage-domain";
@@ -28,6 +30,9 @@ import type {
   SourceRequest,
   StartRequest,
   WorkspaceBrief,
+  WorkspaceFilePreview,
+  WorkspaceFilesRequest,
+  FilePreviewRequest,
 } from "./types.ts";
 export type * from "./types.ts";
 
@@ -223,7 +228,10 @@ export class FlowspaceService extends TypertRemoteService {
         pendingInput: [],
       });
       for (const display of this.state.doc.nodes.filter(
-        (n) => n.kind === "display" && !n.fixed && n.sourceNodeId === node.id,
+        (n) =>
+          ((n.kind === "display" && !n.fixed) ||
+            (n.kind === "detail" && !n.pinned)) &&
+          n.sourceNodeId === node.id,
       )) {
         display.text = text;
         display.sourceSeq = event.seq;
@@ -435,6 +443,76 @@ export class FlowspaceService extends TypertRemoteService {
     return this.ctx.workspaceRegistry
       .list()
       .map((w) => ({ id: w.id, name: w.title, path: w.path }));
+  }
+  @Remote
+  async workspaceFiles(request: WorkspaceFilesRequest): Promise<string[]> {
+    const base = this.resolveWorkspaceRoot(request.cwd);
+    const out: string[] = [];
+    const skip = new Set([
+      "node_modules",
+      ".git",
+      ".local",
+      ".backups",
+      "dist",
+      "lib",
+      ".next",
+      "coverage",
+    ]);
+    const walk = async (dir: string, depth: number): Promise<void> => {
+      if (depth > 3 || out.length >= 60) return;
+      let entries;
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (out.length >= 60) break;
+        if (skip.has(entry.name)) continue;
+        const full = resolve(dir, entry.name);
+        if (entry.isDirectory()) await walk(full, depth + 1);
+        else if (entry.isFile())
+          out.push(relative(base, full).replaceAll("\\", "/"));
+      }
+    };
+    await walk(base, 0);
+    return out;
+  }
+  @Remote
+  async readWorkspaceFile(
+    request: FilePreviewRequest,
+  ): Promise<WorkspaceFilePreview> {
+    const base = this.resolveWorkspaceRoot(request.cwd);
+    const raw = request.path.trim();
+    if (!raw) throw new Error("未指定文件路径");
+    const full = resolve(base, raw);
+    const rel = relative(base, full);
+    if (rel.startsWith("..") || isAbsolute(rel))
+      throw new Error("文件路径超出当前工作区");
+    const info = await stat(full).catch(() => null);
+    if (!info || !info.isFile()) throw new Error(`文件不存在：${raw}`);
+    const content = await readFile(full, "utf8");
+    const max = 24000;
+    return {
+      path: rel.replaceAll("\\", "/"),
+      content: content.length > max ? content.slice(0, max) : content,
+      truncated: content.length > max,
+    };
+  }
+  private resolveWorkspaceRoot(cwd?: string): string {
+    const list = this.ctx.workspaceRegistry.list();
+    if (cwd) {
+      const candidate = resolve(cwd);
+      if (
+        list.some((w) => {
+          const r = relative(resolve(w.path), candidate);
+          return !r.startsWith("..") && !isAbsolute(r);
+        }) ||
+        candidate === resolve(process.cwd())
+      )
+        return candidate;
+    }
+    return resolve(list[0]?.path ?? process.cwd());
   }
   @Remote
   canvasPresence(sessionIds: string[]): void {

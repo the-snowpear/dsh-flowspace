@@ -110,7 +110,17 @@ export function launchPlan(
               ? "仅手动启动"
               : request.kind !== "single" &&
                   !n.draft.trim() &&
-                  n.lastSubmittedTask === n.task
+                  n.lastSubmittedTask === n.task &&
+                  n.rerun !== "always" &&
+                  !(
+                    n.rerun === "update" &&
+                    doc.edges.some(
+                      (e) =>
+                        e.kind === "reference" &&
+                        e.target === n.id &&
+                        !e.sentVersion,
+                    )
+                  )
                 ? "没有新输入"
                 : "";
     if (why) skipped.push({ nodeId: n.id, reason: why });

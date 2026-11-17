@@ -1,365 +1,3530 @@
-import { tr } from "./i18n.ts";
 import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  createContext,
-  useContext,
   type ReactNode,
 } from "react";
-import {
-  ReactFlow,
-  ReactFlowProvider,
-  Background,
-  Controls,
-  MiniMap,
-  Handle,
-  Position,
-  BaseEdge,
-  getBezierPath,
-  EdgeLabelRenderer,
-  useReactFlow,
-  type NodeProps,
-  type EdgeProps,
-  type Node,
-  type Edge,
-  type Connection,
-  type Dimensions,
-} from "@xyflow/react";
-import {
-  Workflow,
-  Plus,
-  Play,
-  Pause,
-  Square,
-  ChevronDown,
-  ChevronRight,
-  ArrowUpRight,
-  X,
-  Settings2,
-  Search,
-  StickyNote,
-  FileText,
-  Copy,
-  Layers,
-  LayoutGrid,
-  PanelRightClose,
-  PanelRightOpen,
-  Undo2,
-  Redo2,
-  Check,
-  Clock,
-  Link2,
-  GitFork,
-  Maximize2,
-  MessageSquare,
-  AlertCircle,
-  Download,
-  Upload,
-  Trash2,
-} from "lucide-react";
 import type { SessionReference } from "@deepseek-ai/dsh-api-session-controller/client";
 import type {
-  FlowNode,
+  AgentTab,
+  BoardColumn,
+  CanvasPrefs,
+  CanvasSnapshot,
   FlowEdge,
+  FlowNode,
+  FlowToken,
   FlowspaceDocument,
-  FlowspaceSnapshot,
   FlowspaceRun,
+  FlowspaceSnapshot,
+  GroupPort,
   LaunchPlan,
-  StartRequest,
-  WorkspaceBrief,
+  NodeKind,
   SessionBrief,
+  StartRequest,
+  WorkflowTemplate,
+  WorkspaceBrief,
+  WorkspaceFilePreview,
 } from "../types.ts";
 import {
+  boardSummaryText,
   emptyDocument,
-  newNode,
-  newEdge,
-  members,
   groupDescendants,
+  members,
+  newEdge,
+  newNode,
   sample,
+  uid,
 } from "../core/document.ts";
 import type { CanvasBridge } from "./bridge.ts";
-import "@xyflow/react/dist/style.css";
+import { BrandMark, Icon, kindIconName } from "./icons.tsx";
+import { getLanguage, setLanguage, subscribeLanguage, t, tr } from "./i18n.ts";
+import {
+  LOD_ZOOM,
+  MOTION,
+  bounds,
+  clamp,
+  collapsedAncestor,
+  easeView,
+  endpoint,
+  exchangeRoute,
+  fit,
+  giveRoomBack,
+  groupBox,
+  inferGroupPorts,
+  isCompactNode,
+  makeRoom,
+  nodeBox,
+  portY,
+  route,
+  toWorld,
+  zoomAt,
+  type Box,
+} from "./geometry.ts";
+import {
+  allTemplates,
+  buildSnapshot,
+  captureTemplate,
+  computeSyncPlan,
+  instantiateTemplate,
+  synchronizeTemplate,
+  type SyncPlan,
+} from "./templates.ts";
+import {
+  ActivitySurface,
+  InspectorPanel,
+  MiniGraph,
+  SettingsSurface,
+  WorkflowsSurface,
+  formatTime,
+  nodeStatusOf,
+} from "./SurfaceViews.tsx";
 
-type GraphNode = Node<{ model: FlowNode }, "flowspace">;
-type GraphEdge = Edge<
-  { model: FlowEdge; active: boolean; waiting: boolean },
-  "flowspace"
->;
-interface Actions {
+type RouteId = "canvas" | "conversation" | "workflows" | "activity" | "settings";
+
+interface MenuItem {
+  heading?: string;
+  divider?: boolean;
+  label?: string;
+  description?: string;
+  icon?: string;
+  checked?: boolean;
+  disabled?: boolean;
+  shortcut?: string;
+  danger?: boolean;
+  fn?: () => void;
+}
+
+interface MenuState {
+  x: number;
+  y: number;
+  items: MenuItem[];
+}
+
+interface PaletteEntry {
+  label: string;
+  detail?: string;
+  section: string;
+  icon: string;
+  fn: () => void;
+}
+
+interface ExchangePair {
+  id: string;
+  from: string;
+  to: string;
+  items: {
+    id: string;
+    fromId: string;
+    toId: string;
+    text: string;
+    at: number;
+    seq?: number;
+  }[];
+}
+
+function EmbeddedSession({
+  node,
+  bridge,
+  renderConversation,
+  onError,
+  onPresenceChange,
+}: {
+  node: FlowNode;
   bridge: CanvasBridge;
-  snapshot: FlowspaceSnapshot | null;
-  editNode: (id: string, changes: Partial<FlowNode>) => void;
-  launch: (request: StartRequest) => void;
-  select: (id: string) => void;
-  bind: (node: FlowNode) => void;
-  error: (reason: unknown) => void;
   renderConversation: (
     node: FlowNode,
     reference: SessionReference,
   ) => ReactNode;
-}
-const ActionsContext = createContext<Actions>(null!);
-const statuses: Record<string, string> = {
-  input: "等待用户",
-  running: "运行中",
-  queued: "排队中",
-  completed: "已完成",
-  error: "异常",
-  aborted: "已停止",
-  interrupted: "待恢复",
-  waiting: "等你确认",
-  paused: "已暂停",
-  cancelled: "已取消",
-};
-function statusOf(snapshot: FlowspaceSnapshot | null, id: string): string {
-  if (
-    snapshot?.runs.some(
-      (r) =>
-        ["running", "waiting", "paused"].includes(r.state) &&
-        r.tokens.some(
-          (t) =>
-            !t.ready &&
-            !t.consumed &&
-            !t.dismissed &&
-            r.graph.edges.find((e) => e.id === t.edgeId)?.target === id,
-        ),
-    )
-  )
-    return "waiting";
-  const live = snapshot?.live.find((l) => l.nodeId === id);
-  if (live?.pendingInput.length) return "input";
-  if (live?.running) return "running";
-  return (
-    snapshot?.runs
-      .flatMap((r) => r.steps)
-      .filter((s) => s.nodeId === id)
-      .at(-1)?.state ?? "draft"
-  );
-}
-function Embedded({ node }: { node: FlowNode }) {
-  const { bridge, renderConversation, error } = useContext(ActionsContext),
-    [reference, setReference] = useState<SessionReference>();
+  onError: (err: unknown) => void;
+  onPresenceChange: (sessionId: string, mounted: boolean) => void;
+}) {
+  const [reference, setReference] = useState<SessionReference>();
   useEffect(() => {
+    if (!node.sessionId) return;
+    const sid = node.sessionId;
+    onPresenceChange(sid, true);
     const ref = bridge.retain(node);
-    ref.ready.then(() => setReference(ref)).catch(error);
-    return () => ref.release();
+    let active = true;
+    ref.ready
+      .then(() => {
+        if (active) setReference(ref);
+      })
+      .catch(onError);
+    return () => {
+      active = false;
+      onPresenceChange(sid, false);
+      ref.release();
+    };
   }, [bridge, node.sessionId]);
+
   return reference ? (
     <>{renderConversation(node, reference)}</>
   ) : (
-    <div className="fs-loading">{tr("正在打开会话…")}</div>
+    <div className="fs-loading">{t("openingConversation")}</div>
   );
 }
-function CanvasNode({ data, selected }: NodeProps<GraphNode>) {
-  const { model: node } = data,
-    { snapshot, editNode, launch, select, bridge, bind, error } =
-      useContext(ActionsContext);
-  const [quote, setQuote] = useState("");
-  const state = statusOf(snapshot, node.id),
-    live = snapshot?.live.find((l) => l.nodeId === node.id);
-  const waiting =
-    snapshot?.runs.filter(r => ["running", "waiting", "paused"].includes(r.state)).flatMap((r) =>
-      r.tokens
-        .filter(
-          (t) =>
-            !t.ready &&
-            !t.consumed &&
-            !t.dismissed &&
-            r.graph.edges.find((e) => e.id === t.edgeId)?.target === node.id,
-        )
-        .map((t) => ({ run: r, token: t })),
-    ) ?? [];
-  if (node.kind === "group")
-    return (
-      <div className={"fs-group " + (selected ? "selected" : "")}>
-        <header className="fs-drag">
-          <Layers size={15} />
-          <b>{node.title}</b>
-          <span />
-          <button
-            className="nodrag"
-            onClick={() => editNode(node.id, { collapsed: !node.collapsed })}
-          >
-            {node.collapsed ? (
-              <ChevronRight size={15} />
-            ) : (
-              <ChevronDown size={15} />
-            )}
-          </button>
-          <button
-            className="nodrag"
-            title={tr("启动分组")}
-            onClick={() => launch({ kind: "group", nodeIds: [node.id] })}
-          >
-            <Play size={14} />
-          </button>
-        </header>
-        {node.collapsed && <small>{tr("工作流已折叠 · 展开查看节点")}</small>}
-        {node.collapsed && (
-          <>
-            <Handle
-              id="exec-in"
-              type="target"
-              position={Position.Left}
-              className="fs-exec"
-              style={{ top: 22 }}
-              isConnectable={false}
-            />
-            <Handle
-              id="exec-out"
-              type="source"
-              position={Position.Right}
-              className="fs-exec"
-              style={{ top: 22 }}
-              isConnectable={false}
-            />
-            <Handle
-              id="ref-in"
-              type="target"
-              position={Position.Left}
-              style={{ top: 72 }}
-              isConnectable={false}
-            />
-            <Handle
-              id="ref-out"
-              type="source"
-              position={Position.Right}
-              style={{ top: 72 }}
-              isConnectable={false}
-            />
-          </>
-        )}
-      </div>
+
+export function CanvasApp({
+  bridge,
+  renderConversation,
+}: {
+  bridge: CanvasBridge;
+  renderConversation: (
+    node: FlowNode,
+    reference: SessionReference,
+  ) => ReactNode;
+}) {
+  const snapshot = bridge.useSnapshot();
+  const [, setLangTick] = useState(0);
+  useEffect(() => subscribeLanguage(() => setLangTick((v) => v + 1)), []);
+
+  const [doc, setDoc] = useState<FlowspaceDocument>(emptyDocument);
+  const docRef = useRef(doc);
+  const dirty = useRef(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>();
+  const savingPromise = useRef<Promise<unknown>>(Promise.resolve());
+  const revision = useRef(0);
+  const sentRevision = useRef(-1);
+  const initialized = useRef(false);
+
+  const [saved, setSaved] = useState(true);
+  const [toastState, setToastState] = useState<{
+    text: string;
+    error?: boolean;
+    visible: boolean;
+  }>({ text: "", visible: false });
+  const toastTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  const [routeName, setRouteName] = useState<RouteId>("canvas");
+  const [libraryTab, setLibraryTab] = useState<
+    "patterns" | "mine" | "snapshots"
+  >("patterns");
+  const [activityTab, setActivityTab] = useState<
+    "runs" | "outputs" | "waiting"
+  >("runs");
+  const [bottomOpen, setBottomOpen] = useState(false);
+  const [bottomTab, setBottomTab] = useState<"events" | "outputs" | "waiting">(
+    "events",
+  );
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [mobileSidebar, setMobileSidebar] = useState(false);
+  const [minimapOpen, setMinimapOpen] = useState(false);
+  const [tool, setTool] = useState<"pointer" | "hand">("pointer");
+  const [spacePressed, setSpacePressed] = useState(false);
+
+  const [selection, setSelection] = useState<{
+    nodes: string[];
+    groups: string[];
+    edge: string | null;
+  }>({ nodes: [], groups: [], edge: null });
+  const [lastAgentId, setLastAgentId] = useState<string>("");
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+  const [quoteState, setQuoteState] = useState<{
+    nodeId: string;
+    text: string;
+  } | null>(null);
+
+  const [history, setHistory] = useState<FlowspaceDocument[]>([]);
+  const [future, setFuture] = useState<FlowspaceDocument[]>([]);
+
+  const [workspaces, setWorkspaces] = useState<WorkspaceBrief[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
+  const [workspaceFilesList, setWorkspaceFilesList] = useState<string[]>([]);
+  const [fileInputDrafts, setFileInputDrafts] = useState<
+    Record<string, string>
+  >({});
+
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const [connecting, setConnecting] = useState<{
+    kind: "reference" | "continuation";
+    fromIds: string[];
+    fromPoint: { x: number; y: number; box?: Box };
+    current: { x: number; y: number };
+  } | null>(null);
+  const [marquee, setMarquee] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
+  const [snapPreview, setSnapPreview] = useState<
+    "left" | "right" | "max" | null
+  >(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  /* Dialog states */
+  const [launchDialog, setLaunchDialog] = useState<{
+    plan: LaunchPlan;
+    excluded: Set<string>;
+  } | null>(null);
+  const [paletteDialog, setPaletteDialog] = useState<{
+    targetNodeId: string | null;
+    query: string;
+    index: number;
+  } | null>(null);
+  const [formModal, setFormModal] = useState<{
+    title: string;
+    description?: string;
+    initialValue: string;
+    secondaryLabel?: string;
+    secondaryInitial?: string;
+    onSubmit: (val: string, secondary?: string) => void;
+  } | null>(null);
+  const [sessionModal, setSessionModal] = useState<SessionBrief[] | null>(null);
+  const [fileModal, setFileModal] = useState<WorkspaceFilePreview | null>(null);
+  const [templatePreviewModal, setTemplatePreviewModal] =
+    useState<WorkflowTemplate | null>(null);
+  const [syncModal, setSyncModal] = useState<{
+    groupId: string;
+    plan: SyncPlan;
+  } | null>(null);
+  const [mergePortsModal, setMergePortsModal] = useState<{
+    groupId: string;
+    name: string;
+    selectedPortIds: Set<string>;
+  } | null>(null);
+  const [exchangeModal, setExchangeModal] = useState<ExchangePair | null>(null);
+  const [helpModal, setHelpModal] = useState(false);
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  const areaRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const viewAnimToken = useRef(0);
+  const mountedSessionsRef = useRef(new Map<string, number>());
+  const autoSwitchedSteps = useRef(new Set<string>());
+  const sidebarAutoAdjusted = useRef(false);
+
+  const [vpSize, setVpSize] = useState({ width: 960, height: 640 });
+  const [hostDark, setHostDark] = useState(() =>
+    typeof document !== "undefined"
+      ? document.body.hasAttribute("data-ds-dark-theme") ||
+        !document.body.hasAttribute("data-ds-light-theme")
+      : true,
+  );
+  const [sysReducedMotion, setSysReducedMotion] = useState(false);
+
+  const showToast = useCallback((msg: unknown, isError = false) => {
+    const text = msg instanceof Error ? msg.message : String(msg);
+    setToastState({ text, error: isError, visible: true });
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(
+      () => setToastState((prev) => ({ ...prev, visible: false })),
+      2800,
     );
-  const agent = node.kind === "agent";
-  return (
-    <article
-      className={`fs-node fs-${node.kind} ${selected ? "selected" : ""} ${state}`}
-    >
-      {agent && (
-        <>
-          <Handle
-            id="exec-in"
-            type="target"
-            position={Position.Left}
-            className="fs-exec"
-            style={{ top: 27 }}
-          />
-          <Handle
-            id="exec-out"
-            type="source"
-            position={Position.Right}
-            className="fs-exec"
-            style={{ top: 27 }}
-          />
-        </>
-      )}
-      <header
-        className="fs-drag"
-        onDoubleClick={() =>
-          agent && editNode(node.id, { expanded: !node.expanded })
+  }, []);
+
+  const reportError = useCallback(
+    (err: unknown) => showToast(err, true),
+    [showToast],
+  );
+
+  const onPresenceChange = useCallback(
+    (sessionId: string, mounted: boolean) => {
+      const prev = mountedSessionsRef.current.get(sessionId) ?? 0;
+      if (mounted) {
+        mountedSessionsRef.current.set(sessionId, prev + 1);
+      } else if (prev <= 1) {
+        mountedSessionsRef.current.delete(sessionId);
+      } else {
+        mountedSessionsRef.current.set(sessionId, prev - 1);
+      }
+      bridge.presence([...mountedSessionsRef.current.keys()]);
+    },
+    [bridge],
+  );
+
+  /* Observe DSH theme & system reduced-motion */
+  useEffect(() => {
+    const checkTheme = () => {
+      setHostDark(document.body.hasAttribute("data-ds-dark-theme"));
+    };
+    checkTheme();
+    const obs = new MutationObserver(checkTheme);
+    obs.observe(document.body, {
+      attributes: true,
+      attributeFilter: ["data-ds-dark-theme", "class", "data-theme"],
+    });
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setSysReducedMotion(mq.matches);
+    const onMq = () => setSysReducedMotion(mq.matches);
+    mq.addEventListener("change", onMq);
+    return () => {
+      obs.disconnect();
+      mq.removeEventListener("change", onMq);
+    };
+  }, []);
+
+  /* Observe viewport & root container dimensions */
+  useEffect(() => {
+    const vp = viewportRef.current;
+    const root = rootRef.current;
+    if (!vp || !root) return;
+    const ro = new ResizeObserver(() => {
+      setVpSize({
+        width: vp.clientWidth || 960,
+        height: vp.clientHeight || 640,
+      });
+      if (!sidebarAutoAdjusted.current && root.clientWidth > 0) {
+        sidebarAutoAdjusted.current = true;
+        if (root.clientWidth < 1100) setSidebarOpen(false);
+      }
+    });
+    ro.observe(vp);
+    ro.observe(root);
+    return () => ro.disconnect();
+  }, []);
+
+  /* Connect bridge & load workspaces + workspace files */
+  useEffect(() => bridge.connect(), [bridge]);
+  useEffect(() => {
+    void bridge
+      .workspaces()
+      .then((list) => {
+        setWorkspaces(list);
+        setActiveWorkspaceId(list[0]?.id ?? "");
+      })
+      .catch(reportError);
+  }, [bridge, reportError]);
+
+  const activeWorkspaceCwd = useMemo(
+    () => workspaces.find((w) => w.id === activeWorkspaceId)?.path,
+    [workspaces, activeWorkspaceId],
+  );
+
+  useEffect(() => {
+    void bridge
+      .workspaceFiles(activeWorkspaceCwd)
+      .then(setWorkspaceFilesList)
+      .catch(() => setWorkspaceFilesList([]));
+  }, [bridge, activeWorkspaceCwd]);
+
+  /* Flush & Edit document */
+  const flush = useCallback(async () => {
+    clearTimeout(saveTimer.current);
+    if (!dirty.current) {
+      await savingPromise.current;
+      return;
+    }
+    const current = docRef.current;
+    const rev = revision.current;
+    if (sentRevision.current === rev) {
+      await savingPromise.current;
+      return;
+    }
+    sentRevision.current = rev;
+    const task = savingPromise.current.then(async () => {
+      try {
+        await bridge.save(current);
+        if (revision.current === rev) {
+          dirty.current = false;
+          setSaved(true);
         }
-      >
-        <i className={`fs-kind ${state}`}>
-          {agent ? (
-            <Workflow size={15} />
-          ) : node.kind === "note" ? (
-            <StickyNote size={15} />
-          ) : (
-            <FileText size={15} />
-          )}
-        </i>
-        <b>{node.title}</b>
-        <button
-          className="nodrag"
-          title={tr("检查器")}
-          onClick={() => select(node.id)}
-        >
-          <Settings2 size={14} />
-        </button>
-        {agent && (
-          <button
-            className="nodrag"
-            title={tr("展开或收起")}
-            onClick={() => {
-              if (!node.sessionId && !node.expanded) bind(node);
-              else editNode(node.id, { expanded: !node.expanded });
-            }}
-          >
-            <Maximize2 size={14} />
-          </button>
-        )}
-      </header>
-      <div
-        className="fs-node-body nodrag nowheel"
-        onMouseUp={() => {
-          const text = window.getSelection()?.toString();
-          if (agent && text && text.trim()) setQuote(text);
-        }}
-      >
-        {agent ? (
+      } catch (err) {
+        if (sentRevision.current === rev) {
+          sentRevision.current = -1;
+        }
+        throw err;
+      }
+    });
+    savingPromise.current = task.catch(reportError);
+    await task;
+  }, [bridge, reportError]);
+
+  useEffect(
+    () => () => {
+      clearTimeout(saveTimer.current);
+      if (dirty.current) void bridge.save(docRef.current).catch(reportError);
+      bridge.presence([]);
+    },
+    [bridge, reportError],
+  );
+
+  const edit = useCallback(
+    (
+      mutator: (d: FlowspaceDocument) => void,
+      options: { remember?: boolean; delay?: number } = {},
+    ) => {
+      const { remember = true, delay = 450 } = options;
+      const prev = docRef.current;
+      const next = structuredClone(prev);
+      if (remember) {
+        setHistory((h) => [...h.slice(-39), prev]);
+        setFuture([]);
+      }
+      mutator(next);
+      revision.current++;
+      docRef.current = next;
+      setDoc(next);
+      dirty.current = true;
+      setSaved(false);
+      clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => {
+        void flush().catch(reportError);
+      }, delay);
+    },
+    [flush, reportError],
+  );
+
+  /* Sync incoming Host snapshots */
+  useEffect(() => {
+    if (!snapshot) return;
+    if (!dirty.current) {
+      docRef.current = snapshot.document;
+      setDoc(snapshot.document);
+    } else {
+      const merged: FlowspaceDocument = {
+        ...docRef.current,
+        nodes: docRef.current.nodes.map((n) => {
+          const host = snapshot.document.nodes.find((x) => x.id === n.id);
+          if (!host) return n;
+          return {
+            ...n,
+            ...(host.sessionId ? { sessionId: host.sessionId } : {}),
+            ...(host.lastSubmittedTask !== undefined
+              ? { lastSubmittedTask: host.lastSubmittedTask }
+              : {}),
+            ...(((n.kind === "display" && !n.fixed) ||
+              (n.kind === "detail" && !n.pinned)) &&
+            host.text
+              ? { text: host.text, sourceSeq: host.sourceSeq }
+              : {}),
+          };
+        }),
+        edges: docRef.current.edges.map((e) => {
+          const hostEdge = snapshot.document.edges.find((x) => x.id === e.id);
+          if (!hostEdge) return e;
+          return {
+            ...e,
+            sentVersion: hostEdge.sentVersion,
+            originMode: hostEdge.originMode ?? e.originMode,
+          };
+        }),
+      };
+      docRef.current = merged;
+      setDoc(merged);
+    }
+    if (!initialized.current) {
+      initialized.current = true;
+    }
+
+    /* Auto-switch newly started Agent steps to Conversation tab so live stream is visible */
+    for (const run of snapshot.runs) {
+      if (run.state !== "running") continue;
+      for (const step of run.steps) {
+        if (
+          step.state === "running" &&
+          !autoSwitchedSteps.current.has(step.id)
+        ) {
+          autoSwitchedSteps.current.add(step.id);
+          const target = docRef.current.nodes.find((n) => n.id === step.nodeId);
+          if (target && target.tab !== "conversation") {
+            edit(
+              (d) => {
+                const n = d.nodes.find((x) => x.id === step.nodeId);
+                if (n) n.tab = "conversation";
+              },
+              { remember: false },
+            );
+          }
+        }
+      }
+    }
+  }, [snapshot, edit]);
+
+  const prefs = useMemo(
+    () => ({
+      theme: doc.prefs?.theme ?? "auto",
+      wheel: doc.prefs?.wheel ?? "zoom",
+      snap: doc.prefs?.snap ?? true,
+      filter: doc.prefs?.filter ?? "all",
+      hiddenWorkspaces: doc.prefs?.hiddenWorkspaces ?? [],
+    }),
+    [doc.prefs],
+  );
+
+  const effectiveTheme: "dark" | "light" =
+    prefs.theme === "auto" ? (hostDark ? "dark" : "light") : prefs.theme;
+  const reducedMotion = doc.settings.reducedMotion || sysReducedMotion;
+  const view = doc.viewport;
+  const lod = view.zoom < LOD_ZOOM;
+
+  /* Smooth Viewport Animation */
+  const setViewportDirect = useCallback(
+    (nextView: { x: number; y: number; zoom: number }, persistDelay = 500) => {
+      const next = { ...docRef.current, viewport: nextView };
+      revision.current++;
+      docRef.current = next;
+      setDoc(next);
+      dirty.current = true;
+      setSaved(false);
+      clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => {
+        void flush().catch(reportError);
+      }, persistDelay);
+    },
+    [flush, reportError],
+  );
+
+  const animateView = useCallback(
+    (
+      target: { x: number; y: number; zoom: number },
+      duration = MOTION.hero,
+    ) => {
+      const token = ++viewAnimToken.current;
+      const from = { ...docRef.current.viewport };
+      if (reducedMotion || duration <= 0) {
+        setViewportDirect(target, 300);
+        return;
+      }
+      const started = performance.now();
+      const step = (now: number) => {
+        if (token !== viewAnimToken.current) return;
+        const frac = clamp((now - started) / duration, 0, 1);
+        const eased = easeView(frac);
+        const cur = {
+          x: from.x + (target.x - from.x) * eased,
+          y: from.y + (target.y - from.y) * eased,
+          zoom: from.zoom + (target.zoom - from.zoom) * eased,
+        };
+        setViewportDirect(cur, frac < 1 ? 1200 : 300);
+        if (frac < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    },
+    [reducedMotion, setViewportDirect],
+  );
+
+  const fitBoxes = useCallback(
+    (boxes: Box[], instant = false) => {
+      if (!boxes.length) return;
+      const rect = viewportRef.current?.getBoundingClientRect();
+      const width = rect?.width || vpSize.width;
+      const height = rect?.height || vpSize.height;
+      const target = fit({ width, height }, boxes, 1);
+      animateView(target, instant ? 0 : MOTION.hero);
+    },
+    [vpSize.width, vpSize.height, animateView],
+  );
+
+  /* Focus request from Native DSH ChatBadge */
+  useEffect(() => {
+    const focusId = bridge.takeFocus();
+    if (!focusId) return;
+    const n = docRef.current.nodes.find((x) => x.id === focusId);
+    if (n) {
+      setRouteName("canvas");
+      setSelection({ nodes: [focusId], groups: [], edge: null });
+      setInspectorOpen(true);
+      if (n.kind === "agent") setLastAgentId(focusId);
+      const box = nodeBox(n, false, true);
+      setTimeout(() => fitBoxes([box]), 60);
+    }
+  }, [bridge, snapshot, fitBoxes]);
+
+  /* Visibility & Waiting Helpers */
+  const waitingForNode = useCallback(
+    (nodeId: string): { run: FlowspaceRun; token: FlowToken }[] =>
+      snapshot?.runs
+        .filter((r) => ["running", "waiting", "paused"].includes(r.state))
+        .flatMap((run) =>
+          run.tokens
+            .filter(
+              (tk) =>
+                !tk.ready &&
+                !tk.consumed &&
+                !tk.dismissed &&
+                run.graph.edges.find((e) => e.id === tk.edgeId)?.target ===
+                  nodeId,
+            )
+            .map((token) => ({ run, token })),
+        ) ?? [],
+    [snapshot],
+  );
+
+  const isNodeVisible = useCallback(
+    (node: FlowNode | undefined, ignoreCollapse = false): boolean => {
+      if (!node || node.kind === "group") return false;
+      const wsKey = node.workspaceId || "__default__";
+      if (prefs.hiddenWorkspaces.includes(wsKey)) return false;
+      if (!ignoreCollapse && collapsedAncestor(doc, node.id)) return false;
+      if (prefs.filter === "running" && node.kind === "agent") {
+        const st = nodeStatusOf(snapshot, node.id);
+        if (!["running", "waiting", "queued", "input"].includes(st)) {
+          return false;
+        }
+      }
+      return true;
+    },
+    [doc, prefs.hiddenWorkspaces, prefs.filter, snapshot],
+  );
+
+  const visibleGroups = useMemo(
+    () =>
+      doc.nodes.filter((g) => {
+        if (g.kind !== "group") return false;
+        if (g.parentId) {
+          const parent = doc.nodes.find((p) => p.id === g.parentId);
+          if (parent?.collapsed) return false;
+        }
+        const memberIds = members(doc, g.id);
+        if (!memberIds.length) return true;
+        return memberIds.some((id) =>
+          isNodeVisible(
+            doc.nodes.find((n) => n.id === id),
+            true,
+          ),
+        );
+      }),
+    [doc, isNodeVisible],
+  );
+
+  const keepExpandedIds = useMemo(() => {
+    const ids = new Set<string>(selection.nodes);
+    if (editingNodeId) ids.add(editingNodeId);
+    for (const n of doc.nodes) {
+      if (n.kind !== "agent") continue;
+      const st = nodeStatusOf(snapshot, n.id);
+      if (st === "waiting" || st === "input") ids.add(n.id);
+    }
+    return ids;
+  }, [selection.nodes, editingNodeId, doc.nodes, snapshot]);
+
+  const waitingAgentNodes = useMemo(
+    () =>
+      doc.nodes.filter((n) => {
+        if (n.kind !== "agent") return false;
+        const st = nodeStatusOf(snapshot, n.id);
+        return st === "waiting" || st === "input";
+      }),
+    [doc.nodes, snapshot],
+  );
+
+  /* Selection & Reveal Helpers */
+  const selectNode = useCallback(
+    (id: string, additive = false) => {
+      const target = docRef.current.nodes.find((n) => n.id === id);
+      if (!target) return;
+      if (target.kind === "group") {
+        setSelection((prev) => ({
+          nodes: additive ? prev.nodes : [],
+          groups: additive
+            ? prev.groups.includes(id)
+              ? prev.groups.filter((x) => x !== id)
+              : [...prev.groups, id]
+            : [id],
+          edge: null,
+        }));
+        return;
+      }
+      if (target.kind === "agent") setLastAgentId(id);
+      setSelection((prev) => ({
+        nodes: additive
+          ? prev.nodes.includes(id)
+            ? prev.nodes.filter((x) => x !== id)
+            : [...prev.nodes, id]
+          : [id],
+        groups: additive ? prev.groups : [],
+        edge: null,
+      }));
+    },
+    [],
+  );
+
+  const revealNode = useCallback(
+    (nodeId: string) => {
+      const target = docRef.current.nodes.find((n) => n.id === nodeId);
+      if (!target) return;
+      setMobileSidebar(false);
+      edit(
+        (d) => {
+          const wsKey = target.workspaceId || "__default__";
+          if (d.prefs?.hiddenWorkspaces?.includes(wsKey)) {
+            d.prefs.hiddenWorkspaces = d.prefs.hiddenWorkspaces.filter(
+              (k) => k !== wsKey,
+            );
+          }
+          let cur = d.nodes.find((n) => n.id === nodeId);
+          while (cur?.parentId) {
+            const p = d.nodes.find((x) => x.id === cur!.parentId);
+            if (p?.collapsed) p.collapsed = false;
+            cur = p;
+          }
+          if (d.prefs?.filter === "running") d.prefs.filter = "all";
+        },
+        { remember: false },
+      );
+      if (routeName !== "conversation") setRouteName("canvas");
+      selectNode(nodeId);
+      if (routeName !== "conversation") {
+        const box = nodeBox(target, false, true);
+        const zoom = Math.max(docRef.current.viewport.zoom, 0.88);
+        animateView({
+          x: vpSize.width / 2 - (box.x + box.w / 2) * zoom,
+          y: vpSize.height / 2 - (box.y + box.h / 2) * zoom - 8,
+          zoom,
+        });
+      }
+    },
+    [edit, routeName, selectNode, animateView, vpSize.width, vpSize.height],
+  );
+
+  const focusGroup = useCallback(
+    (groupId: string, instant = false) => {
+      const group = docRef.current.nodes.find(
+        (n) => n.id === groupId && n.kind === "group",
+      );
+      if (!group) return;
+      setMobileSidebar(false);
+      setRouteName("canvas");
+      setSelection({ nodes: [], groups: [groupId], edge: null });
+      fitBoxes([groupBox(group)], instant);
+    },
+    [fitBoxes],
+  );
+
+  const fitView = useCallback(
+    (all = false) => {
+      if (!all && selection.groups.length) {
+        const boxes = selection.groups
+          .map((id) => docRef.current.nodes.find((n) => n.id === id))
+          .filter((g): g is FlowNode => !!g)
+          .map((g) => groupBox(g));
+        return fitBoxes(boxes);
+      }
+      if (!all && selection.nodes.length) {
+        const boxes = selection.nodes
+          .map((id) => docRef.current.nodes.find((n) => n.id === id))
+          .filter((n): n is FlowNode => !!n)
+          .map((n) => nodeBox(n, false, true));
+        return fitBoxes(boxes);
+      }
+      const topGroup = docRef.current.nodes.find(
+        (n) => n.kind === "group" && !n.parentId,
+      );
+      if (topGroup && !all) return fitBoxes([groupBox(topGroup)]);
+      const allBoxes = [
+        ...docRef.current.nodes
+          .filter((n) => isNodeVisible(n))
+          .map((n) => nodeBox(n, lod)),
+        ...visibleGroups.map((g) => groupBox(g)),
+      ];
+      fitBoxes(allBoxes);
+    },
+    [selection, fitBoxes, isNodeVisible, lod, visibleGroups],
+  );
+
+  /* Node & Edge Mutations */
+  const editNode = useCallback(
+    (id: string, changes: Partial<FlowNode>) => {
+      const textOnly =
+        Object.keys(changes).every((k) =>
+          ["draft", "task", "text"].includes(k),
+        );
+      edit(
+        (d) => {
+          const n = d.nodes.find((x) => x.id === id);
+          if (!n) return;
+          const togglingExpand =
+            changes.expanded !== undefined && changes.expanded !== n.expanded;
+          Object.assign(n, changes);
+          if (togglingExpand && n.kind !== "group") {
+            if (n.expanded) makeRoom(d, n);
+            else giveRoomBack(d, n);
+          }
+        },
+        { remember: !textOnly },
+      );
+    },
+    [edit],
+  );
+
+  const editEdge = useCallback(
+    (id: string, changes: Partial<FlowEdge>) => {
+      edit((d) => {
+        const e = d.edges.find((x) => x.id === id);
+        if (e) Object.assign(e, changes);
+      });
+    },
+    [edit],
+  );
+
+  const toggleNodeForm = useCallback(
+    (nodeId: string) => {
+      const n = docRef.current.nodes.find((x) => x.id === nodeId);
+      if (!n) return;
+      if (n.kind === "group") {
+        editNode(nodeId, { collapsed: !n.collapsed });
+      } else {
+        editNode(nodeId, { expanded: !n.expanded });
+      }
+    },
+    [editNode],
+  );
+
+  const openWindow = useCallback(
+    (nodeId: string) => {
+      const area = areaRef.current;
+      const w = Math.min(540, (area?.clientWidth ?? 900) - 48);
+      const h = Math.min(540, (area?.clientHeight ?? 620) - 48);
+      const maxZ = Math.max(
+        10,
+        ...docRef.current.nodes
+          .filter((n) => n.window)
+          .map((n) => n.window?.z ?? 10),
+      );
+      edit((d) => {
+        const n = d.nodes.find((x) => x.id === nodeId);
+        if (!n || n.kind === "group") return;
+        n.expanded = true;
+        n.window = {
+          x: Math.max(20, ((area?.clientWidth ?? 900) - w) / 2),
+          y: Math.max(20, ((area?.clientHeight ?? 620) - h) / 2),
+          w,
+          h,
+          snap: null,
+          z: maxZ + 1,
+        };
+      });
+    },
+    [edit],
+  );
+
+  const returnWindow = useCallback(
+    (nodeId: string) => {
+      edit((d) => {
+        const n = d.nodes.find((x) => x.id === nodeId);
+        if (n) delete n.window;
+      });
+    },
+    [edit],
+  );
+
+  const openDetailCard = useCallback(
+    (agentId: string) => {
+      const source = docRef.current.nodes.find((n) => n.id === agentId);
+      if (!source) return;
+      const existing = docRef.current.nodes.find(
+        (n) =>
+          n.kind === "detail" &&
+          n.sourceNodeId === agentId &&
+          !n.pinned,
+      );
+      if (existing) {
+        revealNode(existing.id);
+        return;
+      }
+      const box = nodeBox(source, false, true);
+      const latestOutput =
+        snapshot?.live.find((l) => l.nodeId === agentId)?.output ||
+        snapshot?.runs
+          .flatMap((r) => r.steps)
+          .filter((s) => s.nodeId === agentId)
+          .at(-1)?.output ||
+        "";
+      const detail: FlowNode = {
+        ...newNode(
+          "detail",
+          box.x + box.w + 36,
+          box.y,
+          `${source.title} · ${t("executionDetail")}`,
+        ),
+        sourceNodeId: agentId,
+        text: latestOutput,
+        fixed: false,
+        pinned: false,
+        expanded: true,
+      };
+      edit((d) => d.nodes.push(detail));
+      selectNode(detail.id);
+    },
+    [snapshot, edit, revealNode, selectNode],
+  );
+
+  const createCanvasNode = useCallback(
+    (kind: NodeKind, worldPoint?: { x: number; y: number }): FlowNode => {
+      let pt = worldPoint;
+      if (!pt) {
+        const visibleBoxes = [
+          ...docRef.current.nodes
+            .filter((n) => isNodeVisible(n))
+            .map((n) => nodeBox(n)),
+          ...visibleGroups.map((g) => groupBox(g)),
+        ];
+        if (visibleBoxes.length) {
+          const b = bounds(visibleBoxes);
+          pt = { x: b.x + b.w + 120, y: b.y + 60 };
+        } else {
+          const rect = viewportRef.current?.getBoundingClientRect();
+          pt = rect
+            ? toWorld(
+                docRef.current.viewport,
+                rect,
+                rect.left + rect.width / 2,
+                rect.top + rect.height / 2,
+              )
+            : { x: 120, y: 160 };
+        }
+      }
+      const ws = workspaces.find((w) => w.id === activeWorkspaceId);
+      const created: FlowNode = {
+        ...newNode(
+          kind,
+          Math.round((pt.x - 140) / 12) * 12,
+          Math.round((pt.y - 70) / 12) * 12,
+        ),
+        ...(kind === "agent"
+          ? {
+              workspaceId: activeWorkspaceId || undefined,
+              cwd: ws?.path,
+            }
+          : kind === "file"
+            ? {
+                cwd: ws?.path,
+                items: workspaceFilesList.slice(0, 12),
+                selectedItems: workspaceFilesList[0]
+                  ? [workspaceFilesList[0]]
+                  : [],
+                text: workspaceFilesList[0] ?? "README.md",
+                expanded: true,
+              }
+            : {}),
+      };
+      edit((d) => {
+        /* Place inside group if created inside an expanded group's bounds */
+        const parentGroup = d.nodes
+          .filter(
+            (g) =>
+              g.kind === "group" &&
+              !g.collapsed &&
+              created.x > g.x &&
+              created.x < g.x + g.width &&
+              created.y > g.y + 36 &&
+              created.y < g.y + g.height,
+          )
+          .sort((a, b) => a.width * a.height - b.width * b.height)[0];
+        if (parentGroup) created.parentId = parentGroup.id;
+        d.nodes.push(created);
+      });
+      selectNode(created.id);
+      showToast(t("nodeCreated"));
+      return created;
+    },
+    [
+      isNodeVisible,
+      visibleGroups,
+      workspaces,
+      activeWorkspaceId,
+      workspaceFilesList,
+      edit,
+      selectNode,
+      showToast,
+    ],
+  );
+
+  const connectNodes = useCallback(
+    (
+      fromIds: string[],
+      toIds: string[],
+      kind: "reference" | "continuation",
+    ) => {
+      edit((d) => {
+        for (const fromId of fromIds) {
+          const source = d.nodes.find((n) => n.id === fromId);
+          if (!source) continue;
+          if (kind === "continuation") {
+            if (source.kind !== "agent") continue;
+            for (const toId of toIds) {
+              const target = d.nodes.find((n) => n.id === toId);
+              if (!target || target.kind !== "agent" || fromId === toId)
+                continue;
+              if (
+                !d.edges.some(
+                  (e) =>
+                    e.source === fromId &&
+                    e.target === toId &&
+                    e.kind === "continuation",
+                )
+              ) {
+                d.edges.push(newEdge(fromId, toId, "continuation"));
+              }
+            }
+          } else {
+            let refSourceId = fromId;
+            /* Agent reference output port creates a live-following Display node just like omp-studio prototype! */
+            if (source.kind === "agent") {
+              const latestText =
+                snapshot?.live.find((l) => l.nodeId === fromId)?.output ||
+                snapshot?.runs
+                  .flatMap((r) => r.steps)
+                  .filter((s) => s.nodeId === fromId)
+                  .at(-1)?.output ||
+                "";
+              const sb = nodeBox(source);
+              const disp: FlowNode = {
+                ...newNode(
+                  "display",
+                  sb.x + sb.w + 32,
+                  sb.y + sb.h + 36,
+                  `${source.title} · ${t("newDisplay")}`,
+                ),
+                sourceNodeId: fromId,
+                text: latestText,
+                fixed: false,
+                expanded: false,
+              };
+              d.nodes.push(disp);
+              refSourceId = disp.id;
+            }
+            for (const toId of toIds) {
+              const target = d.nodes.find((n) => n.id === toId);
+              if (!target || target.kind !== "agent" || refSourceId === toId)
+                continue;
+              if (
+                !d.edges.some(
+                  (e) =>
+                    e.source === refSourceId &&
+                    e.target === toId &&
+                    e.kind === "reference",
+                )
+              ) {
+                d.edges.push(newEdge(refSourceId, toId, "reference"));
+              }
+            }
+          }
+        }
+      });
+    },
+    [edit, snapshot],
+  );
+
+  const deleteSelection = useCallback(() => {
+    edit((d) => {
+      if (selection.edge) {
+        d.edges = d.edges.filter((e) => e.id !== selection.edge);
+        return;
+      }
+      const removeIds = new Set([...selection.nodes, ...selection.groups]);
+      if (!removeIds.size) return;
+      d.nodes = d.nodes.filter((n) => !removeIds.has(n.id));
+      for (const n of d.nodes) {
+        if (n.parentId && removeIds.has(n.parentId)) delete n.parentId;
+      }
+      d.edges = d.edges.filter(
+        (e) => !removeIds.has(e.source) && !removeIds.has(e.target),
+      );
+    });
+    setSelection({ nodes: [], groups: [], edge: null });
+  }, [edit, selection]);
+
+  const groupSelected = useCallback(() => {
+    const chosenNodes = selection.nodes.filter((id) =>
+      docRef.current.nodes.some((n) => n.id === id && n.kind !== "group"),
+    );
+    const chosenGroups = selection.groups.filter((id) =>
+      docRef.current.nodes.some((n) => n.id === id && n.kind === "group"),
+    );
+    if (chosenNodes.length + chosenGroups.length < 2) {
+      showToast(t("groupNeedSelection"));
+      return;
+    }
+    if (
+      chosenGroups.some((gid) => {
+        const g = docRef.current.nodes.find((n) => n.id === gid);
+        return (
+          g?.parentId ||
+          docRef.current.nodes.some(
+            (c) => c.parentId === gid && c.kind === "group",
+          )
+        );
+      })
+    ) {
+      showToast(t("nestedLimit"), true);
+      return;
+    }
+    const allMemberIds = [
+      ...chosenNodes,
+      ...chosenGroups.flatMap((gid) => members(docRef.current, gid)),
+    ];
+    const boxes = allMemberIds
+      .map((id) => docRef.current.nodes.find((n) => n.id === id))
+      .filter((n): n is FlowNode => !!n)
+      .map((n) => nodeBox(n));
+    if (!boxes.length) return;
+    const b = bounds(boxes);
+    const grp: FlowNode = {
+      ...newNode("group", b.x - 24, b.y - 54, t("workflows")),
+      width: b.w + 48,
+      height: b.h + 82,
+      color: "violet",
+    };
+    edit((d) => {
+      d.nodes.push(grp);
+      for (const id of [...chosenNodes, ...chosenGroups]) {
+        const item = d.nodes.find((n) => n.id === id);
+        if (item) item.parentId = grp.id;
+      }
+    });
+    setSelection({ nodes: [], groups: [grp.id], edge: null });
+    showToast(t("groupCreated"));
+  }, [selection, edit, showToast]);
+
+  const ungroup = useCallback(
+    (groupId: string) => {
+      edit((d) => {
+        const grp = d.nodes.find((n) => n.id === groupId);
+        if (!grp) return;
+        for (const child of d.nodes) {
+          if (child.parentId === groupId) {
+            if (grp.parentId) child.parentId = grp.parentId;
+            else delete child.parentId;
+          }
+        }
+        d.nodes = d.nodes.filter((n) => n.id !== groupId);
+      });
+      setSelection({ nodes: [], groups: [], edge: null });
+    },
+    [edit],
+  );
+
+  const arrangeTopology = useCallback(() => {
+    edit((d) => {
+      const targetGroup = selection.groups.length
+        ? d.nodes.find((n) => n.id === selection.groups[0] && n.kind === "group")
+        : d.nodes.find((n) => n.kind === "group" && !n.parentId);
+      const scopeIds = targetGroup ? new Set(members(d, targetGroup.id)) : null;
+      const agents = d.nodes.filter(
+        (n) => n.kind === "agent" && (!scopeIds || scopeIds.has(n.id)),
+      );
+      if (!agents.length) return;
+      const inside = new Set(agents.map((n) => n.id));
+      const ranks = new Map<string, number>();
+      const visiting = new Set<string>();
+      const rankOf = (id: string): number => {
+        if (ranks.has(id)) return ranks.get(id)!;
+        if (visiting.has(id)) return 0;
+        visiting.add(id);
+        const up = d.edges.filter(
+          (e) =>
+            e.kind === "continuation" &&
+            e.trigger !== "off" &&
+            e.target === id &&
+            inside.has(e.source),
+        );
+        const val = up.length
+          ? Math.max(...up.map((e) => rankOf(e.source))) + 1
+          : 0;
+        visiting.delete(id);
+        ranks.set(id, val);
+        return val;
+      };
+      const colCounts = new Map<number, number>();
+      const startX = (targetGroup?.x ?? 40) + 24;
+      const startY = (targetGroup?.y ?? 126) + 54;
+      for (const ag of agents) {
+        const col = rankOf(ag.id);
+        const row = colCounts.get(col) ?? 0;
+        colCounts.set(col, row + 1);
+        if (!ag.pinned) {
+          ag.x = startX + col * 396;
+          ag.y = startY + row * 444;
+        }
+      }
+      if (targetGroup) {
+        const b = bounds(agents.map((a) => nodeBox(a)));
+        targetGroup.x = b.x - 24;
+        targetGroup.y = b.y - 54;
+        targetGroup.width = b.w + 48;
+        targetGroup.height = b.h + 82;
+      }
+    });
+  }, [edit, selection.groups]);
+
+  /* Undo / Redo — preserves live DSH sessionId & lastSubmittedTask, never replays prompts */
+  const performUndo = useCallback(
+    (isRedo = false) => {
+      const stack = isRedo ? future : history;
+      const target = stack.at(-1);
+      if (!target) return;
+      const current = docRef.current;
+      if (isRedo) {
+        setFuture((f) => f.slice(0, -1));
+        setHistory((h) => [...h, current]);
+      } else {
+        setHistory((h) => h.slice(0, -1));
+        setFuture((f) => [...f, current]);
+      }
+      edit(
+        (d) => {
+          const liveNodes = d.nodes;
+          const restored = structuredClone(target);
+          Object.assign(d, restored);
+          d.nodes = restored.nodes.map((n) => {
+            const existing = liveNodes.find((x) => x.id === n.id);
+            return existing?.sessionId
+              ? {
+                  ...n,
+                  sessionId: existing.sessionId,
+                  cwd: existing.cwd,
+                  workspaceId: existing.workspaceId,
+                  lastSubmittedTask: existing.lastSubmittedTask,
+                }
+              : n;
+          });
+        },
+        { remember: false },
+      );
+    },
+    [future, history, edit],
+  );
+
+  /* Execution & Session Binding */
+  const launchScope = useCallback(
+    (req: StartRequest) => {
+      void (async () => {
+        await flush();
+        if (req.kind === "global") {
+          const plan = await bridge.plan(req);
+          setLaunchDialog({ plan, excluded: new Set() });
+        } else {
+          await bridge.start(req);
+          setBottomOpen(true);
+        }
+      })().catch(reportError);
+    },
+    [flush, bridge, reportError],
+  );
+
+  const bindAgentSession = useCallback(
+    (node: FlowNode) => {
+      void (async () => {
+        await flush();
+        const bound = await bridge.bind({
+          nodeId: node.id,
+          workspaceId: node.workspaceId || activeWorkspaceId || undefined,
+          cwd: node.cwd || activeWorkspaceCwd,
+        });
+        editNode(bound.id, {
+          sessionId: bound.sessionId,
+          cwd: bound.cwd,
+          expanded: true,
+          tab: "conversation",
+        });
+      })().catch(reportError);
+    },
+    [flush, bridge, activeWorkspaceId, activeWorkspaceCwd, editNode, reportError],
+  );
+
+  const extractDisplayFrom = useCallback(
+    (sourceNodeId: string, text?: string, seq?: number, fixed = true) => {
+      void (async () => {
+        await flush();
+        const created = await bridge.display({
+          nodeId: sourceNodeId,
+          text,
+          seq,
+          fixed,
+        });
+        setSelection({ nodes: [created.id], groups: [], edge: null });
+        showToast(t("nodeCreated"));
+      })().catch(reportError);
+    },
+    [flush, bridge, showToast, reportError],
+  );
+
+  /* Templates & Snapshots */
+  const handleInstantiateTemplate = useCallback(
+    (tpl: WorkflowTemplate) => {
+      const occupied = [
+        ...docRef.current.nodes
+          .filter((n) => n.kind !== "group")
+          .map((n) => nodeBox(n)),
+        ...docRef.current.nodes
+          .filter((n) => n.kind === "group")
+          .map((g) => groupBox(g)),
+      ];
+      const x = occupied.length
+        ? bounds(occupied).x + bounds(occupied).w + 120
+        : 40;
+      const y = 140;
+      let createdGroupId = "";
+      edit((d) => {
+        const grp = instantiateTemplate(
+          d,
+          tpl,
+          x,
+          y,
+          tpl.builtin ? t(tpl.title) : tpl.title,
+          {
+            workspaceId: activeWorkspaceId || undefined,
+            cwd: activeWorkspaceCwd,
+          },
+        );
+        createdGroupId = grp.id;
+      });
+      setRouteName("canvas");
+      setTimeout(() => focusGroup(createdGroupId), 40);
+      showToast(t("templateAdded"));
+    },
+    [activeWorkspaceId, activeWorkspaceCwd, edit, focusGroup, showToast],
+  );
+
+  const handleSaveTemplateDialog = useCallback(
+    (groupId: string) => {
+      const grp = docRef.current.nodes.find((n) => n.id === groupId);
+      if (!grp) return;
+      setFormModal({
+        title: t("saveTemplate"),
+        initialValue: grp.title,
+        secondaryLabel: t("description"),
+        secondaryInitial: "",
+        onSubmit: (name, desc) => {
+          edit((d) => {
+            const captured = captureTemplate(d, groupId, name, desc ?? "");
+            d.templates = [...(d.templates ?? []), captured];
+            const target = d.nodes.find((n) => n.id === groupId);
+            if (target) {
+              target.templateId = captured.id;
+              target.templateRevision = captured.revision;
+            }
+          });
+          showToast(t("templateSaved"));
+        },
+      });
+    },
+    [edit, showToast],
+  );
+
+  const handleSaveNewTemplateVersion = useCallback(
+    (groupId: string) => {
+      const grp = docRef.current.nodes.find((n) => n.id === groupId);
+      if (!grp?.templateId) return;
+      edit((d) => {
+        const all = allTemplates(d);
+        const src = all.find((tpl) => tpl.id === grp.templateId);
+        if (!src) return;
+        const captured = captureTemplate(
+          d,
+          groupId,
+          src.builtin ? t(src.title) : src.title,
+          src.builtin ? t(src.description) : src.description,
+        );
+        if (!src.builtin) {
+          captured.id = src.id;
+          captured.revision = src.revision + 1;
+          d.templates = [
+            ...(d.templates ?? []).filter((x) => x.id !== src.id),
+            captured,
+          ];
+        } else {
+          d.templates = [...(d.templates ?? []), captured];
+        }
+        const target = d.nodes.find((n) => n.id === groupId);
+        if (target) {
+          target.templateId = captured.id;
+          target.templateRevision = captured.revision;
+        }
+      });
+      showToast(t("templateSaved"));
+    },
+    [edit, showToast],
+  );
+
+  const handleOpenSyncTemplate = useCallback(
+    (groupId: string) => {
+      const grp = docRef.current.nodes.find((n) => n.id === groupId);
+      if (!grp?.templateId) return;
+      const tpl = allTemplates(docRef.current).find(
+        (x) => x.id === grp.templateId,
+      );
+      if (!tpl) return;
+      setSyncModal({
+        groupId,
+        plan: computeSyncPlan(docRef.current, grp, tpl),
+      });
+    },
+    [],
+  );
+
+  const handleCaptureSnapshot = useCallback(() => {
+    setFormModal({
+      title: t("saveSnapshot"),
+      description: t("snapshotDescription"),
+      initialValue: `${docRef.current.title} · ${formatTime(Date.now())}`,
+      onSubmit: (title) => {
+        const snap = buildSnapshot(docRef.current, snapshot, title);
+        edit((d) => {
+          d.snapshots = [snap, ...(d.snapshots ?? []).slice(0, 19)];
+        });
+        showToast(t("snapshotSaved"));
+      },
+    });
+  }, [snapshot, edit, showToast]);
+
+  const handleRestoreSnapshot = useCallback(
+    (snap: CanvasSnapshot) => {
+      edit((d) => {
+        const liveNodes = d.nodes;
+        d.nodes = structuredClone(snap.nodes).map((n) => {
+          const cur = liveNodes.find((x) => x.id === n.id);
+          return cur?.sessionId
+            ? {
+                ...n,
+                sessionId: cur.sessionId,
+                cwd: cur.cwd,
+                workspaceId: cur.workspaceId,
+                lastSubmittedTask: cur.lastSubmittedTask,
+              }
+            : n;
+        });
+        d.edges = structuredClone(snap.edges);
+        d.viewport = structuredClone(snap.viewport);
+      });
+      setRouteName("canvas");
+      showToast(t("snapshotRestored"));
+    },
+    [edit, showToast],
+  );
+
+  /* Theme & Preferences */
+  const toggleTheme = useCallback(
+    (originEl?: HTMLElement | null) => {
+      const nextTheme: "dark" | "light" =
+        effectiveTheme === "dark" ? "light" : "dark";
+      const applyTheme = () =>
+        edit(
+          (d) => {
+            d.prefs = { ...d.prefs, theme: nextTheme };
+          },
+          { remember: false },
+        );
+      const docAny = document as Document & {
+        startViewTransition?: (cb: () => void) => { finished: Promise<void> };
+      };
+      if (!reducedMotion && docAny.startViewTransition) {
+        const rect = originEl?.getBoundingClientRect();
+        if (rect) {
+          document.documentElement.style.setProperty(
+            "--tx",
+            `${rect.left + rect.width / 2}px`,
+          );
+          document.documentElement.style.setProperty(
+            "--ty",
+            `${rect.top + rect.height / 2}px`,
+          );
+        }
+        document.documentElement.dataset.themeTransition = "";
+        docAny
+          .startViewTransition(applyTheme)
+          .finished.finally(() => {
+            delete document.documentElement.dataset.themeTransition;
+          });
+      } else {
+        applyTheme();
+      }
+    },
+    [effectiveTheme, reducedMotion, edit],
+  );
+
+  /* Menus */
+  const openAnchoredMenu = useCallback(
+    (anchor: HTMLElement | { x: number; y: number }, items: MenuItem[]) => {
+      const pos =
+        anchor instanceof HTMLElement
+          ? {
+              x: anchor.getBoundingClientRect().left,
+              y: anchor.getBoundingClientRect().bottom + 6,
+            }
+          : anchor;
+      setMenu({
+        x: clamp(pos.x, 8, window.innerWidth - 250),
+        y: clamp(pos.y, 8, window.innerHeight - Math.min(420, items.length * 36 + 24)),
+        items,
+      });
+    },
+    [],
+  );
+
+  const openAddMenu = useCallback(
+    (
+      anchor: HTMLElement | { x: number; y: number },
+      worldPt?: { x: number; y: number },
+    ) => {
+      openAnchoredMenu(anchor, [
+        { heading: t("create") },
+        {
+          label: t("newAgent"),
+          icon: "agent",
+          fn: () => createCanvasNode("agent", worldPt),
+        },
+        {
+          label: t("existingSession"),
+          icon: "chat",
+          fn: () =>
+            void bridge.sessions().then(setSessionModal).catch(reportError),
+        },
+        {
+          label: t("newFile"),
+          icon: "file",
+          fn: () => createCanvasNode("file", worldPt),
+        },
+        {
+          label: t("newNote"),
+          icon: "note",
+          fn: () => createCanvasNode("note", worldPt),
+        },
+        {
+          label: t("newBoard"),
+          icon: "board",
+          fn: () => createCanvasNode("board", worldPt),
+        },
+        { divider: true },
+        { heading: t("workflows") },
+        ...allTemplates(docRef.current)
+          .slice(0, 3)
+          .map((tpl) => ({
+            label: tpl.builtin ? t(tpl.title) : tpl.title,
+            icon: "canvas",
+            fn: () => handleInstantiateTemplate(tpl),
+          })),
+      ]);
+    },
+    [
+      openAnchoredMenu,
+      createCanvasNode,
+      bridge,
+      reportError,
+      handleInstantiateTemplate,
+    ],
+  );
+
+  const openNodeContextMenu = useCallback(
+    (node: FlowNode, anchor: HTMLElement | { x: number; y: number }) => {
+      selectNode(node.id);
+      const items: MenuItem[] = [
+        {
+          label: t("rename"),
+          icon: "note",
+          fn: () =>
+            setFormModal({
+              title: t("rename"),
+              initialValue: node.title,
+              onSubmit: (title) => editNode(node.id, { title }),
+            }),
+        },
+      ];
+      if (node.kind === "agent") {
+        items.push(
+          {
+            label: t("runSingle"),
+            icon: "play",
+            disabled: !(node.draft.trim() || node.task.trim()),
+            fn: () => launchScope({ kind: "single", nodeIds: [node.id] }),
+          },
+          {
+            label: t("executionDetail"),
+            icon: "card",
+            fn: () => openDetailCard(node.id),
+          },
+        );
+        if (node.sessionId) {
+          items.push({
+            label: t("openNativeChat"),
+            icon: "chat",
+            fn: () => bridge.openChat(node.sessionId!),
+          });
+        }
+      }
+      items.push(
+        { divider: true },
+        {
+          label: t(node.expanded ? "collapse" : "expand"),
+          icon: "card",
+          fn: () => toggleNodeForm(node.id),
+        },
+        {
+          label: t(node.window ? "returnCanvas" : "openWindow"),
+          icon: "pop",
+          fn: () =>
+            node.window ? returnWindow(node.id) : openWindow(node.id),
+        },
+        {
+          label: t(node.pinned ? "unpin" : "pin"),
+          icon: "pin",
+          checked: !!node.pinned,
+          fn: () => editNode(node.id, { pinned: !node.pinned }),
+        },
+        {
+          label: t("inspect"),
+          icon: "side",
+          fn: () => setInspectorOpen(true),
+        },
+      );
+      if (node.window) {
+        items.push(
+          { divider: true },
+          ...(
+            [
+              ["left", "snapLeft"],
+              ["right", "snapRight"],
+              ["max", "maximize"],
+            ] as const
+          ).map(([snap, labelKey]) => ({
+            label: t(labelKey),
+            icon: "card",
+            fn: () =>
+              editNode(node.id, {
+                window: { ...node.window!, snap },
+              }),
+          })),
+        );
+      }
+      items.push(
+        { divider: true },
+        {
+          label: t("deleteNode"),
+          icon: "trash",
+          danger: true,
+          fn: () => {
+            edit((d) => {
+              d.nodes = d.nodes.filter((x) => x.id !== node.id);
+              d.edges = d.edges.filter(
+                (e) => e.source !== node.id && e.target !== node.id,
+              );
+            });
+            setSelection({ nodes: [], groups: [], edge: null });
+          },
+        },
+      );
+      openAnchoredMenu(anchor, items);
+    },
+    [
+      selectNode,
+      editNode,
+      launchScope,
+      openDetailCard,
+      bridge,
+      toggleNodeForm,
+      returnWindow,
+      openWindow,
+      edit,
+      openAnchoredMenu,
+    ],
+  );
+
+  const openGroupContextMenu = useCallback(
+    (group: FlowNode, anchor: HTMLElement | { x: number; y: number }) => {
+      setSelection({ nodes: [], groups: [group.id], edge: null });
+      const items: MenuItem[] = [
+        {
+          label: t("rename"),
+          icon: "note",
+          fn: () =>
+            setFormModal({
+              title: t("rename"),
+              initialValue: group.title,
+              onSubmit: (title) =>
+                editNode(group.id, { title, titleKey: undefined }),
+            }),
+        },
+        {
+          label: t("runGroup"),
+          icon: "play",
+          fn: () => launchScope({ kind: "group", nodeIds: [group.id] }),
+        },
+        {
+          label: t(group.collapsed ? "expand" : "collapse"),
+          icon: "card",
+          fn: () => editNode(group.id, { collapsed: !group.collapsed }),
+        },
+        {
+          label: t("ports"),
+          icon: "side",
+          fn: () => setInspectorOpen(true),
+        },
+        { divider: true },
+        {
+          label: t("saveTemplate"),
+          icon: "box",
+          fn: () => handleSaveTemplateDialog(group.id),
+        },
+      ];
+      if (group.templateId) {
+        items.push(
+          {
+            label: t("syncTemplate"),
+            icon: "undo",
+            fn: () => handleOpenSyncTemplate(group.id),
+          },
+          {
+            label: t("saveNewVersion"),
+            icon: "check",
+            fn: () => handleSaveNewTemplateVersion(group.id),
+          },
+          {
+            label: t("detachTemplate"),
+            icon: "off",
+            fn: () =>
+              editNode(group.id, {
+                templateId: undefined,
+                templateRevision: undefined,
+              }),
+          },
+        );
+      }
+      items.push(
+        { divider: true },
+        {
+          label: t("ungroup"),
+          icon: "x",
+          danger: true,
+          fn: () => ungroup(group.id),
+        },
+      );
+      openAnchoredMenu(anchor, items);
+    },
+    [
+      editNode,
+      launchScope,
+      handleSaveTemplateDialog,
+      handleOpenSyncTemplate,
+      handleSaveNewTemplateVersion,
+      ungroup,
+      openAnchoredMenu,
+    ],
+  );
+
+  /* Pointer Tracking Utility */
+  const trackPointer = useCallback(
+    (
+      startEvent: React.PointerEvent | PointerEvent,
+      onMove: (ev: PointerEvent) => void,
+      onEnd?: (ev: PointerEvent | KeyboardEvent, canceled: boolean) => void,
+    ) => {
+      startEvent.preventDefault();
+      const move = (ev: PointerEvent) => onMove(ev);
+      const up = (ev: PointerEvent) => finish(ev, false);
+      const cancel = (ev: PointerEvent) => finish(ev, true);
+      const key = (ev: KeyboardEvent) => {
+        if (ev.key === "Escape") {
+          ev.preventDefault();
+          finish(ev, true);
+        }
+      };
+      function finish(ev: PointerEvent | KeyboardEvent, canceled: boolean) {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", cancel);
+        window.removeEventListener("keydown", key, true);
+        onEnd?.(ev, canceled);
+      }
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", cancel);
+      window.addEventListener("keydown", key, true);
+    },
+    [],
+  );
+
+  /* Pointer Interactions: Pan, Node Drag, Group Drag, Resize, Port Wire Drag, Waypoint, Marquee */
+  const startPan = useCallback(
+    (ev: React.PointerEvent) => {
+      const origin = { ...docRef.current.viewport };
+      const sx = ev.clientX,
+        sy = ev.clientY;
+      let moved = false;
+      viewAnimToken.current++;
+      setIsDragging(true);
+      trackPointer(
+        ev,
+        (next) => {
+          if (!moved && Math.hypot(next.clientX - sx, next.clientY - sy) < 3)
+            return;
+          moved = true;
+          setViewportDirect(
+            {
+              x: origin.x + (next.clientX - sx),
+              y: origin.y + (next.clientY - sy),
+              zoom: origin.zoom,
+            },
+            900,
+          );
+        },
+        (_, canceled) => {
+          setIsDragging(false);
+          if (canceled) setViewportDirect(origin, 300);
+          else if (!moved && !spacePressed && tool !== "hand") {
+            setSelection({ nodes: [], groups: [], edge: null });
+          } else {
+            setViewportDirect(docRef.current.viewport, 250);
+          }
+        },
+      );
+    },
+    [trackPointer, setViewportDirect, spacePressed, tool],
+  );
+
+  const startWindowMove = useCallback(
+    (
+      ev: React.PointerEvent,
+      nodeId: string,
+      returnOnDrop = ev.altKey,
+    ) => {
+      const curNode = docRef.current.nodes.find((n) => n.id === nodeId);
+      if (!curNode?.window) return;
+      const area = areaRef.current;
+      if (!area) return;
+      const originWin = structuredClone(curNode.window);
+      const sx = ev.clientX,
+        sy = ev.clientY;
+      const maxZ =
+        Math.max(
+          10,
+          ...docRef.current.nodes
+            .filter((n) => n.window)
+            .map((n) => n.window?.z ?? 10),
+        ) + 1;
+      let baseX = originWin.x,
+        baseY = originWin.y;
+      if (originWin.snap) {
+        const rect = area.getBoundingClientRect();
+        baseX = clamp(
+          sx - rect.left - originWin.w / 2,
+          0,
+          Math.max(0, area.clientWidth - originWin.w),
+        );
+        baseY = 16;
+      }
+      setHistory((h) => [...h.slice(-39), docRef.current]);
+      setFuture([]);
+      let snap: "left" | "right" | "max" | null = null;
+      setIsDragging(true);
+      trackPointer(
+        ev,
+        (next) => {
+          const nx = baseX + (next.clientX - sx);
+          const ny = baseY + (next.clientY - sy);
+          const rect = area.getBoundingClientRect();
+          snap = next.ctrlKey
+            ? null
+            : next.clientY < rect.top + 24
+              ? "max"
+              : next.clientX < rect.left + 36
+                ? "left"
+                : next.clientX > rect.right - 36
+                  ? "right"
+                  : null;
+          setSnapPreview(snap);
+          edit(
+            (d) => {
+              const target = d.nodes.find((x) => x.id === nodeId);
+              if (target?.window) {
+                target.window = {
+                  ...target.window,
+                  x: nx,
+                  y: ny,
+                  snap: null,
+                  z: maxZ,
+                };
+              }
+            },
+            { remember: false, delay: 900 },
+          );
+        },
+        (_, canceled) => {
+          setIsDragging(false);
+          setSnapPreview(null);
+          edit(
+            (d) => {
+              const target = d.nodes.find((x) => x.id === nodeId);
+              if (!target) return;
+              if (canceled) {
+                target.window = originWin;
+              } else if (returnOnDrop) {
+                delete target.window;
+              } else if (target.window) {
+                target.window.snap = snap;
+                target.window.x = clamp(
+                  target.window.x,
+                  0,
+                  Math.max(0, area.clientWidth - target.window.w),
+                );
+                target.window.y = clamp(
+                  target.window.y,
+                  0,
+                  Math.max(0, area.clientHeight - 48),
+                );
+              }
+            },
+            { remember: false, delay: 250 },
+          );
+        },
+      );
+    },
+    [trackPointer, edit],
+  );
+
+  const startNodeMove = useCallback(
+    (ev: React.PointerEvent, nodeId: string) => {
+      const node = docRef.current.nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      if (node.window) {
+        startWindowMove(ev, nodeId);
+        return;
+      }
+      if (ev.altKey) {
+        openWindow(nodeId);
+        setTimeout(() => startWindowMove(ev, nodeId, false), 0);
+        return;
+      }
+      if (ev.shiftKey) {
+        selectNode(nodeId, true);
+        return;
+      }
+      const activeIds = selection.nodes.includes(nodeId)
+        ? selection.nodes
+        : [nodeId];
+      if (!selection.nodes.includes(nodeId)) {
+        selectNode(nodeId);
+      }
+      const vpRect = viewportRef.current?.getBoundingClientRect();
+      if (!vpRect) return;
+      const startWorld = toWorld(
+        docRef.current.viewport,
+        vpRect,
+        ev.clientX,
+        ev.clientY,
+      );
+      const originals = activeIds
+        .map((id) => docRef.current.nodes.find((n) => n.id === id))
+        .filter((n): n is FlowNode => !!n)
+        .map((n) => ({
+          id: n.id,
+          x: n.x,
+          y: n.y,
+          parentId: n.parentId,
+        }));
+      let moved = false;
+      trackPointer(
+        ev,
+        (next) => {
+          const cur = toWorld(
+            docRef.current.viewport,
+            vpRect,
+            next.clientX,
+            next.clientY,
+          );
+          const dx = cur.x - startWorld.x,
+            dy = cur.y - startWorld.y;
+          if (!moved && Math.hypot(dx, dy) < 3) return;
+          if (!moved) {
+            moved = true;
+            setIsDragging(true);
+            setHistory((h) => [...h.slice(-39), docRef.current]);
+            setFuture([]);
+          }
+          edit(
+            (d) => {
+              for (const orig of originals) {
+                const target = d.nodes.find((x) => x.id === orig.id);
+                if (target) {
+                  target.x = orig.x + dx;
+                  target.y = orig.y + dy;
+                }
+              }
+            },
+            { remember: false, delay: 900 },
+          );
+        },
+        (endEv, canceled) => {
+          setIsDragging(false);
+          if (!moved) return;
+          if (canceled) {
+            edit(
+              (d) => {
+                for (const orig of originals) {
+                  const target = d.nodes.find((x) => x.id === orig.id);
+                  if (target) {
+                    target.x = orig.x;
+                    target.y = orig.y;
+                    target.parentId = orig.parentId;
+                  }
+                }
+              },
+              { remember: false, delay: 250 },
+            );
+            setHistory((h) => h.slice(0, -1));
+            return;
+          }
+          const noSnap = "ctrlKey" in endEv && endEv.ctrlKey;
+          edit(
+            (d) => {
+              const candidateGroups = d.nodes
+                .filter((g) => g.kind === "group" && !g.collapsed)
+                .sort((a, b) => a.width * a.height - b.width * b.height);
+              for (const orig of originals) {
+                const target = d.nodes.find((x) => x.id === orig.id);
+                if (!target) continue;
+                if (prefs.snap && !noSnap) {
+                  target.x = Math.round(target.x / 12) * 12;
+                  target.y = Math.round(target.y / 12) * 12;
+                }
+                const box = nodeBox(target);
+                const cx = box.x + box.w / 2,
+                  cy = box.y + box.h / 2;
+                const hitGroup = candidateGroups.find(
+                  (g) =>
+                    g.id !== target.id &&
+                    cx > g.x &&
+                    cx < g.x + g.width &&
+                    cy > g.y + 42 &&
+                    cy < g.y + g.height,
+                );
+                target.parentId = hitGroup?.id;
+              }
+            },
+            { remember: false, delay: 250 },
+          );
+        },
+      );
+    },
+    [
+      startWindowMove,
+      openWindow,
+      selectNode,
+      selection.nodes,
+      trackPointer,
+      edit,
+      prefs.snap,
+    ],
+  );
+
+  const startGroupMove = useCallback(
+    (ev: React.PointerEvent, groupId: string) => {
+      if (ev.shiftKey) {
+        selectNode(groupId, true);
+        return;
+      }
+      setSelection({ nodes: [], groups: [groupId], edge: null });
+      const vpRect = viewportRef.current?.getBoundingClientRect();
+      if (!vpRect) return;
+      const startWorld = toWorld(
+        docRef.current.viewport,
+        vpRect,
+        ev.clientX,
+        ev.clientY,
+      );
+      const movingIds = [groupId, ...groupDescendants(docRef.current, groupId)];
+      const originals = movingIds
+        .map((id) => docRef.current.nodes.find((n) => n.id === id))
+        .filter((n): n is FlowNode => !!n)
+        .map((n) => ({ id: n.id, x: n.x, y: n.y }));
+      let moved = false;
+      trackPointer(
+        ev,
+        (next) => {
+          const cur = toWorld(
+            docRef.current.viewport,
+            vpRect,
+            next.clientX,
+            next.clientY,
+          );
+          const dx = cur.x - startWorld.x,
+            dy = cur.y - startWorld.y;
+          if (!moved && Math.hypot(dx, dy) < 3) return;
+          if (!moved) {
+            moved = true;
+            setIsDragging(true);
+            setHistory((h) => [...h.slice(-39), docRef.current]);
+            setFuture([]);
+          }
+          edit(
+            (d) => {
+              for (const orig of originals) {
+                const item = d.nodes.find((x) => x.id === orig.id);
+                if (item) {
+                  item.x = orig.x + dx;
+                  item.y = orig.y + dy;
+                }
+              }
+            },
+            { remember: false, delay: 900 },
+          );
+        },
+        (_, canceled) => {
+          setIsDragging(false);
+          if (!moved) return;
+          if (canceled) {
+            edit(
+              (d) => {
+                for (const orig of originals) {
+                  const item = d.nodes.find((x) => x.id === orig.id);
+                  if (item) {
+                    item.x = orig.x;
+                    item.y = orig.y;
+                  }
+                }
+              },
+              { remember: false, delay: 250 },
+            );
+            setHistory((h) => h.slice(0, -1));
+          } else {
+            void flush().catch(reportError);
+          }
+        },
+      );
+    },
+    [selectNode, trackPointer, edit, flush, reportError],
+  );
+
+  const startResize = useCallback(
+    (
+      ev: React.PointerEvent,
+      nodeId: string,
+      mode: "node" | "group" | "window",
+    ) => {
+      ev.stopPropagation();
+      const target = docRef.current.nodes.find((n) => n.id === nodeId);
+      if (!target) return;
+      const initialBox =
+        mode === "window" && target.window
+          ? { w: target.window.w, h: target.window.h }
+          : mode === "group"
+            ? groupBox(target)
+            : nodeBox(target, false, true);
+      const sx = ev.clientX,
+        sy = ev.clientY;
+      const scale = mode === "window" ? 1 : docRef.current.viewport.zoom;
+      setHistory((h) => [...h.slice(-39), docRef.current]);
+      setFuture([]);
+      setIsDragging(true);
+      trackPointer(
+        ev,
+        (next) => {
+          const nw = Math.max(
+            mode === "group" ? 260 : 288,
+            initialBox.w + (next.clientX - sx) / scale,
+          );
+          const nh = Math.max(
+            mode === "group" ? 180 : 220,
+            initialBox.h + (next.clientY - sy) / scale,
+          );
+          edit(
+            (d) => {
+              const n = d.nodes.find((x) => x.id === nodeId);
+              if (!n) return;
+              if (mode === "window" && n.window) {
+                n.window.w = nw;
+                n.window.h = nh;
+                n.window.snap = null;
+              } else {
+                n.width = nw;
+                n.height = nh;
+              }
+            },
+            { remember: false, delay: 900 },
+          );
+        },
+        (_, canceled) => {
+          setIsDragging(false);
+          if (canceled) {
+            edit(
+              (d) => {
+                const n = d.nodes.find((x) => x.id === nodeId);
+                if (!n) return;
+                if (mode === "window" && n.window) {
+                  n.window.w = initialBox.w;
+                  n.window.h = initialBox.h;
+                } else {
+                  n.width = initialBox.w;
+                  n.height = initialBox.h;
+                }
+              },
+              { remember: false, delay: 250 },
+            );
+            setHistory((h) => h.slice(0, -1));
+          } else {
+            void flush().catch(reportError);
+          }
+        },
+      );
+    },
+    [trackPointer, edit, flush, reportError],
+  );
+
+  const startPortDrag = useCallback(
+    (
+      ev: React.PointerEvent,
+      fromIds: string[],
+      kind: "reference" | "continuation",
+    ) => {
+      ev.stopPropagation();
+      const vpRect = viewportRef.current?.getBoundingClientRect();
+      if (!vpRect || !fromIds.length) return;
+      const fromPt = endpoint(
+        docRef.current,
+        fromIds[0],
+        kind,
+        "out",
+        lod,
+        keepExpandedIds,
+      );
+      setConnecting({
+        kind,
+        fromIds,
+        fromPoint: fromPt,
+        current: { x: fromPt.x, y: fromPt.y },
+      });
+      setIsDragging(true);
+      trackPointer(
+        ev,
+        (next) => {
+          const cur = toWorld(
+            docRef.current.viewport,
+            vpRect,
+            next.clientX,
+            next.clientY,
+          );
+          setConnecting((prev) => (prev ? { ...prev, current: cur } : null));
+        },
+        (endEv, canceled) => {
+          setIsDragging(false);
+          setConnecting(null);
+          if (canceled || !("clientX" in endEv)) return;
+          const hitEl = document.elementFromPoint(
+            endEv.clientX,
+            endEv.clientY,
+          ) as HTMLElement | null;
+          const inPort = hitEl?.closest<HTMLElement>(
+            '[data-port-direction="in"]',
+          );
+          const hitCard = hitEl?.closest<HTMLElement>("[data-node-card]");
+          const dropWorld = toWorld(
+            docRef.current.viewport,
+            vpRect,
+            endEv.clientX,
+            endEv.clientY,
+          );
+
+          if (inPort && inPort.dataset.portKind === kind) {
+            const proxyIds = inPort.dataset.proxyNodes?.split(",").filter(Boolean);
+            const targetIds = proxyIds?.length
+              ? proxyIds
+              : inPort.dataset.nodeId
+                ? [inPort.dataset.nodeId]
+                : [];
+            if (targetIds.length) connectNodes(fromIds, targetIds, kind);
+            return;
+          }
+          if (hitCard?.dataset.nodeCard) {
+            const targetNode = docRef.current.nodes.find(
+              (n) => n.id === hitCard.dataset.nodeCard,
+            );
+            if (targetNode?.kind === "agent") {
+              connectNodes(fromIds, [targetNode.id], kind);
+              return;
+            }
+          }
+          /* Dragged to empty canvas: create downstream Agent (continuation) or extracted Display card (reference)! */
+          if (
+            hitEl?.closest(".fs-viewport") &&
+            !hitEl.closest(".node,.workflow-group,.fs-minimap,.fs-canvas-controls")
+          ) {
+            const source = docRef.current.nodes.find(
+              (n) => n.id === fromIds[0],
+            );
+            if (!source) return;
+            if (kind === "continuation" && source.kind === "agent") {
+              const downstream = createCanvasNode("agent", dropWorld);
+              edit((d) => {
+                d.edges.push(newEdge(source.id, downstream.id, "continuation"));
+              });
+            } else {
+              const latestText =
+                source.kind === "agent"
+                  ? snapshot?.live.find((l) => l.nodeId === source.id)
+                      ?.output ||
+                    snapshot?.runs
+                      .flatMap((r) => r.steps)
+                      .filter((s) => s.nodeId === source.id)
+                      .at(-1)?.output ||
+                    ""
+                  : source.text;
+              const disp: FlowNode = {
+                ...newNode(
+                  "display",
+                  dropWorld.x - 140,
+                  dropWorld.y - 60,
+                  `${source.title} · ${t("newDisplay")}`,
+                ),
+                sourceNodeId: source.id,
+                text: latestText,
+                fixed: source.kind !== "agent",
+                expanded: true,
+              };
+              edit((d) => d.nodes.push(disp));
+              selectNode(disp.id);
+            }
+          }
+        },
+      );
+    },
+    [
+      lod,
+      keepExpandedIds,
+      trackPointer,
+      connectNodes,
+      createCanvasNode,
+      edit,
+      snapshot,
+      selectNode,
+    ],
+  );
+
+  const startWaypointDrag = useCallback(
+    (ev: React.PointerEvent, edgeId: string, wpIndex: number) => {
+      ev.stopPropagation();
+      const vpRect = viewportRef.current?.getBoundingClientRect();
+      const edge = docRef.current.edges.find((e) => e.id === edgeId);
+      const origWp = edge?.waypoints?.[wpIndex]
+        ? { ...edge.waypoints[wpIndex] }
+        : null;
+      if (!vpRect || !origWp) return;
+      setHistory((h) => [...h.slice(-39), docRef.current]);
+      setFuture([]);
+      setIsDragging(true);
+      trackPointer(
+        ev,
+        (next) => {
+          const pt = toWorld(
+            docRef.current.viewport,
+            vpRect,
+            next.clientX,
+            next.clientY,
+          );
+          edit(
+            (d) => {
+              const target = d.edges.find((x) => x.id === edgeId);
+              if (target?.waypoints?.[wpIndex]) {
+                target.waypoints[wpIndex] = pt;
+              }
+            },
+            { remember: false, delay: 900 },
+          );
+        },
+        (_, canceled) => {
+          setIsDragging(false);
+          if (canceled) {
+            edit(
+              (d) => {
+                const target = d.edges.find((x) => x.id === edgeId);
+                if (target?.waypoints?.[wpIndex]) {
+                  target.waypoints[wpIndex] = origWp;
+                }
+              },
+              { remember: false, delay: 250 },
+            );
+            setHistory((h) => h.slice(0, -1));
+          } else {
+            void flush().catch(reportError);
+          }
+        },
+      );
+    },
+    [trackPointer, edit, flush, reportError],
+  );
+
+  const startMarquee = useCallback(
+    (ev: React.PointerEvent) => {
+      const vpRect = viewportRef.current?.getBoundingClientRect();
+      if (!vpRect) return;
+      const start = toWorld(
+        docRef.current.viewport,
+        vpRect,
+        ev.clientX,
+        ev.clientY,
+      );
+      const baseNodes = new Set(ev.shiftKey ? selection.nodes : []);
+      setIsDragging(true);
+      trackPointer(
+        ev,
+        (next) => {
+          const cur = toWorld(
+            docRef.current.viewport,
+            vpRect,
+            next.clientX,
+            next.clientY,
+          );
+          const x = Math.min(start.x, cur.x),
+            y = Math.min(start.y, cur.y),
+            w = Math.abs(cur.x - start.x),
+            h = Math.abs(cur.y - start.y);
+          const v = docRef.current.viewport;
+          setMarquee({
+            x: x * v.zoom + v.x,
+            y: y * v.zoom + v.y,
+            w: w * v.zoom,
+            h: h * v.zoom,
+          });
+          const hit = docRef.current.nodes
+            .filter((n) => {
+              if (!isNodeVisible(n)) return false;
+              const b = nodeBox(n, lod, keepExpandedIds.has(n.id));
+              return (
+                b.x < x + w &&
+                b.x + b.w > x &&
+                b.y < y + h &&
+                b.y + b.h > y
+              );
+            })
+            .map((n) => n.id);
+          setSelection({
+            nodes: [...new Set([...baseNodes, ...hit])],
+            groups: [],
+            edge: null,
+          });
+        },
+        () => {
+          setIsDragging(false);
+          setMarquee(null);
+        },
+      );
+    },
+    [selection.nodes, trackPointer, isNodeVisible, lod, keepExpandedIds],
+  );
+
+  /* Global Keyboard Shortcuts & Dialog Focus Trap */
+  useEffect(() => {
+    const onKeyDown = (ev: KeyboardEvent) => {
+      const target = ev.target as HTMLElement | null;
+      const inOurRoot =
+        rootRef.current?.contains(target) ||
+        document.activeElement === document.body;
+      if (!inOurRoot && !paletteDialog && !launchDialog && !helpModal) return;
+
+      const mod = ev.ctrlKey || ev.metaKey;
+      const typing = !!target?.closest(
+        'input, textarea, select, [contenteditable="true"]',
+      );
+
+      /* Active Dialog Focus Trap & Escape */
+      if (
+        paletteDialog ||
+        launchDialog ||
+        formModal ||
+        sessionModal ||
+        fileModal ||
+        templatePreviewModal ||
+        syncModal ||
+        mergePortsModal ||
+        exchangeModal ||
+        helpModal
+      ) {
+        if (ev.key === "Escape") {
+          ev.preventDefault();
+          setPaletteDialog(null);
+          setLaunchDialog(null);
+          setFormModal(null);
+          setSessionModal(null);
+          setFileModal(null);
+          setTemplatePreviewModal(null);
+          setSyncModal(null);
+          setMergePortsModal(null);
+          setExchangeModal(null);
+          setHelpModal(false);
+          return;
+        }
+        if (ev.key === "Tab" && dialogRef.current) {
+          const stops = Array.from(
+            dialogRef.current.querySelectorAll<HTMLElement>(
+              'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, [tabindex="0"]',
+            ),
+          ).filter((el) => el.offsetParent !== null);
+          if (stops.length) {
+            const first = stops[0],
+              last = stops[stops.length - 1];
+            if (ev.shiftKey && document.activeElement === first) {
+              ev.preventDefault();
+              last.focus();
+            } else if (!ev.shiftKey && document.activeElement === last) {
+              ev.preventDefault();
+              first.focus();
+            }
+          }
+        }
+        return;
+      }
+
+      if (menu && ev.key === "Escape") {
+        ev.preventDefault();
+        setMenu(null);
+        return;
+      }
+
+      if (mod && (ev.key.toLowerCase() === "k" || ev.key.toLowerCase() === "f")) {
+        if (!target?.closest(".fs-embedded")) {
+          ev.preventDefault();
+          setPaletteDialog({ targetNodeId: null, query: "", index: 0 });
+          return;
+        }
+      }
+
+      if (typing) return;
+
+      if (ev.code === "Space" && !target?.closest("button")) {
+        ev.preventDefault();
+        setSpacePressed(true);
+        return;
+      }
+      if (mod && ev.key.toLowerCase() === "z") {
+        ev.preventDefault();
+        performUndo(ev.shiftKey);
+        return;
+      }
+      if (mod && ev.key === "Enter") {
+        ev.preventDefault();
+        const scopeIds = [
+          ...selection.nodes,
+          ...selection.groups.flatMap((gid) => members(docRef.current, gid)),
+        ];
+        if (scopeIds.length) {
+          launchScope({ kind: "selection", nodeIds: scopeIds });
+        } else {
+          launchScope({ kind: "global", nodeIds: [] });
+        }
+        return;
+      }
+      if (ev.altKey && ev.key === "Enter" && selection.nodes.length === 1) {
+        ev.preventDefault();
+        openWindow(selection.nodes[0]);
+        return;
+      }
+      if (mod) return;
+
+      const lower = ev.key.toLowerCase();
+      if (lower === "f") {
+        ev.preventDefault();
+        fitView(ev.shiftKey);
+      } else if (lower === "g") {
+        ev.preventDefault();
+        groupSelected();
+      } else if (lower === "d" && selection.nodes.length === 1) {
+        const n = docRef.current.nodes.find((x) => x.id === selection.nodes[0]);
+        if (n?.kind === "agent") {
+          ev.preventDefault();
+          openDetailCard(n.id);
+        }
+      } else if (lower === "v") {
+        setTool("pointer");
+      } else if (lower === "h") {
+        setTool("hand");
+      } else if (ev.key === "Escape") {
+        setMenu(null);
+        setSelection({ nodes: [], groups: [], edge: null });
+      } else if (ev.key === "Delete" || ev.key === "Backspace") {
+        ev.preventDefault();
+        deleteSelection();
+      } else if (ev.key.startsWith("Arrow") && selection.nodes.length === 1) {
+        ev.preventDefault();
+        const cur = docRef.current.nodes.find(
+          (x) => x.id === selection.nodes[0],
+        );
+        if (!cur) return;
+        const cb = nodeBox(cur);
+        const cx = cb.x + cb.w / 2,
+          cy = cb.y + cb.h / 2;
+        const horiz = ev.key === "ArrowLeft" || ev.key === "ArrowRight";
+        const sign = ev.key === "ArrowLeft" || ev.key === "ArrowUp" ? -1 : 1;
+        const nextCandidate = docRef.current.nodes
+          .filter((n) => n.id !== cur.id && isNodeVisible(n))
+          .map((n) => {
+            const nb = nodeBox(n);
+            const dx = nb.x + nb.w / 2 - cx,
+              dy = nb.y + nb.h / 2 - cy;
+            return {
+              n,
+              primary: horiz ? dx * sign : dy * sign,
+              cross: horiz ? Math.abs(dy) : Math.abs(dx),
+            };
+          })
+          .filter((c) => c.primary > 8)
+          .sort((a, b) => a.primary + a.cross * 2 - (b.primary + b.cross * 2))[0];
+        if (nextCandidate) revealNode(nextCandidate.n.id);
+      }
+    };
+    const onKeyUp = (ev: KeyboardEvent) => {
+      if (ev.code === "Space") setSpacePressed(false);
+    };
+    const onBlur = () => setSpacePressed(false);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [
+    paletteDialog,
+    launchDialog,
+    formModal,
+    sessionModal,
+    fileModal,
+    templatePreviewModal,
+    syncModal,
+    mergePortsModal,
+    exchangeModal,
+    helpModal,
+    menu,
+    performUndo,
+    selection,
+    launchScope,
+    openWindow,
+    fitView,
+    groupSelected,
+    openDetailCard,
+    deleteSelection,
+    isNodeVisible,
+    revealNode,
+  ]);
+
+  /* Close menu on outside click */
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (ev: PointerEvent) => {
+      if (!(ev.target as HTMLElement | null)?.closest(".fs-menu")) {
+        setMenu(null);
+      }
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [menu]);
+
+  /* Wheel Zoom / Pan on Canvas Viewport */
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const onWheel = (ev: WheelEvent) => {
+      const target = ev.target as HTMLElement | null;
+      if (target?.closest(".fs-canvas-controls, .fs-minimap")) return;
+      if (!ev.ctrlKey && target?.closest(".node.full")) return;
+      ev.preventDefault();
+      viewAnimToken.current++;
+      const cur = docRef.current.viewport;
+      if (prefs.wheel === "pan" && !ev.ctrlKey) {
+        setViewportDirect(
+          { x: cur.x - ev.deltaX, y: cur.y - ev.deltaY, zoom: cur.zoom },
+          400,
+        );
+      } else {
+        const factor = Math.exp(-ev.deltaY * (ev.ctrlKey ? 0.008 : 0.0018));
+        setViewportDirect(
+          zoomAt(cur, vp.getBoundingClientRect(), ev.clientX, ev.clientY, factor),
+          400,
+        );
+      }
+    };
+    vp.addEventListener("wheel", onWheel, { passive: false });
+    return () => vp.removeEventListener("wheel", onWheel);
+  }, [prefs.wheel, setViewportDirect]);
+
+  /* Computed Exchanges from Run Tokens (inter-agent continuation deliveries) */
+  const exchanges = useMemo<ExchangePair[]>(() => {
+    const map = new Map<string, ExchangePair>();
+    for (const run of snapshot?.runs ?? []) {
+      for (const tk of run.tokens) {
+        if (!tk.consumed && !tk.ready) continue;
+        const edge = run.graph.edges.find((e) => e.id === tk.edgeId);
+        if (!edge || edge.kind !== "continuation") continue;
+        const [a, b] =
+          edge.source < edge.target
+            ? [edge.source, edge.target]
+            : [edge.target, edge.source];
+        const key = `${a}::${b}`;
+        let entry = map.get(key);
+        if (!entry) {
+          entry = { id: key, from: edge.source, to: edge.target, items: [] };
+          map.set(key, entry);
+        }
+        if (tk.source.text.trim()) {
+          entry.items.push({
+            id: tk.id,
+            fromId: edge.source,
+            toId: edge.target,
+            text: tk.source.text,
+            at: tk.source.capturedAt,
+            seq: tk.source.seq,
+          });
+        }
+      }
+    }
+    return [...map.values()].filter(
+      (ex) =>
+        ex.items.length > 0 &&
+        isNodeVisible(
+          doc.nodes.find((n) => n.id === ex.from),
+          true,
+        ) &&
+        isNodeVisible(
+          doc.nodes.find((n) => n.id === ex.to),
+          true,
+        ),
+    );
+  }, [snapshot?.runs, doc.nodes, isNodeVisible]);
+
+  /* Computed SVG Wire Geometry */
+  const svgBounds = useMemo(() => {
+    const visBoxes = [
+      ...doc.nodes
+        .filter((n) => isNodeVisible(n))
+        .map((n) => nodeBox(n, lod, keepExpandedIds.has(n.id))),
+      ...visibleGroups.map((g) => groupBox(g)),
+      {
+        x: -view.x / view.zoom,
+        y: -view.y / view.zoom,
+        w: vpSize.width / view.zoom,
+        h: vpSize.height / view.zoom,
+      },
+    ];
+    const b = bounds(visBoxes);
+    return {
+      x: b.x - 256,
+      y: b.y - 256,
+      w: b.w + 512,
+      h: b.h + 512,
+    };
+  }, [doc.nodes, isNodeVisible, lod, keepExpandedIds, visibleGroups, view, vpSize]);
+
+  const edgeVisualState = useCallback(
+    (edge: FlowEdge): string => {
+      if (edge.kind === "reference") {
+        if (!edge.sentVersion) return "pending";
+        return "sent";
+      }
+      const activeTokens =
+        snapshot?.runs
+          .filter((r) => ["running", "waiting", "paused"].includes(r.state))
+          .flatMap((r) => r.tokens.filter((tk) => tk.edgeId === edge.id)) ?? [];
+      if (
+        activeTokens.some(
+          (tk) => !tk.ready && !tk.consumed && !tk.dismissed && tk.boundary,
+        )
+      )
+        return "boundary";
+      if (
+        activeTokens.some(
+          (tk) => !tk.ready && !tk.consumed && !tk.dismissed && !tk.boundary,
+        )
+      )
+        return "waiting";
+      if (activeTokens.some((tk) => tk.ready && !tk.consumed)) return "queued";
+      const targetState = nodeStatusOf(snapshot, edge.target);
+      if (
+        targetState === "running" &&
+        snapshot?.runs.some(
+          (r) =>
+            r.state === "running" &&
+            r.tokens.some((tk) => tk.edgeId === edge.id && tk.consumed),
+        )
+      )
+        return "active";
+      if (
+        snapshot?.runs.some((r) =>
+          r.tokens.some((tk) => tk.edgeId === edge.id && tk.consumed),
+        )
+      )
+        return "done";
+      return "idle";
+    },
+    [snapshot],
+  );
+
+  /* Command / @ Mention Palette Items */
+  const paletteEntries = useMemo<PaletteEntry[]>(() => {
+    if (!paletteDialog) return [];
+    const targetId = paletteDialog.targetNodeId;
+    const needle = paletteDialog.query.trim().toLowerCase();
+    const list: PaletteEntry[] = [];
+
+    if (!targetId) {
+      const cmds: [string, string, () => void][] = [
+        ["newAgent", "agent", () => createCanvasNode("agent")],
+        [
+          "existingSession",
+          "chat",
+          () => void bridge.sessions().then(setSessionModal).catch(reportError),
+        ],
+        ["newFile", "file", () => createCanvasNode("file")],
+        ["newNote", "note", () => createCanvasNode("note")],
+        ["newBoard", "board", () => createCanvasNode("board")],
+        [
+          "runAll",
+          "play",
+          () => launchScope({ kind: "global", nodeIds: [] }),
+        ],
+        ["groupSelection", "group", groupSelected],
+        ["tidy", "tidy", arrangeTopology],
+        ["fitView", "fit", () => fitView(false)],
+        ["saveSnapshot", "clock", handleCaptureSnapshot],
+        ["workflowLibrary", "box", () => setRouteName("workflows")],
+        ["activity", "bolt", () => setRouteName("activity")],
+        ["settings", "gear", () => setRouteName("settings")],
+      ];
+      for (const [key, glyph, fn] of cmds) {
+        list.push({
+          label: t(key),
+          section: t("command"),
+          icon: glyph,
+          fn,
+        });
+      }
+      for (const tpl of allTemplates(doc)) {
+        list.push({
+          label: tpl.builtin ? t(tpl.title) : tpl.title,
+          detail: tpl.builtin ? t(tpl.description) : tpl.description,
+          section: t("workflows"),
+          icon: "canvas",
+          fn: () => handleInstantiateTemplate(tpl),
+        });
+      }
+    }
+
+    for (const node of doc.nodes) {
+      if (node.kind === "group") continue;
+      if (targetId && node.id === targetId) continue;
+      list.push({
+        label: node.title,
+        detail: node.kind.toUpperCase(),
+        section: t("canvas"),
+        icon: kindIconName(node.kind),
+        fn: () => {
+          if (!targetId) {
+            revealNode(node.id);
+            return;
+          }
+          if (node.kind === "agent") {
+            edit((d) => {
+              if (
+                !d.edges.some(
+                  (e) => e.source === node.id && e.target === targetId,
+                )
+              ) {
+                d.edges.push({
+                  ...newEdge(node.id, targetId, "continuation"),
+                  trigger: "off",
+                });
+              }
+              const tgt = d.nodes.find((x) => x.id === targetId);
+              if (tgt) {
+                tgt.draft = `${tgt.draft ? tgt.draft + " " : ""}@${node.title} `;
+                tgt.task = tgt.draft;
+              }
+            });
+          } else {
+            connectNodes([node.id], [targetId], "reference");
+            editNode(targetId, {
+              draft: `${docRef.current.nodes.find((x) => x.id === targetId)?.draft ?? ""}@${node.title} `,
+              task: `${docRef.current.nodes.find((x) => x.id === targetId)?.draft ?? ""}@${node.title} `,
+            });
+          }
+        },
+      });
+    }
+
+    if (targetId) {
+      for (const filePath of workspaceFilesList) {
+        list.push({
+          label: filePath.split("/").pop() ?? filePath,
+          detail: filePath,
+          section: t("newFile"),
+          icon: "file",
+          fn: () => {
+            const targetNode = docRef.current.nodes.find(
+              (n) => n.id === targetId,
+            );
+            if (!targetNode) return;
+            edit((d) => {
+              let fileNode = d.nodes.find(
+                (n) =>
+                  n.kind === "file" &&
+                  (n.text === filePath || n.selectedItems?.includes(filePath)),
+              );
+              if (!fileNode) {
+                fileNode = {
+                  ...newNode(
+                    "file",
+                    targetNode.x - 320,
+                    targetNode.y + 40,
+                    filePath.split("/").pop() ?? filePath,
+                  ),
+                  cwd: targetNode.cwd || activeWorkspaceCwd,
+                  text: filePath,
+                  items: [
+                    ...new Set([filePath, ...workspaceFilesList.slice(0, 10)]),
+                  ],
+                  selectedItems: [filePath],
+                  expanded: false,
+                };
+                d.nodes.push(fileNode);
+              }
+              if (
+                !d.edges.some(
+                  (e) =>
+                    e.source === fileNode!.id &&
+                    e.target === targetId &&
+                    e.kind === "reference",
+                )
+              ) {
+                d.edges.push(newEdge(fileNode.id, targetId, "reference"));
+              }
+              const tgt = d.nodes.find((x) => x.id === targetId);
+              if (tgt) {
+                tgt.draft = `${tgt.draft ? tgt.draft + " " : ""}@${filePath} `;
+                tgt.task = tgt.draft;
+              }
+            });
+          },
+        });
+      }
+    }
+
+    return list
+      .filter(
+        (item) =>
+          !needle ||
+          `${item.label} ${item.detail ?? ""} ${item.section}`
+            .toLowerCase()
+            .includes(needle),
+      )
+      .slice(0, 20);
+  }, [
+    paletteDialog,
+    doc,
+    workspaceFilesList,
+    createCanvasNode,
+    bridge,
+    reportError,
+    launchScope,
+    groupSelected,
+    arrangeTopology,
+    fitView,
+    handleCaptureSnapshot,
+    handleInstantiateTemplate,
+    revealNode,
+    edit,
+    connectNodes,
+    editNode,
+    activeWorkspaceCwd,
+  ]);
+
+  /* Export / Import JSON */
+  const handleExportJson = useCallback(() => {
+    const blob = new Blob([JSON.stringify(docRef.current, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${docRef.current.title || "flowspace"}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 500);
+  }, []);
+
+  const handleImportFile = useCallback(
+    async (file: File) => {
+      try {
+        const parsed = JSON.parse(await file.text()) as FlowspaceDocument;
+        const savedDoc = await bridge.save({
+          ...parsed,
+          version: 1,
+          id: "main",
+        });
+        docRef.current = savedDoc;
+        setDoc(savedDoc);
+        setRouteName("canvas");
+        setTimeout(() => fitView(true), 60);
+      } catch (err) {
+        reportError(err);
+      }
+    },
+    [bridge, fitView, reportError],
+  );
+
+  /* Selected objects for Inspector & Header */
+  const selectedNode = useMemo(() => {
+    if (selection.groups.length === 1) {
+      return doc.nodes.find((n) => n.id === selection.groups[0]);
+    }
+    if (selection.nodes.length === 1) {
+      return doc.nodes.find((n) => n.id === selection.nodes[0]);
+    }
+    return undefined;
+  }, [doc.nodes, selection]);
+
+  const selectedEdge = useMemo(
+    () =>
+      selection.edge
+        ? doc.edges.find((e) => e.id === selection.edge)
+        : undefined,
+    [doc.edges, selection.edge],
+  );
+
+  const hasRunnableSelection = useMemo(() => {
+    if (selection.groups.length > 0) return true;
+    return selection.nodes.some(
+      (id) => doc.nodes.find((n) => n.id === id)?.kind === "agent",
+    );
+  }, [selection, doc.nodes]);
+
+  const conversationFocusAgent = useMemo(() => {
+    const explicit = doc.nodes.find(
+      (n) => n.id === lastAgentId && n.kind === "agent",
+    );
+    return explicit ?? doc.nodes.find((n) => n.kind === "agent");
+  }, [doc.nodes, lastAgentId]);
+
+  const leftSnapped = doc.nodes.some((n) => n.window?.snap === "left");
+  const rightSnapped = doc.nodes.some((n) => n.window?.snap === "right");
+
+  /* Render a Single Node Card (used on Canvas, Floating Window, and Focused Conversation Surface) */
+  const renderNodeCard = (
+    node: FlowNode,
+    placement: "canvas" | "window" | "conversation",
+  ) => {
+    const state = node.kind === "agent" ? nodeStatusOf(snapshot, node.id) : "";
+    const waitingGates =
+      node.kind === "agent" ? waitingForNode(node.id) : [];
+    const live = snapshot?.live.find((l) => l.nodeId === node.id);
+    const isSelected = selection.nodes.includes(node.id);
+    const box = nodeBox(node, lod, keepExpandedIds.has(node.id));
+    const compact =
+      placement === "canvas" &&
+      isCompactNode(node, lod, keepExpandedIds.has(node.id));
+
+    let style: React.CSSProperties | undefined;
+    if (placement === "window" && node.window) {
+      const aw = areaRef.current?.clientWidth || vpSize.width;
+      const ah = areaRef.current?.clientHeight || vpSize.height;
+      const win = node.window;
+      const rect =
+        win.snap === "left"
+          ? { x: 0, y: 0, w: aw / 2, h: ah }
+          : win.snap === "right"
+            ? { x: aw / 2, y: 0, w: aw / 2, h: ah }
+            : win.snap === "max"
+              ? { x: 0, y: 0, w: aw, h: ah }
+              : win;
+      style = {
+        left: rect.x,
+        top: rect.y,
+        width: rect.w,
+        height: rect.h,
+        zIndex: win.z ?? 12,
+      };
+    } else if (placement === "canvas") {
+      style = {
+        left: box.x,
+        top: box.y,
+        width: box.w,
+        height: box.h,
+      };
+    }
+
+    const linkedPort = (
+      pKind: "reference" | "continuation",
+      dir: "in" | "out",
+    ) =>
+      doc.edges.some(
+        (e) =>
+          e.kind === pKind &&
+          (dir === "in" ? e.target === node.id : e.source === node.id),
+      ) ||
+      (pKind === "reference" &&
+        dir === "in" &&
+        (node.kind === "display" || node.kind === "detail") &&
+        !!node.sourceNodeId);
+
+    const activeTab: AgentTab = node.tab ?? "task";
+    const nodeSteps =
+      snapshot?.runs
+        .flatMap((r) => r.steps)
+        .filter((s) => s.nodeId === node.id) ?? [];
+    const latestOutput =
+      live?.output || nodeSteps.filter((s) => s.output).at(-1)?.output || "";
+    const incomingRefs = doc.edges.filter(
+      (e) => e.kind === "reference" && e.target === node.id,
+    );
+    const hasForkInbound = doc.edges.some(
+      (e) => e.target === node.id && e.mode === "fork",
+    );
+
+    const renderCompactBody = () => {
+      if (node.kind === "agent") {
+        const wsName =
+          workspaces.find((w) => w.id === node.workspaceId)?.name ||
+          node.cwd?.split(/[\\/]/).filter(Boolean).pop() ||
+          t("currentWorkspace");
+        const summary = waitingGates.length
+          ? `${waitingGates[0].token.source.title} → ${t("waitingConfirmation")}`
+          : node.draft.trim() ||
+            (state === "draft"
+              ? node.task || t("taskPlaceholder")
+              : latestOutput || node.task);
+        return (
           <>
-            <div className="fs-node-meta">
-              <span className={"fs-status " + state}>
+            <div className="compact-status">
+              <span className={`status status-${state}`}>
                 <i />
-                {tr(statuses[state] ?? "草稿")}
+                {t(state)}
               </span>
-              <span title={node.cwd}>
-                {node.cwd?.split(/[\\/]/).at(-1) ?? "当前工作区"}
+              <span>{wsName}</span>
+            </div>
+            <p className="compact-summary user-content">{summary}</p>
+            {waitingGates.length > 0 && (
+              <button
+                type="button"
+                className="compact-release"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void bridge
+                    .release(
+                      waitingGates[0].run.id,
+                      waitingGates[0].token.id,
+                      true,
+                    )
+                    .catch(reportError);
+                }}
+              >
+                <Icon name="play" />
+                <span>{t("release")}</span>
+              </button>
+            )}
+            <div
+              className={`progress-line ${state === "running" ? "is-running" : ""}`}
+            >
+              <i />
+            </div>
+          </>
+        );
+      }
+      if (node.kind === "note" || node.kind === "display") {
+        return (
+          <>
+            <p className="compact-summary user-content">
+              {node.text ||
+                t(node.kind === "note" ? "notePlaceholder" : "noOutput")}
+            </p>
+            {node.kind === "display" && (
+              <span className="compact-display-mode">
+                {t(node.fixed ? "fixed" : "follow")}
+              </span>
+            )}
+          </>
+        );
+      }
+      if (node.kind === "board") {
+        const cols = node.columns ?? [];
+        return (
+          <div className="compact-tool">
+            {cols.map((col, idx) => (
+              <span key={col.id}>
+                {t(["todo", "inProgress", "completedColumn"][idx] ?? col.name)}{" "}
+                <b>{col.cards.length}</b>
+              </span>
+            ))}
+          </div>
+        );
+      }
+      if (node.kind === "detail") {
+        const srcState = node.sourceNodeId
+          ? nodeStatusOf(snapshot, node.sourceNodeId)
+          : "draft";
+        return (
+          <div className="compact-tool">
+            <span className={`status status-${srcState}`}>
+              <i />
+              {t(srcState)}
+            </span>
+            <span>{t("executionDetail")}</span>
+          </div>
+        );
+      }
+      const count = node.selectedItems?.length || (node.text ? 1 : 0);
+      return (
+        <div className="compact-tool">
+          <span>{node.text.split("\n")[0] || t("newFile")}</span>
+          <span>{t("selectedCount", { count })}</span>
+        </div>
+      );
+    };
+
+    const renderFullBody = () => {
+      if (node.kind === "agent") {
+        const wsName =
+          workspaces.find((w) => w.id === node.workspaceId)?.name ||
+          node.cwd?.split(/[\\/]/).filter(Boolean).pop() ||
+          t("currentWorkspace");
+        const nativeEnabled =
+          node.nativeTrigger === "inherit"
+            ? doc.settings.nativeChatTriggers
+            : node.nativeTrigger === "enabled";
+        const queuedCount = nodeSteps.filter((s) => s.state === "queued").length;
+
+        return (
+          <div className="agent-body">
+            <div className="agent-status-row">
+              <span
+                className={`status status-${waitingGates.length ? "waiting" : state}`}
+              >
+                <i />
+                {t(waitingGates.length ? "waitingConfirmation" : state)}
+              </span>
+              {queuedCount > 0 && (
+                <span className="queue-count">
+                  <Icon name="clock" />
+                  {queuedCount}
+                </span>
+              )}
+              <span className="agent-workspace-tag" title={node.cwd}>
+                {wsName}
               </span>
             </div>
-            {live?.pendingInput.length ? (
-              <button
-                className="fs-pending-input"
-                onClick={() => editNode(node.id, { expanded: true })}
+
+            <div
+              className="node-tabs"
+              role="tablist"
+              aria-label={node.title}
+            >
+              {(["task", "conversation", "execution"] as AgentTab[]).map(
+                (tb) => (
+                  <button
+                    key={tb}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === tb}
+                    onClick={() => editNode(node.id, { tab: tb })}
+                  >
+                    {t(tb === "conversation" ? "conversationTab" : tb)}
+                    {tb === "execution" && nodeSteps.length > 0 && (
+                      <span>{nodeSteps.length}</span>
+                    )}
+                  </button>
+                ),
+              )}
+            </div>
+
+            {activeTab === "conversation" ? (
+              <div
+                className="agent-embedded-wrap"
+                onMouseUp={() => {
+                  const sel = window.getSelection()?.toString().trim();
+                  if (sel) setQuoteState({ nodeId: node.id, text: sel });
+                }}
               >
-                {tr("等待审批或回答 · 展开处理")}
-              </button>
-            ) : null}
-            {!!waiting.length && (
-              <div className="fs-wait">
-                {waiting.map(({ run, token }) => (
-                  <div key={token.id}>
-                    <strong>
-                      {token.boundary
-                        ? tr("接续已到达分组边界")
-                        : tr("下一步等待确认")}
-                    </strong>
+                {quoteState?.nodeId === node.id && (
+                  <div className="quote-selection-bar">
+                    <span>{t("quoteSelection")}</span>
+                    <div>
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => {
+                          extractDisplayFrom(
+                            node.id,
+                            quoteState.text,
+                            live?.seq,
+                            true,
+                          );
+                          setQuoteState(null);
+                        }}
+                      >
+                        <Icon name="quote" />
+                        <span>{t("quoteMessage")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        onClick={() => setQuoteState(null)}
+                      >
+                        <Icon name="x" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {node.sessionId ? (
+                  <EmbeddedSession
+                    node={node}
+                    bridge={bridge}
+                    renderConversation={renderConversation}
+                    onError={reportError}
+                    onPresenceChange={onPresenceChange}
+                  />
+                ) : (
+                  <div className="node-empty">
+                    <Icon name="chat" />
                     <p>
-                      {token.source.title}：{token.source.text.slice(0, 90)}
+                      {hasForkInbound ? t("forkDraftHint") : t("noMessages")}
                     </p>
-                    <button
-                      onClick={() =>
-                        void bridge.release(run.id, token.id, true).catch(error)
-                      }
+                    {!hasForkInbound && (
+                      <button
+                        type="button"
+                        className="button button-primary"
+                        onClick={() => bindAgentSession(node)}
+                      >
+                        <Icon name="plus" />
+                        <span>{t("bindConversation")}</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : activeTab === "execution" ? (
+              <div className="node-scroll">
+                {nodeSteps.length ? (
+                  [...nodeSteps].reverse().map((step) => (
+                    <div
+                      key={step.id}
+                      className={`event-row event-${step.state}`}
                     >
-                      <Check size={13} />
-                      {tr("放行")}
-                    </button>
-                    <button
-                      onClick={() =>
-                        void bridge
-                          .release(run.id, token.id, false)
-                          .catch(error)
-                      }
-                    >
-                      {tr("跳过")}
-                    </button>
+                      <i className="event-dot">
+                        <Icon
+                          name={
+                            step.state === "completed"
+                              ? "check"
+                              : step.state === "queued"
+                                ? "clock"
+                                : "bolt"
+                          }
+                        />
+                      </i>
+                      <div>
+                        <b>
+                          {t(step.state)} ·{" "}
+                          {t("roundBadge", { round: step.iteration })}
+                        </b>
+                        {step.error && <p className="danger">{step.error}</p>}
+                        {step.output && (
+                          <p className="user-content">
+                            {step.output.slice(0, 180)}
+                            {step.output.length > 180 ? "…" : ""}
+                          </p>
+                        )}
+                      </div>
+                      {step.output && (
+                        <button
+                          type="button"
+                          className="icon-button"
+                          title={t("quoteMessage")}
+                          onClick={() =>
+                            extractDisplayFrom(
+                              node.id,
+                              step.output,
+                              step.endSeq,
+                              true,
+                            )
+                          }
+                        >
+                          <Icon name="quote" />
+                        </button>
+                      )}
+                      <time>{formatTime(step.createdAt)}</time>
+                    </div>
+                  ))
+                ) : (
+                  <div className="node-empty">
+                    <Icon name="bolt" />
+                    <p>{t("noEvents")}</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="node-scroll task-content">
+                {live?.pendingInput.length ? (
+                  <div className="approval-box">
+                    <span className="approval-heading">
+                      <Icon name="pause" />
+                      <b>{t("approvalNeeded")}</b>
+                    </span>
+                    <p>{t("approvalDescription")}</p>
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        className="button button-amber"
+                        onClick={() =>
+                          editNode(node.id, { tab: "conversation" })
+                        }
+                      >
+                        <Icon name="chat" />
+                        <span>{t("openApprovalTab")}</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {waitingGates.map(({ run, token }) => (
+                  <div className="approval-box" key={token.id}>
+                    <span className="approval-heading">
+                      <Icon name="pause" />
+                      <b>
+                        {t(
+                          token.boundary
+                            ? "scopeBoundary"
+                            : "waitingConfirmation",
+                        )}
+                      </b>
+                    </span>
+                    <p className="user-content">
+                      <b>{token.source.title}</b>
+                    </p>
+                    {token.source.text && (
+                      <div className="approval-snippet user-content">
+                        {token.source.text.slice(0, 220)}
+                      </div>
+                    )}
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        className="button button-amber"
+                        onClick={() =>
+                          void bridge
+                            .release(run.id, token.id, true)
+                            .catch(reportError)
+                        }
+                      >
+                        <Icon name="play" />
+                        <span>{t("release")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-quiet"
+                        onClick={() =>
+                          void bridge
+                            .release(run.id, token.id, false)
+                            .catch(reportError)
+                        }
+                      >
+                        <span>{t("dismiss")}</span>
+                      </button>
+                    </div>
                   </div>
                 ))}
-              </div>
-            )}
-            {node.expanded && node.sessionId ? (
-              <Embedded node={node} />
-            ) : (
-              <>
+
+                <div className="task-label">
+                  {t(node.sessionId ? "savedTask" : "task")}
+                </div>
                 <textarea
-                  aria-label={`${node.title}任务`}
-                  placeholder={tr("写下这个 Agent 的任务…")}
+                  className="task-editor"
+                  aria-label={`${node.title} · ${t("task")}`}
+                  placeholder={t("taskPlaceholder")}
                   value={node.draft || node.task}
+                  onFocus={() => setEditingNodeId(node.id)}
+                  onBlur={() => setEditingNodeId(null)}
                   onChange={(e) =>
                     editNode(node.id, {
                       draft: e.target.value,
@@ -367,1640 +3532,4104 @@ function CanvasNode({ data, selected }: NodeProps<GraphNode>) {
                     })
                   }
                   onKeyDown={(e) => {
-                    if (
+                    if (e.key === "@" && !e.nativeEvent.isComposing) {
+                      e.preventDefault();
+                      setPaletteDialog({
+                        targetNodeId: node.id,
+                        query: "",
+                        index: 0,
+                      });
+                    } else if (
                       e.key === "Enter" &&
                       !e.shiftKey &&
                       !e.nativeEvent.isComposing
                     ) {
                       e.preventDefault();
-                      launch({ kind: "single", nodeIds: [node.id] });
+                      launchScope({ kind: "single", nodeIds: [node.id] });
                     }
                   }}
                 />
-                {(live?.output ||
-                  snapshot?.runs
-                    .flatMap((r) => r.steps)
-                    .filter((s) => s.nodeId === node.id)
-                    .at(-1)?.output) && (
-                  <p className="fs-result">
-                    {(
-                      live?.output ||
-                      snapshot?.runs
-                        .flatMap((r) => r.steps)
-                        .filter((s) => s.nodeId === node.id)
-                        .at(-1)?.output
-                    )?.slice(0, 170)}
-                  </p>
-                )}
-              </>
-            )}
-          </>
-        ) : node.kind === "display" ? (
-          <>
-            <pre>{node.text || "等待来源结果"}</pre>
-            <label className="fs-inline">
-              <input
-                type="checkbox"
-                checked={node.fixed}
-                onChange={(e) => editNode(node.id, { fixed: e.target.checked })}
-              />
-              {tr("固定内容")}
-            </label>
-          </>
-        ) : (
-          <textarea
-            aria-label={node.title}
-            placeholder={
-              node.kind === "file"
-                ? tr("工作区文件路径，如 src/index.ts")
-                : tr("把想法留在这里…")
-            }
-            value={node.text}
-            onChange={(e) => editNode(node.id, { text: e.target.value })}
-          />
-        )}
-      </div>
-      {agent && quote && (
-        <button
-          className="fs-quote-action nodrag"
-          onClick={() => {
-            void bridge
-              .display({ nodeId: node.id, text: quote, fixed: true })
-              .catch(error);
-            setQuote("");
-          }}
-        >
-          <Copy size={12} />
-          {tr("引用选中文字")}
-        </button>
-      )}
-      {agent && (
-        <div className="fs-capsules nodrag">
-          {snapshot?.document.edges
-            .filter((e) => e.kind === "reference" && e.target === node.id)
-            .map((edge) => {
-              const source = snapshot.document.nodes.find(
-                (n) => n.id === edge.source,
-              );
-              const output =
-                source && snapshot.live.find((l) => l.nodeId === source.id);
-              const version =
-                source &&
-                `${source.sessionId ?? source.id}:${output?.seq ?? source.sourceSeq ?? source.text}`;
-              const state = edge.always
-                ? "始终附带"
-                : !edge.sentVersion
-                  ? "待发"
-                  : edge.sentVersion === version
-                    ? "已发"
-                    : "来源更新";
-              return (
-                <button
-                  key={edge.id}
-                  className={edge.sentVersion ? "sent" : ""}
-                  onClick={() => select(edge.id)}
-                  title={tr(state)}
-                >
-                  <Link2 size={10} />
-                  {source?.title}
-                  <small>{tr(state)}</small>
-                </button>
-              );
-            })}
-        </div>
-      )}
-      <footer className="nodrag">
-        <span className="fs-port-label">
-          <Link2 size={12} />
-          {agent ? tr("上下文") : tr("引用内容")}
-        </span>
-        <span />
-        {agent && (
-          <>
-            {state === "running" && (
-              <button
-                title={tr("停止当前 Agent")}
-                onClick={() => bridge.stopNode(node.id).catch(error)}
-              >
-                <Square size={12} />
-              </button>
-            )}
-            <button
-              title={tr("引出结果")}
-              disabled={!node.sessionId}
-              onClick={() =>
-                void bridge
-                  .display({ nodeId: node.id, fixed: false })
-                  .catch(error)
-              }
-            >
-              <Copy size={13} />
-            </button>
-            {node.sessionId && (
-              <button
-                title={tr("打开原生对话")}
-                onClick={() => bridge.openChat(node.sessionId!)}
-              >
-                <ArrowUpRight size={14} />
-              </button>
-            )}
-            <button
-              className="fs-run-node"
-              onClick={() => launch({ kind: "single", nodeIds: [node.id] })}
-            >
-              <Play size={12} />
-              {tr("运行")}
-            </button>
-          </>
-        )}
-      </footer>
-      {agent && (
-        <Handle
-          id="ref-in"
-          type="target"
-          position={Position.Left}
-          style={{ top: "auto", bottom: 20 }}
-        />
-      )}
-      <Handle
-        id="ref-out"
-        type="source"
-        position={Position.Right}
-        style={{ top: "auto", bottom: 20 }}
-      />
-    </article>
-  );
-}
-function CanvasEdge(props: EdgeProps<GraphEdge>) {
-  const { data, selected, id } = props,
-    [path, x, y] = getBezierPath(props),
-    { select } = useContext(ActionsContext);
-  if (!data) return null;
-  const exec = data.model.kind === "continuation";
-  return (
-    <>
-      <BaseEdge
-        path={path}
-        markerEnd={props.markerEnd}
-        style={{
-          stroke: data.waiting ? "#e9af57" : exec ? "#a392ef" : "#788aa8",
-          strokeWidth: selected ? 3 : exec ? 2 : 1.3,
-          strokeDasharray: exec ? undefined : "5 5",
-        }}
-      />
-      <EdgeLabelRenderer>
-        <button
-          className={`fs-edge-label nodrag nopan ${data.active ? "active" : ""} ${data.waiting ? "waiting" : ""}`}
-          style={{ transform: `translate(-50%,-50%) translate(${x}px,${y}px)` }}
-          onClick={() => select(id)}
-        >
-          {exec ? (
-            data.model.mode === "fork" ? (
-              <GitFork size={11} />
-            ) : data.model.trigger === "confirm" ? (
-              <Pause size={10} />
-            ) : (
-              <Play size={10} />
-            )
-          ) : (
-            <Link2 size={10} />
-          )}
-          {selected || data.waiting
-            ? data.waiting
-              ? tr("等待确认")
-              : exec
-                ? { conclusion: "结论", session: "会话引用", fork: "分叉" }[
-                    data.model.mode
-                  ]
-                : tr("引用")
-            : ""}
-        </button>
-      </EdgeLabelRenderer>
-    </>
-  );
-}
-const nodeTypes = { flowspace: CanvasNode },
-  edgeTypes = { flowspace: CanvasEdge };
-export function CanvasApp(props: {
-  bridge: CanvasBridge;
-  renderConversation: Actions["renderConversation"];
-}) {
-  return (
-    <ReactFlowProvider>
-      <Canvas {...props} />
-    </ReactFlowProvider>
-  );
-}
-function Canvas({
-  bridge,
-  renderConversation,
-}: {
-  bridge: CanvasBridge;
-  renderConversation: Actions["renderConversation"];
-}) {
-  const snapshot = bridge.useSnapshot(),
-    [doc, setDoc] = useState(emptyDocument),
-    docRef = useRef(doc),
-    dirty = useRef(false),
-    timer = useRef<ReturnType<typeof setTimeout>>(),
-    saving = useRef(Promise.resolve()),
-    [saved, setSaved] = useState(true),
-    [errorText, setError] = useState("");
-  const [selection, setSelection] = useState<string[]>([]),
-    [inspector, setInspector] = useState(false),
-    [bottom, setBottom] = useState(false),
-    [settings, setSettings] = useState(false),
-    [map, setMap] = useState(false),
-    [query, setQuery] = useState(""),
-    [filter, setFilter] = useState<"all" | "running">("all");
-  const [workspaces, setWorkspaces] = useState<WorkspaceBrief[]>([]),
-    [workspace, setWorkspace] = useState(""),
-    [sessionList, setSessionList] = useState<SessionBrief[] | null>(null),
-    [launchDialog, setLaunchDialog] = useState<{
-      request: StartRequest;
-      plan: LaunchPlan;
-    }>();
-  const [history, setHistory] = useState<FlowspaceDocument[]>([]),
-    [future, setFuture] = useState<FlowspaceDocument[]>([]),
-    [menu, setMenu] = useState(false);
-  const flow = useReactFlow<GraphNode, GraphEdge>(),
-    initialized = useRef(false);
-  const revision = useRef(0),
-    sentRevision = useRef(-1);
-  const [measured, setMeasured] = useState<Record<string, Dimensions>>({});
-  const error = useCallback(
-    (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
-    [],
-  );
-  useEffect(() => bridge.connect(), [bridge]);
-  useEffect(() => {
-    void bridge
-      .workspaces()
-      .then((list) => {
-        setWorkspaces(list);
-        setWorkspace(list[0]?.id ?? "");
-      })
-      .catch(error);
-  }, [bridge]);
-  useEffect(() => {
-    if (!snapshot) return;
-    if (!dirty.current) {
-      docRef.current = snapshot.document;
-      setDoc(snapshot.document);
-    } else {
-      const local = {
-        ...docRef.current,
-        nodes: docRef.current.nodes.map((n) => {
-          const host = snapshot.document.nodes.find((x) => x.id === n.id);
-          return host?.sessionId
-            ? {
-                ...n,
-                sessionId: host.sessionId,
-                lastSubmittedTask: host.lastSubmittedTask,
-              }
-            : n;
-        }),
-      };
-      docRef.current = local;
-      setDoc(local);
-    }
-    if (!initialized.current) {
-      initialized.current = true;
-      setTimeout(() => flow.setViewport(snapshot.document.viewport), 80);
-    }
-  }, [snapshot]);
-  useEffect(() => {
-    const id = bridge.takeFocus();
-    if (id) {
-      setSelection([id]);
-      setInspector(true);
-      setTimeout(
-        () => flow.fitView({ nodes: [{ id }], maxZoom: 1, duration: 250 }),
-        80,
-      );
-    }
-  }, [bridge, snapshot]);
-  const flush = useCallback(async () => {
-    clearTimeout(timer.current);
-    if (!dirty.current) {
-      await saving.current;
-      return;
-    }
-    const current = docRef.current,
-      rev = revision.current;
-    if (sentRevision.current === rev) {
-      await saving.current;
-      return;
-    }
-    sentRevision.current = rev;
-    const save = saving.current.then(async () => {
-      await bridge.save(current);
-      if (revision.current === rev) {
-        dirty.current = false;
-        setSaved(true);
-      }
-    });
-    saving.current = save.catch(error);
-    await save;
-  }, [bridge, error]);
-  useEffect(
-    () => () => {
-      clearTimeout(timer.current);
-      if (dirty.current) void bridge.save(docRef.current).catch(error);
-      bridge.presence([]);
-    },
-    [bridge],
-  );
-  const edit = useCallback(
-    (change: (d: FlowspaceDocument) => void, remember = true) => {
-      const next = structuredClone(docRef.current);
-      if (remember) {
-        setHistory((h) => [...h.slice(-39), docRef.current]);
-        setFuture([]);
-      }
-      change(next);
-      revision.current++;
-      docRef.current = next;
-      setDoc(next);
-      dirty.current = true;
-      setSaved(false);
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => void flush().catch(error), 500);
-    },
-    [flush, error],
-  );
-  const editNode = useCallback(
-    (id: string, changes: Partial<FlowNode>) =>
-      edit(
-        (d) => {
-          const n = d.nodes.find((n) => n.id === id);
-          if (!n) return;
-          if (changes.expanded === true && !n.expanded && n.kind === "agent") {
-            // Only displace cards intersecting the expanded card; keep free layout elsewhere.
-            for (const other of d.nodes)
-              if (
-                other.id !== n.id &&
-                other.kind !== "group" &&
-                other.x < n.x + 540 &&
-                other.x + other.width > n.x &&
-                other.y < n.y + 680 &&
-                other.y + 250 > n.y
-              ) {
-                if (other.x >= n.x + n.width) other.x = n.x + 570;
-                else if (other.y > n.y) other.y = n.y + 710;
-              }
-            const group = d.nodes.find((g) => g.id === n.parentId);
-            if (group) {
-              group.width = Math.max(group.width, n.x + 550 - group.x);
-              group.height = Math.max(group.height, n.y + 710 - group.y);
-            }
-          }
-          Object.assign(n, changes);
-        },
-        !("draft" in changes || "text" in changes),
-      ),
-    [edit],
-  );
-  const selectedNode = doc.nodes.find((n) => n.id === selection[0]),
-    selectedEdge = doc.edges.find((e) => e.id === selection[0]);
-  const launch = useCallback(
-    (request: StartRequest) => {
-      void (async () => {
-        await flush();
-        if (request.kind === "global")
-          setLaunchDialog({ request, plan: await bridge.plan(request) });
-        else await bridge.start(request);
-        setBottom(true);
-      })().catch(error);
-    },
-    [bridge, flush],
-  );
-  const bind = useCallback(
-    (node: FlowNode) => {
-      void (async () => {
-        await flush();
-        const bound = await bridge.bind({
-          nodeId: node.id,
-          workspaceId: node.workspaceId || workspace || undefined,
-          cwd: node.cwd,
-        });
-        editNode(bound.id, { sessionId: bound.sessionId, expanded: true });
-      })().catch(error);
-    },
-    [bridge, flush, workspace],
-  );
-  const select = useCallback(
-    (id: string) => {
-      setSelection([id]);
-      setInspector(true);
-      const n = docRef.current.nodes.find((n) => n.id === id);
-      if (n)
-        flow.setCenter(n.x + n.width / 2, n.y + (n.expanded ? 330 : 130), {
-          zoom: Math.max(flow.getZoom(), 0.7),
-          duration: 180,
-        });
-    },
-    [flow],
-  );
-  const add = (kind: FlowNode["kind"], position?: { x: number; y: number }) => {
-    const p =
-      position ??
-      flow.screenToFlowPosition({
-        x: window.innerWidth * 0.48,
-        y: window.innerHeight * 0.35,
-      });
-    const n = {
-      ...newNode(kind, p.x, p.y),
-      workspaceId: workspace || undefined,
-      cwd: workspaces.find((w) => w.id === workspace)?.path,
-    };
-    edit((d) => d.nodes.push(n));
-    select(n.id);
-    setMenu(false);
-  };
-  const connect = (connection: Connection) => {
-    const kind = connection.sourceHandle?.startsWith("exec")
-      ? "continuation"
-      : "reference";
-    if (
-      connection.targetHandle !==
-      (kind === "continuation" ? "exec-in" : "ref-in")
-    ) {
-      error("引用口与接续口请分别连接");
-      return;
-    }
-    edit((d) => {
-      if (
-        !d.edges.some(
-          (e) =>
-            e.source === connection.source &&
-            e.target === connection.target &&
-            e.kind === kind,
-        )
-      )
-        d.edges.push(newEdge(connection.source, connection.target, kind));
-    });
-  };
-  const group = () => {
-    const chosen = doc.nodes.filter((n) => selection.includes(n.id));
-    if (!chosen.length) return;
-    const x = Math.min(...chosen.map((n) => n.x)) - 30,
-      y = Math.min(...chosen.map((n) => n.y)) - 55;
-    const n = newNode("group", x, y);
-    n.width = Math.max(...chosen.map((n) => n.x + n.width)) - x + 30;
-    n.height =
-      Math.max(...chosen.map((n) => n.y + (n.expanded ? 600 : 260))) - y + 30;
-    edit((d) => {
-      d.nodes.push(n);
-      for (const child of d.nodes.filter((n) => selection.includes(n.id)))
-        child.parentId = n.id;
-    });
-    select(n.id);
-  };
-  const arrange = () =>
-    edit((d) => {
-      const selectedGroup = d.nodes.find(
-        (n) => n.id === selection[0] && n.kind === "group",
-      );
-      const ids = selectedGroup ? new Set(members(d, selectedGroup.id)) : null;
-      const targets = d.nodes.filter(
-        (n) => n.kind !== "group" && (!ids || ids.has(n.id)),
-      );
-      let x = selectedGroup ? selectedGroup.x + 30 : 80;
-      const y = selectedGroup ? selectedGroup.y + 60 : 130;
-      for (const n of targets) {
-        n.x = x;
-        n.y = y;
-        x += (n.kind === "agent" && n.expanded ? 520 : n.width) + 85;
-      }
-      if (selectedGroup) {
-        selectedGroup.width = x - selectedGroup.x;
-        selectedGroup.height = Math.max(
-          ...targets.map((n) => (n.expanded ? 740 : 330)),
-          330,
-        );
-      }
-    });
-  const remove = () =>
-    edit((d) => {
-      const ids = new Set(selection);
-      d.nodes = d.nodes.filter((n) => !ids.has(n.id));
-      d.nodes.forEach((n) => {
-        if (n.parentId && ids.has(n.parentId)) delete n.parentId;
-      });
-      d.edges = d.edges.filter(
-        (e) => !ids.has(e.id) && !ids.has(e.source) && !ids.has(e.target),
-      );
-    });
-  const undo = (redo = false) => {
-    const stack = redo ? future : history,
-      target = stack.at(-1);
-    if (!target) return;
-    const before = docRef.current;
-    if (redo) {
-      setFuture(stack.slice(0, -1));
-      setHistory((h) => [...h, before]);
-    } else {
-      setHistory(stack.slice(0, -1));
-      setFuture((h) => [...h, before]);
-    }
-    edit((d) => {
-      const live = d.nodes;
-      Object.assign(d, structuredClone(target));
-      d.nodes = d.nodes.map((n) => {
-        const old = live.find((x) => x.id === n.id);
-        return old?.sessionId
-          ? {
-              ...n,
-              sessionId: old.sessionId,
-              lastSubmittedTask: old.lastSubmittedTask,
-            }
-          : n;
-      });
-    }, false);
-  };
-  const hidden = (n: FlowNode | undefined): boolean => {
-    if (!n) return true;
-    let parent = doc.nodes.find((p) => p.id === n.parentId);
-    while (parent) {
-      if (parent.collapsed) return true;
-      parent = doc.nodes.find((p) => p.id === parent!.parentId);
-    }
-    return (
-      filter === "running" &&
-      n.kind === "agent" &&
-      !["running", "waiting", "queued", "input"].includes(
-        statusOf(snapshot, n.id),
-      )
-    );
-  };
-  const nodes: GraphNode[] = doc.nodes.map((n) => ({
-    id: n.id,
-    type: "flowspace",
-    position: { x: n.x, y: n.y },
-    data: { model: n },
-    measured: measured[n.id],
-    selected: selection.includes(n.id),
-    hidden: hidden(n),
-    dragHandle: ".fs-drag",
-    style: {
-      width:
-        n.kind === "group" && n.collapsed
-          ? 280
-          : n.expanded && n.kind === "agent"
-            ? 520
-            : n.width,
-      height: n.kind === "group" ? (n.collapsed ? 100 : n.height) : undefined,
-      zIndex: n.kind === "group" ? -1 : undefined,
-    },
-  }));
-  const visibleEndpoint = (id: string): string => {
-    let node = doc.nodes.find((n) => n.id === id),
-      result = id;
-    while (node?.parentId) {
-      node = doc.nodes.find((n) => n.id === node!.parentId);
-      if (node?.collapsed) result = node.id;
-    }
-    return result;
-  };
-  const edges: GraphEdge[] = doc.edges
-    .filter(
-      (e) =>
-        !hidden(doc.nodes.find((n) => n.id === visibleEndpoint(e.source))) &&
-        !hidden(doc.nodes.find((n) => n.id === visibleEndpoint(e.target))) &&
-        !(
-          visibleEndpoint(e.source) === visibleEndpoint(e.target) &&
-          visibleEndpoint(e.source) !== e.source
-        ),
-    )
-    .map((e) => ({
-      id: e.id,
-      type: "flowspace",
-      source: visibleEndpoint(e.source),
-      target: visibleEndpoint(e.target),
-      sourceHandle: e.kind === "continuation" ? "exec-out" : "ref-out",
-      targetHandle: e.kind === "continuation" ? "exec-in" : "ref-in",
-      selected: selection.includes(e.id),
-      data: {
-        model: e,
-        active: statusOf(snapshot, e.target) === "running",
-        waiting: statusOf(snapshot, e.target) === "waiting",
-      },
-    }));
-  useEffect(() => {
-    bridge.presence(
-      doc.nodes
-        .filter((n) => n.expanded && n.sessionId && !hidden(n))
-        .map((n) => n.sessionId!),
-    );
-  }, [doc.nodes, filter]);
-  const actions = useMemo<Actions>(
-    () => ({
-      bridge,
-      snapshot,
-      editNode,
-      launch,
-      select,
-      bind,
-      error,
-      renderConversation,
-    }),
-    [bridge, snapshot, editNode, launch, bind, renderConversation],
-  );
-  const titleOf = (id: string) =>
-    doc.nodes.find((n) => n.id === id)?.title ?? id;
-  return (
-    <ActionsContext.Provider value={actions}>
-      <div
-        className={`fs-app ${doc.settings.reducedMotion ? "fs-calm" : ""}`}
-        tabIndex={-1}
-        onKeyDown={(event) => {
-          const target = event.target as HTMLElement;
-          if (
-            target.closest('input, textarea, select, [contenteditable="true"]')
-          )
-            return;
-          if (
-            (event.ctrlKey || event.metaKey) &&
-            event.key.toLowerCase() === "z"
-          ) {
-            event.preventDefault();
-            undo(event.shiftKey);
-          }
-          if (event.key === "Delete" && selection.length) {
-            event.preventDefault();
-            remove();
-          }
-          if (
-            event.key.toLowerCase() === "g" &&
-            !event.ctrlKey &&
-            !event.metaKey &&
-            selection.length
-          ) {
-            event.preventDefault();
-            group();
-          }
-        }}
-      >
-        <header className="fs-top">
-          <div className="fs-brand">
-            <Workflow size={23} />
-            <div>
-              <b>FlowSpace</b>
-              <span>AGENT WORKSPACE</span>
-            </div>
-          </div>
-          <div className="fs-divider" />
-          <select
-            aria-label={tr("工作区")}
-            value={workspace}
-            onChange={(e) => setWorkspace(e.target.value)}
-          >
-            <option value="">{tr("当前工作区")}</option>
-            {workspaces.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name}
-              </option>
-            ))}
-          </select>
-          <span className="fs-grow" />
-          <span className="fs-save">
-            <i className={saved ? "saved" : ""} />
-            {saved ? tr("已保存") : tr("保存中")}
-          </span>
-          <button title={tr("设置")} onClick={() => setSettings(!settings)}>
-            <Settings2 size={17} />
-          </button>
-          <button title={tr("检查器")} onClick={() => setInspector(!inspector)}>
-            {inspector ? (
-              <PanelRightClose size={17} />
-            ) : (
-              <PanelRightOpen size={17} />
-            )}
-          </button>
-          <button
-            className="fs-primary"
-            onClick={() =>
-              launch({
-                kind: selection.some((id) => doc.nodes.some((n) => n.id === id))
-                  ? "selection"
-                  : "global",
-                nodeIds: selection,
-              })
-            }
-          >
-            <Play size={14} />
-            {selection.some((id) => doc.nodes.some((n) => n.id === id))
-              ? tr("运行选区")
-              : tr("启动工作流")}
-          </button>
-        </header>
-        <div className="fs-workspace">
-          <main
-            className="fs-canvas"
-            onDoubleClick={(event) => {
-              if (
-                (event.target as HTMLElement).classList.contains(
-                  "react-flow__pane",
-                )
-              )
-                add(
-                  "agent",
-                  flow.screenToFlowPosition({
-                    x: event.clientX,
-                    y: event.clientY,
-                  }),
-                );
-            }}
-          >
-            <div className="fs-toolbar">
-              <div className="fs-dropdown">
-                <button onClick={() => setMenu(!menu)}>
-                  <Plus size={15} />
-                  {tr("添加节点")}
-                  <ChevronDown size={12} />
-                </button>
-                {menu && (
-                  <div className="fs-menu">
-                    {(["agent", "note", "file"] as const).map((k) => (
-                      <button key={k} onClick={() => add(k)}>
-                        {k === "agent"
-                          ? "Agent"
-                          : k === "note"
-                            ? tr("便签")
-                            : tr("文件引用")}
-                      </button>
-                    ))}
-                    <button
-                      onClick={() => {
-                        setMenu(false);
-                        void bridge
-                          .sessions()
-                          .then(setSessionList)
-                          .catch(error);
-                      }}
-                    >
-                      {tr("已有会话…")}
-                    </button>
-                    <hr />
-                    <button
-                      onClick={() => {
-                        edit((d) =>
-                          Object.assign(
-                            d,
-                            sample(d, "review", {
-                              workspaceId: workspace || undefined,
-                            }),
-                          ),
-                        );
-                        setMenu(false);
-                        setTimeout(() => flow.fitView({ padding: 0.15 }), 100);
-                      }}
-                    >
-                      {tr("分析 → 审查 → 汇总")}
-                    </button>
-                    <button
-                      onClick={() => {
-                        edit((d) =>
-                          Object.assign(
-                            d,
-                            sample(d, "parallel", {
-                              workspaceId: workspace || undefined,
-                            }),
-                          ),
-                        );
-                        setMenu(false);
-                        setTimeout(() => flow.fitView({ padding: 0.15 }), 100);
-                      }}
-                    >
-                      {tr("两路调查 → 汇总")}
-                    </button>
+
+                {latestOutput && (
+                  <div className="latest-output-preview user-content">
+                    {latestOutput.slice(0, 240)}
+                    {latestOutput.length > 240 ? "…" : ""}
                   </div>
                 )}
-              </div>
-              <button
-                title={tr("分组")}
-                disabled={!selection.length}
-                onClick={group}
-              >
-                <Layers size={16} />
-              </button>
-              <button title={tr("整理布局")} onClick={arrange}>
-                <LayoutGrid size={16} />
-              </button>
-              <button
-                title={tr("撤销")}
-                disabled={!history.length}
-                onClick={() => undo()}
-              >
-                <Undo2 size={16} />
-              </button>
-              <button
-                title={tr("重做")}
-                disabled={!future.length}
-                onClick={() => undo(true)}
-              >
-                <Redo2 size={16} />
-              </button>
-              <div className="fs-divider" />
-              <Search size={14} />
-              <input
-                placeholder={tr("定位 Agent…")}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    const n = doc.nodes.find((n) => n.title.includes(query));
-                    if (n) {
-                      setSelection([n.id]);
-                      flow.fitView({
-                        nodes: [{ id: n.id }],
-                        maxZoom: 1,
-                        duration: 250,
-                      });
+
+                <div className="context-label">
+                  <Icon name="at" />
+                  <span>{t("context")}</span>
+                  <button
+                    type="button"
+                    aria-label={t("addContext")}
+                    onClick={() =>
+                      setPaletteDialog({
+                        targetNodeId: node.id,
+                        query: "",
+                        index: 0,
+                      })
                     }
+                  >
+                    <Icon name="plus" />
+                  </button>
+                </div>
+
+                <div className="reference-tray">
+                  {incomingRefs.length ? (
+                    incomingRefs.map((refEdge) => {
+                      const src = doc.nodes.find(
+                        (x) => x.id === refEdge.source,
+                      );
+                      const capState = refEdge.always
+                        ? "always"
+                        : refEdge.sentVersion
+                          ? "sent"
+                          : "pending";
+                      return (
+                        <button
+                          key={refEdge.id}
+                          type="button"
+                          className={`capsule capsule-${capState}`}
+                          title={t(`${capState}Tip`)}
+                          onClick={(ev) =>
+                            openAnchoredMenu(ev.currentTarget, [
+                              {
+                                label: t("viewSource"),
+                                icon: "chev",
+                                fn: () => revealNode(refEdge.source),
+                              },
+                              {
+                                label: t("always"),
+                                icon: "pin",
+                                checked: refEdge.always,
+                                fn: () =>
+                                  editEdge(refEdge.id, {
+                                    always: !refEdge.always,
+                                  }),
+                              },
+                              {
+                                label: t("deleteConnection"),
+                                icon: "trash",
+                                danger: true,
+                                fn: () =>
+                                  edit((d) => {
+                                    d.edges = d.edges.filter(
+                                      (x) => x.id !== refEdge.id,
+                                    );
+                                  }),
+                              },
+                            ])
+                          }
+                        >
+                          <Icon name={kindIconName(src?.kind ?? "file")} />
+                          <span>{src?.title ?? refEdge.source}</span>
+                          {refEdge.always && <Icon name="pin" />}
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <button
+                      type="button"
+                      className="empty-reference"
+                      onClick={() =>
+                        setPaletteDialog({
+                          targetNodeId: node.id,
+                          query: "",
+                          index: 0,
+                        })
+                      }
+                    >
+                      <Icon name="plus" />
+                      <span>{t("addContext")}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {!(activeTab === "conversation" && node.sessionId) && (
+              <footer className="agent-footer">
+                <button
+                  type="button"
+                  className="model-picker"
+                  disabled={!!node.sessionId}
+                  onClick={(ev) =>
+                    openAnchoredMenu(ev.currentTarget, [
+                      {
+                        label: t("currentWorkspace"),
+                        icon: "project",
+                        checked: !node.workspaceId,
+                        fn: () =>
+                          editNode(node.id, {
+                            workspaceId: undefined,
+                            cwd: undefined,
+                          }),
+                      },
+                      ...workspaces.map((w) => ({
+                        label: w.name,
+                        description: w.path,
+                        icon: "project",
+                        checked: node.workspaceId === w.id,
+                        fn: () =>
+                          editNode(node.id, {
+                            workspaceId: w.id,
+                            cwd: w.path,
+                          }),
+                      })),
+                    ])
+                  }
+                >
+                  <Icon name="project" />
+                  <span>{wsName}</span>
+                </button>
+                <button
+                  type="button"
+                  className="mode-picker"
+                  title={t("nativeTriggerLabel")}
+                  onClick={(ev) =>
+                    openAnchoredMenu(
+                      ev.currentTarget,
+                      (
+                        [
+                          [
+                            "inherit",
+                            t("inheritGlobal", {
+                              state: doc.settings.nativeChatTriggers
+                                ? t("enabled")
+                                : t("disabled"),
+                            }),
+                          ],
+                          ["enabled", t("enabled")],
+                          ["disabled", t("disabled")],
+                        ] as const
+                      ).map(([val, label]) => ({
+                        label,
+                        icon: "bolt",
+                        checked: node.nativeTrigger === val,
+                        fn: () => editNode(node.id, { nativeTrigger: val }),
+                      })),
+                    )
+                  }
+                >
+                  <Icon name="bolt" />
+                  <span>{nativeEnabled ? t("enabled") : t("disabled")}</span>
+                </button>
+                <div className="agent-controls">
+                  {waitingGates.length > 0 ? (
+                    <button
+                      type="button"
+                      className="button button-amber"
+                      onClick={() =>
+                        void bridge
+                          .release(
+                            waitingGates[0].run.id,
+                            waitingGates[0].token.id,
+                            true,
+                          )
+                          .catch(reportError)
+                      }
+                    >
+                      <Icon name="play" />
+                      <span>{t("release")}</span>
+                    </button>
+                  ) : state === "running" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="icon-button danger"
+                        title={t("stop")}
+                        onClick={() =>
+                          void bridge.stopNode(node.id).catch(reportError)
+                        }
+                      >
+                        <Icon name="stop" />
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-primary"
+                        disabled={!node.draft.trim()}
+                        onClick={() =>
+                          launchScope({ kind: "single", nodeIds: [node.id] })
+                        }
+                      >
+                        <Icon name="plus" />
+                        <span>{t("queueSend")}</span>
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {node.sessionId && (
+                        <button
+                          type="button"
+                          className="icon-button"
+                          title={t("openNativeChat")}
+                          onClick={() => bridge.openChat(node.sessionId!)}
+                        >
+                          <Icon name="pop" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="button button-primary"
+                        disabled={!(node.draft.trim() || node.task.trim())}
+                        onClick={() =>
+                          launchScope({ kind: "single", nodeIds: [node.id] })
+                        }
+                      >
+                        <Icon name={state === "draft" ? "play" : "send"} />
+                        <span>
+                          {t(
+                            state === "draft"
+                              ? "run"
+                              : node.draft.trim()
+                                ? "send"
+                                : "rerun",
+                          )}
+                        </span>
+                      </button>
+                    </>
+                  )}
+                </div>
+              </footer>
+            )}
+
+            <div
+              className={`progress-line ${state === "running" ? "is-running" : ""}`}
+            >
+              <i />
+            </div>
+          </div>
+        );
+      }
+
+      if (node.kind === "file") {
+        const knownPaths = [
+          ...new Set([
+            ...(node.items ?? []),
+            ...node.text
+              .split("\n")
+              .map((p) => p.trim())
+              .filter(Boolean),
+            ...workspaceFilesList,
+          ]),
+        ];
+        const selectedSet = new Set(
+          node.selectedItems?.length
+            ? node.selectedItems
+            : node.text
+                .split("\n")
+                .map((p) => p.trim())
+                .filter(Boolean),
+        );
+        const draftVal = fileInputDrafts[node.id] ?? "";
+        const togglePath = (filePath: string) => {
+          const next = new Set(selectedSet);
+          if (next.has(filePath)) next.delete(filePath);
+          else next.add(filePath);
+          const arr = [...next];
+          editNode(node.id, {
+            selectedItems: arr,
+            text: arr.join("\n"),
+            title:
+              arr.length === 1
+                ? arr[0].split("/").pop() ?? node.title
+                : node.title,
+          });
+        };
+        return (
+          <div className="tool-body">
+            <div className="tool-summary">{t("filesDescription")}</div>
+            <div className="file-input-bar">
+              <input
+                placeholder={t("filePathPlaceholder")}
+                value={draftVal}
+                onChange={(e) =>
+                  setFileInputDrafts((prev) => ({
+                    ...prev,
+                    [node.id]: e.target.value,
+                  }))
+                }
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && draftVal.trim()) {
+                    const p = draftVal.trim();
+                    const arr = [...new Set([...selectedSet, p])];
+                    editNode(node.id, {
+                      items: [...new Set([p, ...(node.items ?? [])])],
+                      selectedItems: arr,
+                      text: arr.join("\n"),
+                    });
+                    setFileInputDrafts((prev) => ({ ...prev, [node.id]: "" }));
                   }
                 }}
               />
-              <select
-                aria-label={tr("显示筛选")}
-                value={filter}
-                onChange={(e) => setFilter(e.target.value as "all" | "running")}
-              >
-                <option value="all">{tr("全部节点")}</option>
-                <option value="running">{tr("运行与等待")}</option>
-              </select>
             </div>
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
-              onConnect={connect}
-              onNodeClick={(event, n) =>
-                setSelection((previous) =>
-                  event.shiftKey ? [...new Set([...previous, n.id])] : [n.id],
-                )
-              }
-              onEdgeClick={(_, e) => select(e.id)}
-              onPaneClick={() => {
-                setSelection([]);
-                setMenu(false);
-              }}
-              onSelectionChange={({ nodes, edges }) =>
-                setSelection([
-                  ...nodes.map((n) => n.id),
-                  ...edges.map((e) => e.id),
-                ])
-              }
-              onNodesChange={(changes) => {
-                const dimensions = changes.filter(
-                  (c) => c.type === "dimensions",
+            <div className="file-tree">
+              {knownPaths.map((fp) => {
+                const checked = selectedSet.has(fp);
+                return (
+                  <div
+                    key={fp}
+                    className={`file-row ${checked ? "selected" : ""}`}
+                  >
+                    <button
+                      type="button"
+                      className="file-select"
+                      aria-pressed={checked}
+                      onClick={() => togglePath(fp)}
+                    >
+                      <i className="checkbox" />
+                      <Icon name="file" />
+                      <span title={fp}>{fp}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title={t("openFile")}
+                      onClick={() =>
+                        void bridge
+                          .readWorkspaceFile(fp, node.cwd || activeWorkspaceCwd)
+                          .then(setFileModal)
+                          .catch(reportError)
+                      }
+                    >
+                      <Icon name="pop" />
+                    </button>
+                  </div>
                 );
-                if (dimensions.length)
-                  setMeasured((previous) => {
-                    const next = { ...previous };
-                    for (const c of dimensions)
-                      if (c.type === "dimensions" && c.dimensions)
-                        next[c.id] = c.dimensions;
-                    return next;
-                  });
-                const selections = changes.filter((c) => c.type === "select");
-                if (selections.length)
-                  setSelection((previous) => {
-                    const ids = new Set(previous);
-                    for (const c of selections)
-                      if (c.type === "select") {
-                        if (c.selected) ids.add(c.id);
-                        else ids.delete(c.id);
-                      }
-                    return [...ids];
-                  });
-                const positions = changes.filter((c) => c.type === "position");
-                if (positions.length)
-                  edit((d) => {
-                    for (const p of positions) {
-                      if (p.type !== "position" || !p.position) continue;
-                      const n = d.nodes.find((n) => n.id === p.id)!;
-                      const dx = p.position.x - n.x,
-                        dy = p.position.y - n.y;
-                      if (n.kind === "group") {
-                        const ids = groupDescendants(d, n.id);
-                        d.nodes
-                          .filter((x) => ids.includes(x.id))
-                          .forEach((x) => {
-                            x.x += dx;
-                            x.y += dy;
-                          });
-                      }
-                      n.x = p.position.x;
-                      n.y = p.position.y;
-                    }
-                  }, false);
-              }}
-              onNodeDragStart={() => {
-                setHistory((h) => [
-                  ...h.slice(-39),
-                  structuredClone(docRef.current),
-                ]);
-                setFuture([]);
-              }}
-              onNodeDragStop={(_, moved) =>
-                edit((d) => {
-                  const node = d.nodes.find((n) => n.id === moved.id)!;
-                  const parent = d.nodes
-                    .filter(
-                      (n) =>
-                        n.kind === "group" &&
-                        n.id !== node.id &&
-                        !groupDescendants(d, node.id).includes(n.id) &&
-                        node.x > n.x &&
-                        node.y > n.y + 40 &&
-                        node.x < n.x + n.width &&
-                        node.y < n.y + n.height,
-                    )
-                    .sort((a, b) => a.width * a.height - b.width * b.height)[0];
-                  if (node.kind === "group" && parent?.parentId) return;
-                  node.parentId = parent?.id;
-                }, false)
-              }
-              onMoveEnd={(_, viewport) =>
-                edit((d) => {
-                  d.viewport = viewport;
-                }, false)
-              }
-              defaultViewport={doc.viewport}
-              minZoom={0.2}
-              maxZoom={1.6}
-              deleteKeyCode={null}
-              selectionOnDrag
-              panOnDrag={[1, 2]}
-              panActivationKeyCode="Space"
-              zoomOnDoubleClick={false}
-              selectionKeyCode="Shift"
-              fitView={false}
-            >
-              <Background gap={24} size={1} color="var(--fs-grid)" />
-              <Controls showInteractive={false} />
-              {map && <MiniMap pannable zoomable nodeColor="#9f8be5" />}
-            </ReactFlow>
-            {!doc.nodes.length && (
-              <div className="fs-empty">
-                <div className="fs-empty-symbol">
-                  <Workflow size={38} />
+              })}
+            </div>
+            <div className="tool-footer">
+              {t("selectedCount", { count: selectedSet.size })}
+            </div>
+          </div>
+        );
+      }
+
+      if (node.kind === "note") {
+        return (
+          <textarea
+            className="note-editor user-content"
+            aria-label={node.title}
+            placeholder={t("notePlaceholder")}
+            value={node.text}
+            onFocus={() => setEditingNodeId(node.id)}
+            onBlur={() => setEditingNodeId(null)}
+            onChange={(e) => editNode(node.id, { text: e.target.value })}
+          />
+        );
+      }
+
+      if (node.kind === "display") {
+        return (
+          <>
+            <div className="display-content user-content">
+              {node.text || t("noOutput")}
+            </div>
+            <footer className="display-footer">
+              <button
+                type="button"
+                className="display-mode"
+                onClick={() =>
+                  editNode(node.id, {
+                    fixed: !node.fixed,
+                    text:
+                      node.fixed && node.sourceNodeId
+                        ? snapshot?.live.find(
+                            (l) => l.nodeId === node.sourceNodeId,
+                          )?.output || node.text
+                        : node.text,
+                  })
+                }
+              >
+                <Icon name={node.fixed ? "pin" : "undo"} />
+                <span>{t(node.fixed ? "fixed" : "follow")}</span>
+              </button>
+              <button
+                type="button"
+                className="text-button"
+                disabled={
+                  !node.sourceNodeId ||
+                  !doc.nodes.some((n) => n.id === node.sourceNodeId)
+                }
+                onClick={() =>
+                  node.sourceNodeId && revealNode(node.sourceNodeId)
+                }
+              >
+                <Icon name="chev" />
+                <span>{t("viewSource")}</span>
+              </button>
+            </footer>
+          </>
+        );
+      }
+
+      if (node.kind === "detail") {
+        const srcNode = doc.nodes.find((x) => x.id === node.sourceNodeId);
+        const srcState = node.sourceNodeId
+          ? nodeStatusOf(snapshot, node.sourceNodeId)
+          : "draft";
+        const srcSteps =
+          snapshot?.runs
+            .flatMap((r) => r.steps)
+            .filter((s) => s.nodeId === node.sourceNodeId) ?? [];
+        const liveText = node.pinned
+          ? node.text
+          : (node.sourceNodeId &&
+              snapshot?.live.find((l) => l.nodeId === node.sourceNodeId)
+                ?.output) ||
+            srcSteps.filter((s) => s.output).at(-1)?.output ||
+            node.text;
+        return (
+          <>
+            <div className="detail-summary">
+              <span className={`status status-${srcState}`}>
+                <i />
+                {t(srcState)}
+              </span>
+              <span>{srcNode?.title ?? ""}</span>
+            </div>
+            <div className="node-scroll">
+              {[...srcSteps].reverse().map((step) => (
+                <div
+                  key={step.id}
+                  className={`event-row event-${step.state}`}
+                >
+                  <i className="event-dot">
+                    <Icon
+                      name={step.state === "completed" ? "check" : "bolt"}
+                    />
+                  </i>
+                  <div>
+                    <b>
+                      {t(step.state)} ·{" "}
+                      {t("roundBadge", { round: step.iteration })}
+                    </b>
+                  </div>
+                  <time>{formatTime(step.createdAt)}</time>
                 </div>
-                <h1>{tr("让 Agent 接着工作")}</h1>
-                <p>
-                  {tr("双击创建 Agent，连接上下文与下一步。")}
-                  <br />
-                  {tr("每个节点都是一段可以继续的真实对话。")}
-                </p>
-                <button className="fs-primary" onClick={() => add("agent")}>
-                  <Plus size={15} />
-                  {tr("创建第一个 Agent")}
+              ))}
+              <div className="detail-result user-content">
+                {liveText || t("noEvents")}
+              </div>
+            </div>
+            <footer className="display-footer">
+              <button
+                type="button"
+                className="text-button"
+                onClick={() =>
+                  editNode(node.id, {
+                    pinned: !node.pinned,
+                    fixed: !node.pinned,
+                    text: liveText,
+                  })
+                }
+              >
+                <Icon name="pin" />
+                <span>{t(node.pinned ? "unpinDetail" : "pinDetail")}</span>
+              </button>
+              {srcNode && (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => revealNode(srcNode.id)}
+                >
+                  <Icon name="chev" />
+                  <span>{t("viewSource")}</span>
+                </button>
+              )}
+            </footer>
+          </>
+        );
+      }
+
+      /* Kanban Board */
+      const columns: BoardColumn[] = node.columns ?? [
+        { id: "todo", name: "待办", cards: [] },
+        { id: "doing", name: "进行中", cards: [] },
+        { id: "done", name: "完成", cards: [] },
+      ];
+      const updateBoard = (nextCols: BoardColumn[], nextSel?: string[]) => {
+        const sel = nextSel ?? node.selectedItems ?? [];
+        editNode(node.id, {
+          columns: nextCols,
+          selectedItems: sel,
+          text: boardSummaryText(nextCols, sel),
+        });
+      };
+      return (
+        <div className="board-columns">
+          {columns.map((col, colIdx) => (
+            <section key={col.id} className="board-column">
+              <header>
+                <i className={`column-dot column-${colIdx}`} />
+                <b className="user-content">
+                  {t(
+                    ["todo", "inProgress", "completedColumn"][colIdx] ??
+                      col.name,
+                  )}
+                </b>
+                <span>{col.cards.length}</span>
+                <button
+                  type="button"
+                  className="icon-button"
+                  title={t("addCard")}
+                  onClick={() =>
+                    setFormModal({
+                      title: t("addCard"),
+                      initialValue: "",
+                      onSubmit: (cardText) => {
+                        const next = structuredClone(columns);
+                        next[colIdx].cards.push({ id: uid(), text: cardText });
+                        updateBoard(next);
+                      },
+                    })
+                  }
+                >
+                  <Icon name="plus" />
+                </button>
+              </header>
+              {col.cards.map((card) => {
+                const cardSelected = !!node.selectedItems?.includes(card.id);
+                return (
+                  <div
+                    key={card.id}
+                    className={`board-card ${cardSelected ? "selected" : ""}`}
+                  >
+                    <button
+                      type="button"
+                      className="board-card-text user-content"
+                      onClick={() => {
+                        const cur = new Set(node.selectedItems ?? []);
+                        if (cur.has(card.id)) cur.delete(card.id);
+                        else cur.add(card.id);
+                        updateBoard(columns, [...cur]);
+                      }}
+                    >
+                      {card.text}
+                    </button>
+                    <div>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        title={t("editCard")}
+                        onClick={(ev) =>
+                          openAnchoredMenu(ev.currentTarget, [
+                            {
+                              label: t("editCard"),
+                              icon: "note",
+                              fn: () =>
+                                setFormModal({
+                                  title: t("editCard"),
+                                  initialValue: card.text,
+                                  onSubmit: (val) => {
+                                    const next = structuredClone(columns);
+                                    const found = next[colIdx].cards.find(
+                                      (c) => c.id === card.id,
+                                    );
+                                    if (found) found.text = val;
+                                    updateBoard(next);
+                                  },
+                                }),
+                            },
+                            {
+                              label: t("deleteCard"),
+                              icon: "trash",
+                              danger: true,
+                              fn: () => {
+                                const next = structuredClone(columns);
+                                next[colIdx].cards = next[colIdx].cards.filter(
+                                  (c) => c.id !== card.id,
+                                );
+                                updateBoard(
+                                  next,
+                                  (node.selectedItems ?? []).filter(
+                                    (id) => id !== card.id,
+                                  ),
+                                );
+                              },
+                            },
+                          ])
+                        }
+                      >
+                        <Icon name="more" />
+                      </button>
+                      {colIdx < columns.length - 1 && (
+                        <button
+                          type="button"
+                          className="icon-button"
+                          title={t("nextColumn")}
+                          onClick={() => {
+                            const next = structuredClone(columns);
+                            next[colIdx].cards = next[colIdx].cards.filter(
+                              (c) => c.id !== card.id,
+                            );
+                            next[colIdx + 1].cards.push(card);
+                            updateBoard(next);
+                          }}
+                        >
+                          <Icon name="chev" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </section>
+          ))}
+        </div>
+      );
+    };
+
+    const roleText = node.roleLabel
+      ? dictRoleLabel(node.roleLabel)
+      : undefined;
+
+    return (
+      <section
+        key={`${placement}-${node.id}`}
+        data-node-card={node.id}
+        tabIndex={0}
+        aria-label={node.title}
+        style={style}
+        className={[
+          "node",
+          `node-${node.kind}`,
+          compact ? "compact" : "full",
+          placement === "window" ? "floating-window" : "",
+          placement === "conversation" ? "conversation-agent" : "",
+          isSelected ? "selected" : "",
+          state ? `status-${state}` : "",
+          node.pinned ? "is-pinned" : "",
+          waitingGates.length ? "needs-confirmation" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        onPointerDown={(ev) => {
+          if (
+            !(ev.target as HTMLElement).closest(
+              "button, input, textarea, select, a, .fs-embedded",
+            )
+          ) {
+            selectNode(node.id, ev.shiftKey);
+          }
+        }}
+        onContextMenu={(ev) => {
+          if ((ev.target as HTMLElement).closest(".fs-embedded")) return;
+          ev.preventDefault();
+          ev.stopPropagation();
+          const selText = window.getSelection()?.toString().trim();
+          if (selText && node.kind === "agent") {
+            openAnchoredMenu(
+              { x: ev.clientX, y: ev.clientY },
+              [
+                {
+                  label: t("quoteSelection"),
+                  icon: "quote",
+                  fn: () =>
+                    extractDisplayFrom(node.id, selText, live?.seq, true),
+                },
+              ],
+            );
+            return;
+          }
+          openNodeContextMenu(node, { x: ev.clientX, y: ev.clientY });
+        }}
+      >
+        <header
+          className="node-header"
+          onPointerDown={(ev) => {
+            if ((ev.target as HTMLElement).closest("button")) return;
+            startNodeMove(ev, node.id);
+          }}
+          onDoubleClick={() => toggleNodeForm(node.id)}
+        >
+          <span
+            className={`node-avatar ${node.kind === "agent" ? "agent-avatar" : ""}`}
+          >
+            <Icon name={kindIconName(node.kind)} />
+          </span>
+          <div className="node-heading">
+            <strong>{node.title}</strong>
+            {!compact && roleText && <small>{roleText}</small>}
+          </div>
+          <div className="node-actions">
+            {placement === "window" ? (
+              <>
+                <button
+                  type="button"
+                  className="icon-button"
+                  title={t("returnCanvas")}
+                  onClick={() => returnWindow(node.id)}
+                >
+                  <Icon name="pop" />
                 </button>
                 <button
-                  onClick={() => {
+                  type="button"
+                  className="icon-button"
+                  title={
+                    node.window?.snap === "max"
+                      ? t("restoreWindow")
+                      : t("maximize")
+                  }
+                  onClick={() =>
+                    editNode(node.id, {
+                      window: {
+                        ...node.window!,
+                        snap: node.window?.snap === "max" ? null : "max",
+                      },
+                    })
+                  }
+                >
+                  <Icon name="fit" />
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="icon-button"
+                  title={t(compact ? "expand" : "collapse")}
+                  onClick={() => toggleNodeForm(node.id)}
+                >
+                  <Icon name={compact ? "card" : "off"} />
+                </button>
+                {!compact && (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    title={t("openWindow")}
+                    onClick={() => openWindow(node.id)}
+                  >
+                    <Icon name="pop" />
+                  </button>
+                )}
+              </>
+            )}
+            <button
+              type="button"
+              className="icon-button"
+              title={t("inspector")}
+              onClick={(ev) => openNodeContextMenu(node, ev.currentTarget)}
+            >
+              <Icon name="more" />
+            </button>
+          </div>
+        </header>
+
+        <div className="node-body">
+          {compact ? renderCompactBody() : renderFullBody()}
+        </div>
+
+        {/* Ports (Canvas cards only) */}
+        {placement === "canvas" && node.kind !== "detail" && (
+          <>
+            {node.kind === "agent" && (
+              <>
+                <button
+                  type="button"
+                  data-port-kind="continuation"
+                  data-port-direction="in"
+                  data-node-id={node.id}
+                  className={`port port-continuation port-in ${linkedPort("continuation", "in") ? "is-linked" : ""} ${connecting?.kind === "continuation" ? "port-target" : ""}`}
+                  style={
+                    {
+                      ["--port-y" as string]: `${portY(node, "continuation", compact)}px`,
+                    } as React.CSSProperties
+                  }
+                  title={t("contInput")}
+                >
+                  <i />
+                </button>
+                <button
+                  type="button"
+                  data-port-kind="continuation"
+                  data-port-direction="out"
+                  data-node-id={node.id}
+                  className={`port port-continuation port-out ${linkedPort("continuation", "out") ? "is-linked" : ""}`}
+                  style={
+                    {
+                      ["--port-y" as string]: `${portY(node, "continuation", compact)}px`,
+                    } as React.CSSProperties
+                  }
+                  title={t("contOutput")}
+                  onPointerDown={(ev) =>
+                    startPortDrag(ev, [node.id], "continuation")
+                  }
+                >
+                  <i />
+                </button>
+              </>
+            )}
+            {(node.kind === "agent" || node.kind === "display") && (
+              <button
+                type="button"
+                data-port-kind="reference"
+                data-port-direction="in"
+                data-node-id={node.id}
+                className={`port port-reference port-in ${linkedPort("reference", "in") ? "is-linked" : ""} ${connecting?.kind === "reference" && node.kind === "agent" ? "port-target" : ""}`}
+                style={
+                  {
+                    ["--port-y" as string]: `${portY(node, "reference", compact)}px`,
+                  } as React.CSSProperties
+                }
+                title={t("refInput")}
+              >
+                <i />
+              </button>
+            )}
+            <button
+              type="button"
+              data-port-kind="reference"
+              data-port-direction="out"
+              data-node-id={node.id}
+              className={`port port-reference port-out ${linkedPort("reference", "out") ? "is-linked" : ""}`}
+              style={
+                {
+                  ["--port-y" as string]: `${portY(node, "reference", compact)}px`,
+                } as React.CSSProperties
+              }
+              title={t("refOutput")}
+              onPointerDown={(ev) => startPortDrag(ev, [node.id], "reference")}
+            >
+              <i />
+            </button>
+          </>
+        )}
+
+        {!compact && placement === "canvas" && (
+          <button
+            type="button"
+            className="node-resizer"
+            aria-label={t("expand")}
+            onPointerDown={(ev) => startResize(ev, node.id, "node")}
+          />
+        )}
+        {placement === "window" && (
+          <button
+            type="button"
+            className="window-resizer"
+            aria-label={t("expand")}
+            onPointerDown={(ev) => startResize(ev, node.id, "window")}
+          />
+        )}
+      </section>
+    );
+  };
+
+  /* Workspace groupings for Left Explorer Sidebar */
+  const sidebarWorkspaceBuckets = useMemo(() => {
+    const list: { key: string; name: string; agents: FlowNode[] }[] = [];
+    const agents = doc.nodes.filter((n) => n.kind === "agent");
+    for (const ws of workspaces) {
+      list.push({
+        key: ws.id,
+        name: ws.name,
+        agents: agents.filter((a) => a.workspaceId === ws.id),
+      });
+    }
+    const unbound = agents.filter(
+      (a) => !a.workspaceId || !workspaces.some((w) => w.id === a.workspaceId),
+    );
+    if (unbound.length || !list.length) {
+      list.unshift({
+        key: "__default__",
+        name: t("currentWorkspace"),
+        agents: unbound,
+      });
+    }
+    return list.filter((b, i) => i === 0 || b.agents.length > 0 || workspaces.length > 0);
+  }, [doc.nodes, workspaces]);
+
+  const totalStepEvents = useMemo(
+    () => (snapshot?.runs ?? []).reduce((sum, r) => sum + r.steps.length, 0),
+    [snapshot?.runs],
+  );
+
+  return (
+    <div
+      ref={rootRef}
+      className="fs-root"
+      data-theme={effectiveTheme}
+      data-perf-tier={reducedMotion ? "L1" : "L3"}
+    >
+      {/* ---------- Left Explorer Sidebar ---------- */}
+      <aside
+        className={`fs-side ${!sidebarOpen ? "collapsed" : ""} ${mobileSidebar ? "mobile-open" : ""}`}
+      >
+        <header className="fs-side-head">
+          <div className="brand-row">
+            <button
+              type="button"
+              className="rail-brand"
+              onClick={() => setRouteName("canvas")}
+              title="FlowSpace"
+            >
+              <BrandMark />
+            </button>
+            <div className="brand-name">
+              Flow<b>Space</b>
+              <span>CANVAS</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="side-search"
+            onClick={() =>
+              setPaletteDialog({ targetNodeId: null, query: "", index: 0 })
+            }
+          >
+            <Icon name="search" />
+            <span>{t("searchNodes")}</span>
+            <kbd>Ctrl K</kbd>
+          </button>
+        </header>
+
+        <div className="fs-side-list">
+          <div className="side-section-heading">
+            <span>{t("projectSessions")}</span>
+            <button
+              type="button"
+              className="icon-button"
+              title={t("add")}
+              onClick={(ev) => openAddMenu(ev.currentTarget)}
+            >
+              <Icon name="plus" />
+            </button>
+          </div>
+
+          {sidebarWorkspaceBuckets.map((bucket) => {
+            const hidden = prefs.hiddenWorkspaces.includes(bucket.key);
+            return (
+              <div key={bucket.key}>
+                <div
+                  className={`sidebar-project ${hidden ? "project-hidden" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="project-name"
+                    onClick={() => {
+                      if (bucket.key !== "__default__") {
+                        setActiveWorkspaceId(bucket.key);
+                      }
+                      const boxes = bucket.agents.map((a) =>
+                        nodeBox(a, false, true),
+                      );
+                      if (boxes.length) {
+                        setRouteName("canvas");
+                        fitBoxes(boxes);
+                      }
+                    }}
+                  >
+                    <Icon name="project" />
+                    <span className="user-content">{bucket.name}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    title={t(hidden ? "showWorkspace" : "hideWorkspace")}
+                    onClick={() =>
+                      edit(
+                        (d) => {
+                          const cur = new Set(d.prefs?.hiddenWorkspaces ?? []);
+                          if (cur.has(bucket.key)) cur.delete(bucket.key);
+                          else cur.add(bucket.key);
+                          d.prefs = {
+                            ...d.prefs,
+                            hiddenWorkspaces: [...cur],
+                          };
+                        },
+                        { remember: false },
+                      )
+                    }
+                  >
+                    <Icon name={hidden ? "eyeoff" : "eye"} />
+                  </button>
+                </div>
+
+                {bucket.agents.map((ag) => {
+                  const st = nodeStatusOf(snapshot, ag.id);
+                  const activeSel =
+                    selection.nodes.includes(ag.id) ||
+                    (routeName === "conversation" &&
+                      conversationFocusAgent?.id === ag.id);
+                  return (
+                    <button
+                      key={ag.id}
+                      type="button"
+                      className={`sidebar-agent ${activeSel ? "selected" : ""} ${!isNodeVisible(ag, true) ? "agent-hidden" : ""}`}
+                      onClick={() => {
+                        setLastAgentId(ag.id);
+                        revealNode(ag.id);
+                      }}
+                    >
+                      <i className={`status-dot status-${st}`} />
+                      <span className="user-content">{ag.title}</span>
+                      {(st === "waiting" || st === "input") && (
+                        <small>{t("confirm")}</small>
+                      )}
+                      {st === "draft" && <small>{t("draft")}</small>}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+
+          <div className="side-section-heading side-workflows-heading">
+            <span>{t("workflows")}</span>
+            <button
+              type="button"
+              className="icon-button"
+              title={t("workflowLibrary")}
+              onClick={() => setRouteName("workflows")}
+            >
+              <Icon name="box" />
+            </button>
+          </div>
+
+          {doc.nodes
+            .filter((n) => n.kind === "group" && !n.parentId)
+            .map((grp) => {
+              const count = members(doc, grp.id).filter(
+                (id) => doc.nodes.find((n) => n.id === id)?.kind === "agent",
+              ).length;
+              return (
+                <button
+                  key={grp.id}
+                  type="button"
+                  className={`sidebar-workflow ${selection.groups.includes(grp.id) ? "selected" : ""}`}
+                  onClick={() => focusGroup(grp.id)}
+                >
+                  <Icon name="canvas" />
+                  <span className="user-content">{grp.title}</span>
+                  <small>{count}</small>
+                </button>
+              );
+            })}
+
+          <button
+            type="button"
+            className="side-library-link"
+            onClick={() => setRouteName("workflows")}
+          >
+            <Icon name="plus" />
+            <span>{t("workflowLibrary")}</span>
+          </button>
+        </div>
+
+        <footer className="fs-side-footer">
+          <span className={`local-save-dot ${saved ? "" : "saving"}`} />
+          <span>{t(saved ? "hostSaved" : "saving")}</span>
+          <button
+            type="button"
+            className="icon-button"
+            title={t("settings")}
+            onClick={() => setRouteName("settings")}
+          >
+            <Icon name="gear" />
+          </button>
+        </footer>
+      </aside>
+
+      {/* ---------- Main Column ---------- */}
+      <div className="fs-main">
+        {/* Top Header */}
+        <header className="fs-top">
+          <div className="workspace-breadcrumb">
+            <button
+              type="button"
+              className={`icon-button ${sidebarOpen ? "active" : ""}`}
+              title={t("projectSessions")}
+              onClick={() => {
+                if ((rootRef.current?.clientWidth ?? 1000) <= 700) {
+                  setMobileSidebar((v) => !v);
+                } else {
+                  setSidebarOpen((v) => !v);
+                }
+              }}
+            >
+              <Icon name="sidebarLeft" />
+            </button>
+            <span>FlowSpace</span>
+            <i>/</i>
+            <button
+              type="button"
+              className="breadcrumb-title-btn user-content"
+              onClick={() =>
+                setFormModal({
+                  title: t("rename"),
+                  initialValue: doc.title,
+                  onSubmit: (title) =>
+                    edit((d) => {
+                      d.title = title;
+                    }),
+                })
+              }
+            >
+              {routeName === "canvas" ? doc.title : t(routeName)}
+            </button>
+          </div>
+
+          <nav className="route-nav" aria-label="FlowSpace Views">
+            {(
+              [
+                ["canvas", "canvas"],
+                ["conversation", "chat"],
+                ["workflows", "box"],
+                ["activity", "bolt"],
+                ["settings", "gear"],
+              ] as const
+            ).map(([id, glyph]) => (
+              <button
+                key={id}
+                type="button"
+                className={routeName === id ? "active" : ""}
+                onClick={() => setRouteName(id)}
+              >
+                <Icon name={glyph} />
+                <span>{t(id)}</span>
+                {id === "canvas" && waitingAgentNodes.length > 0 && (
+                  <span className="route-badge">
+                    {waitingAgentNodes.length}
+                  </span>
+                )}
+              </button>
+            ))}
+          </nav>
+
+          <div className="header-actions">
+            {workspaces.length > 0 && (
+              <button
+                type="button"
+                className="workspace-chip"
+                onClick={(ev) =>
+                  openAnchoredMenu(ev.currentTarget, [
+                    {
+                      label: t("currentWorkspace"),
+                      icon: "project",
+                      checked: !activeWorkspaceId,
+                      fn: () => setActiveWorkspaceId(""),
+                    },
+                    ...workspaces.map((w) => ({
+                      label: w.name,
+                      description: w.path,
+                      icon: "project",
+                      checked: activeWorkspaceId === w.id,
+                      fn: () => setActiveWorkspaceId(w.id),
+                    })),
+                  ])
+                }
+              >
+                <Icon name="project" />
+                <span>
+                  {workspaces.find((w) => w.id === activeWorkspaceId)?.name ??
+                    t("currentWorkspace")}
+                </span>
+              </button>
+            )}
+
+            {waitingAgentNodes.length > 0 && (
+              <button
+                type="button"
+                className="waiting-button"
+                onClick={(ev) =>
+                  openAnchoredMenu(
+                    ev.currentTarget,
+                    waitingAgentNodes.map((n) => ({
+                      label: n.title,
+                      description: t(
+                        nodeStatusOf(snapshot, n.id) === "input"
+                          ? "approvalNeeded"
+                          : "waitingConfirmation",
+                      ),
+                      icon: "pause",
+                      fn: () => revealNode(n.id),
+                    })),
+                  )
+                }
+              >
+                <Icon name="pause" />
+                <span>
+                  {t("waitingCount", { count: waitingAgentNodes.length })}
+                </span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              className="rail-language"
+              title={t("language")}
+              onClick={() =>
+                setLanguage(getLanguage() === "zh" ? "en" : "zh")
+              }
+            >
+              {getLanguage() === "zh" ? "EN" : "中"}
+            </button>
+
+            <button
+              type="button"
+              className="icon-button"
+              title={t("theme")}
+              onClick={(ev) => toggleTheme(ev.currentTarget)}
+            >
+              <Icon name={effectiveTheme === "dark" ? "moon" : "sun"} />
+            </button>
+
+            {routeName === "canvas" && (
+              <button
+                type="button"
+                className={`icon-button ${inspectorOpen ? "active" : ""}`}
+                title={t("inspector")}
+                onClick={() => setInspectorOpen((v) => !v)}
+              >
+                <Icon name="side" />
+              </button>
+            )}
+
+            <button
+              type="button"
+              className="header-save"
+              onClick={handleCaptureSnapshot}
+            >
+              <Icon name="clock" />
+              <span>{t("saveSnapshot")}</span>
+            </button>
+
+            {hasRunnableSelection && routeName === "canvas" && (
+              <button
+                type="button"
+                className="icon-button"
+                title={t("runAll")}
+                onClick={() => launchScope({ kind: "global", nodeIds: [] })}
+              >
+                <Icon name="play" />
+              </button>
+            )}
+
+            <button
+              type="button"
+              className="button button-primary header-run"
+              onClick={() => {
+                if (hasRunnableSelection && routeName === "canvas") {
+                  if (selection.groups.length === 1 && !selection.nodes.length) {
+                    launchScope({
+                      kind: "group",
+                      nodeIds: [selection.groups[0]],
+                    });
+                  } else {
+                    launchScope({
+                      kind: "selection",
+                      nodeIds: [...selection.nodes, ...selection.groups],
+                    });
+                  }
+                } else {
+                  launchScope({ kind: "global", nodeIds: [] });
+                }
+              }}
+            >
+              <Icon name="play" />
+              <span>
+                {hasRunnableSelection && routeName === "canvas"
+                  ? selection.groups.length === 1 && !selection.nodes.length
+                    ? t("runGroup")
+                    : t("runSelection")
+                  : t("runAll")}
+              </span>
+            </button>
+          </div>
+        </header>
+
+        {/* Content Row: Canvas / Surface + Right Inspector */}
+        <div className="fs-content-row">
+          <div className="fs-canvas-column">
+            {/* Floating Glassmorphic Canvas Toolbar */}
+            {routeName === "canvas" && (
+              <div className="fs-canvas-toolbar" role="toolbar">
+                <div className="canvas-title">
+                  <span>
+                    <Icon name="canvas" />
+                  </span>
+                  <b className="user-content">{doc.title}</b>
+                  <span className="canvas-save-pill">
+                    <span
+                      className={`local-save-dot ${saved ? "" : "saving"}`}
+                    />
+                    {t(saved ? "hostSaved" : "saving")}
+                  </span>
+                </div>
+
+                <div className="toolbar-actions">
+                  <button
+                    type="button"
+                    className="toolbar-button"
+                    onClick={(ev) =>
+                      openAnchoredMenu(
+                        ev.currentTarget,
+                        (
+                          [
+                            ["all", "all"],
+                            ["running", "onlyRunning"],
+                          ] as const
+                        ).map(([val, labelKey]) => ({
+                          label: t(labelKey),
+                          icon: "eye",
+                          checked: prefs.filter === val,
+                          fn: () =>
+                            edit(
+                              (d) => {
+                                d.prefs = { ...d.prefs, filter: val };
+                              },
+                              { remember: false },
+                            ),
+                        })),
+                      )
+                    }
+                  >
+                    <Icon name="eye" />
+                    <span>
+                      {t(prefs.filter === "running" ? "onlyRunning" : "all")}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="toolbar-button"
+                    onClick={(ev) => openAddMenu(ev.currentTarget)}
+                  >
+                    <Icon name="plus" />
+                    <span>{t("add")}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="icon-button"
+                    title={t("groupSelection")}
+                    onClick={groupSelected}
+                  >
+                    <Icon name="group" />
+                  </button>
+
+                  <button
+                    type="button"
+                    className="icon-button"
+                    title={t("tidy")}
+                    onClick={arrangeTopology}
+                  >
+                    <Icon name="tidy" />
+                  </button>
+
+                  <i className="toolbar-separator" />
+
+                  <button
+                    type="button"
+                    className="toolbar-search"
+                    onClick={() =>
+                      setPaletteDialog({
+                        targetNodeId: null,
+                        query: "",
+                        index: 0,
+                      })
+                    }
+                  >
+                    <Icon name="search" />
+                    <span>{t("searchNodes")}</span>
+                  </button>
+                  <kbd>Ctrl K</kbd>
+                </div>
+              </div>
+            )}
+
+            {/* Infinite Canvas Area */}
+            <div
+              ref={areaRef}
+              className={`fs-canvas-area ${leftSnapped ? "has-left-window" : ""} ${rightSnapped ? "has-right-window" : ""}`}
+            >
+              {/* Canvas Viewport */}
+              <div
+                ref={viewportRef}
+                className={[
+                  "fs-viewport",
+                  routeName !== "canvas" ? "is-hidden" : "",
+                  tool === "hand" || spacePressed ? "pan-mode" : "",
+                  isDragging ? "is-dragging" : "",
+                  connecting ? `connecting connecting-${connecting.kind}` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                style={
+                  {
+                    ["--gx" as string]: `${view.x}px`,
+                    ["--gy" as string]: `${view.y}px`,
+                    ["--gs" as string]: `${24 * view.zoom}px`,
+                    ["--ga" as string]: clamp((view.zoom - 0.35) / 0.4, 0, 1),
+                  } as React.CSSProperties
+                }
+                onPointerMove={(ev) => {
+                  const vp = viewportRef.current;
+                  if (!vp) return;
+                  const rect = vp.getBoundingClientRect();
+                  vp.style.setProperty("--mx", `${ev.clientX - rect.left}px`);
+                  vp.style.setProperty("--my", `${ev.clientY - rect.top}px`);
+                  vp.style.setProperty("--spot", "1");
+                  const card = (ev.target as HTMLElement | null)?.closest<HTMLElement>(
+                    ".node",
+                  );
+                  if (card) {
+                    const cb = card.getBoundingClientRect();
+                    card.style.setProperty(
+                      "--px",
+                      `${(ev.clientX - cb.left) / view.zoom}px`,
+                    );
+                    card.style.setProperty(
+                      "--py",
+                      `${(ev.clientY - cb.top) / view.zoom}px`,
+                    );
+                  }
+                }}
+                onPointerLeave={() => {
+                  viewportRef.current?.style.setProperty("--spot", "0");
+                }}
+                onPointerDown={(ev) => {
+                  const target = ev.target as HTMLElement;
+                  if (ev.button === 2) return;
+                  if (
+                    target.closest(
+                      ".node, .group-header, .composite, .edge-tag, .exchange-tag, .waypoint, .fs-canvas-controls, .fs-minimap, .offscreen-indicator, .fs-welcome-card",
+                    )
+                  ) {
+                    return;
+                  }
+                  if (ev.button === 1 || spacePressed || tool === "hand") {
+                    startPan(ev);
+                  } else if (ev.shiftKey) {
+                    startMarquee(ev);
+                  } else {
+                    startPan(ev);
+                  }
+                }}
+                onDoubleClick={(ev) => {
+                  const target = ev.target as HTMLElement;
+                  if (
+                    target.closest(
+                      ".node, .workflow-group, .edge-hit, .edge-tag, .fs-canvas-controls, .fs-minimap, .fs-welcome-card",
+                    )
+                  )
+                    return;
+                  const vp = viewportRef.current;
+                  if (!vp) return;
+                  createCanvasNode(
+                    "agent",
+                    toWorld(
+                      docRef.current.viewport,
+                      vp.getBoundingClientRect(),
+                      ev.clientX,
+                      ev.clientY,
+                    ),
+                  );
+                }}
+                onContextMenu={(ev) => {
+                  const target = ev.target as HTMLElement;
+                  if (
+                    target.closest(
+                      ".node, .workflow-group, .edge-hit, .waypoint, .fs-canvas-controls, .fs-minimap",
+                    )
+                  )
+                    return;
+                  ev.preventDefault();
+                  const vp = viewportRef.current;
+                  if (!vp) return;
+                  openAddMenu(
+                    { x: ev.clientX, y: ev.clientY },
+                    toWorld(
+                      docRef.current.viewport,
+                      vp.getBoundingClientRect(),
+                      ev.clientX,
+                      ev.clientY,
+                    ),
+                  );
+                }}
+              >
+                {/* Transformed World */}
+                <div
+                  className={`fs-world ${lod ? "semantic-zoom" : ""}`}
+                  style={
+                    {
+                      transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`,
+                      ["--type-scale" as string]: clamp(1 / view.zoom, 1, 2.6),
+                    } as React.CSSProperties
+                  }
+                >
+                  {/* Groups Layer */}
+                  <div className="fs-groups-layer">
+                    {visibleGroups.map((grp) => {
+                      const ports = inferGroupPorts(doc, grp).filter(
+                        (p) => !p.hidden,
+                      );
+                      const rows = Math.max(
+                        ports.filter((p) => p.direction === "in").length,
+                        ports.filter((p) => p.direction === "out").length,
+                      );
+                      const box = groupBox(grp, rows);
+                      const memberNodes = members(doc, grp.id)
+                        .map((id) => doc.nodes.find((n) => n.id === id))
+                        .filter((n): n is FlowNode => !!n);
+                      const runningCnt = memberNodes.filter(
+                        (n) => nodeStatusOf(snapshot, n.id) === "running",
+                      ).length;
+                      const waitingCnt = memberNodes.filter((n) =>
+                        ["waiting", "input"].includes(
+                          nodeStatusOf(snapshot, n.id),
+                        ),
+                      ).length;
+
+                      return (
+                        <section
+                          key={grp.id}
+                          className={[
+                            "workflow-group",
+                            `color-${grp.color ?? "violet"}`,
+                            grp.collapsed ? "composite" : "",
+                            selection.groups.includes(grp.id) ? "selected" : "",
+                            grp.parentId ? "nested-group" : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" ")}
+                          style={{
+                            left: box.x,
+                            top: box.y,
+                            width: box.w,
+                            height: box.h,
+                          }}
+                          onContextMenu={(ev) => {
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                            openGroupContextMenu(grp, {
+                              x: ev.clientX,
+                              y: ev.clientY,
+                            });
+                          }}
+                        >
+                          <header
+                            className="group-header"
+                            onPointerDown={(ev) => {
+                              if ((ev.target as HTMLElement).closest("button"))
+                                return;
+                              startGroupMove(ev, grp.id);
+                            }}
+                          >
+                            <i className="group-mark" />
+                            <strong className="user-content">
+                              {grp.titleKey ? t(grp.titleKey) : grp.title}
+                            </strong>
+                            <span>
+                              {t("nodesCount", { count: memberNodes.length })}
+                            </span>
+                            <div>
+                              <button
+                                type="button"
+                                className="group-run"
+                                onClick={() =>
+                                  launchScope({
+                                    kind: "group",
+                                    nodeIds: [grp.id],
+                                  })
+                                }
+                              >
+                                <Icon name="play" />
+                                <span>{t("run")}</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="icon-button"
+                                title={t(grp.collapsed ? "expand" : "collapse")}
+                                onClick={() =>
+                                  editNode(grp.id, {
+                                    collapsed: !grp.collapsed,
+                                  })
+                                }
+                              >
+                                <Icon name={grp.collapsed ? "card" : "off"} />
+                              </button>
+                              <button
+                                type="button"
+                                className="icon-button"
+                                title={t("inspector")}
+                                onClick={(ev) =>
+                                  openGroupContextMenu(grp, ev.currentTarget)
+                                }
+                              >
+                                <Icon name="more" />
+                              </button>
+                            </div>
+                          </header>
+
+                          {grp.collapsed && (
+                            <>
+                              <div className="composite-ports">
+                                {(["in", "out"] as const).map((dir) => (
+                                  <div key={dir}>
+                                    {ports
+                                      .filter((p) => p.direction === dir)
+                                      .map((port) => (
+                                        <button
+                                          key={port.id}
+                                          type="button"
+                                          data-port-kind={port.kind}
+                                          data-port-direction={dir}
+                                          data-proxy-nodes={port.nodes.join(",")}
+                                          className={`composite-port-row composite-${dir} ${connecting?.kind === port.kind && dir === "in" ? "port-target" : ""}`}
+                                          onPointerDown={
+                                            dir === "out"
+                                              ? (ev) =>
+                                                  startPortDrag(
+                                                    ev,
+                                                    port.nodes,
+                                                    port.kind,
+                                                  )
+                                              : undefined
+                                          }
+                                        >
+                                          <i
+                                            className={`proxy-pin proxy-${port.kind}`}
+                                          />
+                                          <span>{port.name}</span>
+                                        </button>
+                                      ))}
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="composite-summary">
+                                <span>
+                                  {t("nodesCount", {
+                                    count: memberNodes.length,
+                                  })}
+                                </span>
+                                <span>
+                                  {runningCnt} {t("running")} · {waitingCnt}{" "}
+                                  {t("waiting")}
+                                </span>
+                              </div>
+                            </>
+                          )}
+
+                          {grp.templateId && (
+                            <button
+                              type="button"
+                              className="template-association"
+                              onClick={(ev) =>
+                                openGroupContextMenu(grp, ev.currentTarget)
+                              }
+                            >
+                              <Icon name="box" />
+                              <span>
+                                {t("templateLinked", {
+                                  version: grp.templateRevision ?? 1,
+                                })}
+                              </span>
+                            </button>
+                          )}
+
+                          {!grp.collapsed && (
+                            <button
+                              type="button"
+                              className="group-resizer"
+                              aria-label={t("expand")}
+                              onPointerDown={(ev) =>
+                                startResize(ev, grp.id, "group")
+                              }
+                            />
+                          )}
+                        </section>
+                      );
+                    })}
+                  </div>
+
+                  {/* SVG Edges Layer */}
+                  <svg
+                    className="fs-edges-svg"
+                    style={{
+                      left: svgBounds.x,
+                      top: svgBounds.y,
+                      width: svgBounds.w,
+                      height: svgBounds.h,
+                    }}
+                    viewBox={`${svgBounds.x} ${svgBounds.y} ${svgBounds.w} ${svgBounds.h}`}
+                    aria-hidden="true"
+                  >
+                    <defs>
+                      <marker
+                        id="fs-msg-arrow-out"
+                        viewBox="0 0 6 6"
+                        refX="5"
+                        refY="3"
+                        markerWidth="5"
+                        markerHeight="5"
+                        orient="auto"
+                      >
+                        <path d="M0 0L6 3L0 6Z" fill="var(--m-f)" />
+                      </marker>
+                      <marker
+                        id="fs-msg-arrow-back"
+                        viewBox="0 0 6 6"
+                        refX="5"
+                        refY="3"
+                        markerWidth="5"
+                        markerHeight="5"
+                        orient="auto-start-reverse"
+                      >
+                        <path d="M0 0L6 3L0 6Z" fill="var(--m-b)" />
+                      </marker>
+                    </defs>
+                    <g>
+                      {/* Display & Detail source dotted links */}
+                      {doc.nodes
+                        .filter(
+                          (n) =>
+                            (n.kind === "display" || n.kind === "detail") &&
+                            n.sourceNodeId &&
+                            isNodeVisible(n, true) &&
+                            isNodeVisible(
+                              doc.nodes.find((s) => s.id === n.sourceNodeId),
+                              true,
+                            ),
+                        )
+                        .map((n) => {
+                          const a = endpoint(
+                            doc,
+                            n.sourceNodeId!,
+                            "reference",
+                            "out",
+                            lod,
+                            keepExpandedIds,
+                          );
+                          const b = endpoint(
+                            doc,
+                            n.id,
+                            "reference",
+                            "in",
+                            lod,
+                            keepExpandedIds,
+                          );
+                          if (a.groupId && a.groupId === b.groupId) return null;
+                          return (
+                            <path
+                              key={`disp-${n.id}`}
+                              className="edge-path edge-display"
+                              d={route(a, b).path}
+                            />
+                          );
+                        })}
+
+                      {/* Reference & Continuation Wires */}
+                      {doc.edges.map((edge) => {
+                        const srcNode = doc.nodes.find(
+                          (n) => n.id === edge.source,
+                        );
+                        const tgtNode = doc.nodes.find(
+                          (n) => n.id === edge.target,
+                        );
+                        if (
+                          !isNodeVisible(srcNode, true) ||
+                          !isNodeVisible(tgtNode, true)
+                        )
+                          return null;
+                        const a = endpoint(
+                          doc,
+                          edge.source,
+                          edge.kind,
+                          "out",
+                          lod,
+                          keepExpandedIds,
+                        );
+                        const b = endpoint(
+                          doc,
+                          edge.target,
+                          edge.kind,
+                          "in",
+                          lod,
+                          keepExpandedIds,
+                        );
+                        if (a.groupId && a.groupId === b.groupId) return null;
+                        const evState = edgeVisualState(edge);
+                        if (
+                          lod &&
+                          !selection.nodes.includes(edge.source) &&
+                          !selection.nodes.includes(edge.target) &&
+                          !["active", "queued", "waiting", "boundary"].includes(
+                            evState,
+                          )
+                        ) {
+                          return null;
+                        }
+                        const geom = route(a, b, edge.waypoints);
+                        const dimmed = selection.edge
+                          ? selection.edge !== edge.id
+                          : selection.nodes.length > 0 &&
+                            !selection.nodes.includes(edge.source) &&
+                            !selection.nodes.includes(edge.target);
+                        const cls = [
+                          `edge-${edge.kind}`,
+                          `edge-state-${evState}`,
+                          edge.kind === "continuation"
+                            ? `trigger-${edge.trigger}`
+                            : "",
+                          dimmed ? "edge-dim" : "",
+                          selection.edge === edge.id ? "edge-selected" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ");
+
+                        return (
+                          <g key={edge.id}>
+                            <path
+                              className={`edge-path ${cls}`}
+                              d={geom.path}
+                            />
+                            <path
+                              className={`edge-path edge-flow ${cls}`}
+                              d={geom.path}
+                            />
+                            <path
+                              className="edge-hit"
+                              d={geom.path}
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                setSelection({
+                                  nodes: [],
+                                  groups: [],
+                                  edge: edge.id,
+                                });
+                                setInspectorOpen(true);
+                              }}
+                              onDoubleClick={(ev) => {
+                                ev.stopPropagation();
+                                const vp = viewportRef.current;
+                                if (!vp) return;
+                                const pt = toWorld(
+                                  docRef.current.viewport,
+                                  vp.getBoundingClientRect(),
+                                  ev.clientX,
+                                  ev.clientY,
+                                );
+                                editEdge(edge.id, {
+                                  waypoints: [...(edge.waypoints ?? []), pt],
+                                });
+                              }}
+                              onContextMenu={(ev) => {
+                                ev.preventDefault();
+                                ev.stopPropagation();
+                                const vp = viewportRef.current;
+                                if (!vp) return;
+                                const pt = toWorld(
+                                  docRef.current.viewport,
+                                  vp.getBoundingClientRect(),
+                                  ev.clientX,
+                                  ev.clientY,
+                                );
+                                openAnchoredMenu(
+                                  { x: ev.clientX, y: ev.clientY },
+                                  [
+                                    {
+                                      label: t("addWaypoint"),
+                                      icon: "plus",
+                                      fn: () =>
+                                        editEdge(edge.id, {
+                                          waypoints: [
+                                            ...(edge.waypoints ?? []),
+                                            pt,
+                                          ],
+                                        }),
+                                    },
+                                    {
+                                      label: t("deleteConnection"),
+                                      icon: "trash",
+                                      danger: true,
+                                      fn: () =>
+                                        edit((d) => {
+                                          d.edges = d.edges.filter(
+                                            (x) => x.id !== edge.id,
+                                          );
+                                        }),
+                                    },
+                                  ],
+                                );
+                              }}
+                            />
+                          </g>
+                        );
+                      })}
+
+                      {/* Continuation Exchange Arcs */}
+                      {!lod &&
+                        exchanges.map((ex) => {
+                          const fg = collapsedAncestor(doc, ex.from);
+                          const tg = collapsedAncestor(doc, ex.to);
+                          if (fg && fg.id === tg?.id) return null;
+                          const boxA = fg
+                            ? groupBox(fg)
+                            : nodeBox(
+                                doc.nodes.find((n) => n.id === ex.from)!,
+                                lod,
+                                keepExpandedIds.has(ex.from),
+                              );
+                          const boxB = tg
+                            ? groupBox(tg)
+                            : nodeBox(
+                                doc.nodes.find((n) => n.id === ex.to)!,
+                                lod,
+                                keepExpandedIds.has(ex.to),
+                              );
+                          const geom = exchangeRoute(boxA, boxB);
+                          const hasOut = ex.items.some(
+                            (m) => m.fromId === ex.from,
+                          );
+                          const hasBack = ex.items.some(
+                            (m) => m.fromId === ex.to,
+                          );
+                          return (
+                            <g key={ex.id}>
+                              {hasOut && (
+                                <path
+                                  className="edge-path edge-message message-out"
+                                  d={geom.out}
+                                  markerEnd="url(#fs-msg-arrow-out)"
+                                />
+                              )}
+                              {hasBack && (
+                                <path
+                                  className="edge-path edge-message message-back"
+                                  d={geom.back}
+                                  markerEnd="url(#fs-msg-arrow-back)"
+                                />
+                              )}
+                            </g>
+                          );
+                        })}
+
+                      {/* Live Temporary Drag Wire */}
+                      {connecting && (
+                        <path
+                          className={`edge-path temporary-edge edge-${connecting.kind}`}
+                          d={
+                            route(connecting.fromPoint, connecting.current).path
+                          }
+                        />
+                      )}
+                    </g>
+                  </svg>
+
+                  {/* Nodes Layer */}
+                  <div className="fs-nodes-layer">
+                    {doc.nodes
+                      .filter((n) => isNodeVisible(n))
+                      .map((n) => {
+                        if (n.window) {
+                          const b = nodeBox(n, lod, true);
+                          return (
+                            <div
+                              key={`stub-${n.id}`}
+                              className="window-stub"
+                              style={{
+                                left: n.x,
+                                top: n.y,
+                                width: b.w,
+                                height: b.h,
+                              }}
+                            >
+                              <span>
+                                <Icon name="pop" />
+                                <strong className="user-content">
+                                  {n.title}
+                                </strong>
+                              </span>
+                              <button
+                                type="button"
+                                className="text-button"
+                                onClick={() => returnWindow(n.id)}
+                              >
+                                <Icon name="chev" />
+                                <span>{t("returnCanvas")}</span>
+                              </button>
+                            </div>
+                          );
+                        }
+                        return renderNodeCard(n, "canvas");
+                      })}
+                  </div>
+
+                  {/* Edge Pill Tags & Waypoints Layer */}
+                  <div className="fs-tags-layer">
+                    {doc.edges.map((edge) => {
+                      const srcNode = doc.nodes.find(
+                        (n) => n.id === edge.source,
+                      );
+                      const tgtNode = doc.nodes.find(
+                        (n) => n.id === edge.target,
+                      );
+                      if (
+                        !isNodeVisible(srcNode, true) ||
+                        !isNodeVisible(tgtNode, true)
+                      )
+                        return null;
+                      const a = endpoint(
+                        doc,
+                        edge.source,
+                        edge.kind,
+                        "out",
+                        lod,
+                        keepExpandedIds,
+                      );
+                      const b = endpoint(
+                        doc,
+                        edge.target,
+                        edge.kind,
+                        "in",
+                        lod,
+                        keepExpandedIds,
+                      );
+                      if (a.groupId && a.groupId === b.groupId) return null;
+                      const geom = route(a, b, edge.waypoints);
+                      const evState = edgeVisualState(edge);
+                      const waitingTok =
+                        snapshot?.runs
+                          .filter((r) =>
+                            ["running", "waiting", "paused"].includes(r.state),
+                          )
+                          .flatMap((r) =>
+                            r.tokens
+                              .filter(
+                                (tk) =>
+                                  tk.edgeId === edge.id &&
+                                  !tk.ready &&
+                                  !tk.consumed &&
+                                  !tk.dismissed,
+                              )
+                              .map((token) => ({ run: r, token })),
+                          )[0] ?? null;
+                      const dimmed = selection.edge
+                        ? selection.edge !== edge.id
+                        : selection.nodes.length > 0 &&
+                          !selection.nodes.includes(edge.source) &&
+                          !selection.nodes.includes(edge.target);
+
+                      return (
+                        <div key={`tags-${edge.id}`}>
+                          <div
+                            className={[
+                              "edge-tag",
+                              edge.kind,
+                              `edge-state-${evState}`,
+                              dimmed ? "edge-dim" : "",
+                              geom.tight ? "tight-tag" : "",
+                              selection.edge === edge.id ? "selected" : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
+                            style={{
+                              left: geom.label.x,
+                              top: geom.label.y,
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                setSelection({
+                                  nodes: [],
+                                  groups: [],
+                                  edge: edge.id,
+                                });
+                                setInspectorOpen(true);
+                              }}
+                            >
+                              <Icon
+                                name={
+                                  edge.kind === "continuation"
+                                    ? {
+                                        conclusion: "at",
+                                        session: "clock",
+                                        fork: "branch",
+                                      }[edge.mode]
+                                    : "at"
+                                }
+                              />
+                              <span>
+                                {edge.kind === "continuation"
+                                  ? t(edge.mode)
+                                  : t(edge.always ? "always" : evState)}
+                              </span>
+                              {edge.kind === "continuation" && (
+                                <i className="trigger-indicator">
+                                  <Icon
+                                    name={
+                                      edge.trigger === "auto"
+                                        ? "bolt"
+                                        : edge.trigger === "confirm"
+                                          ? "pause"
+                                          : "off"
+                                    }
+                                  />
+                                </i>
+                              )}
+                            </button>
+                            {waitingTok && (
+                              <button
+                                type="button"
+                                className="edge-release"
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  void bridge
+                                    .release(
+                                      waitingTok.run.id,
+                                      waitingTok.token.id,
+                                      true,
+                                    )
+                                    .catch(reportError);
+                                }}
+                              >
+                                <Icon name="play" />
+                                <span>{t("release")}</span>
+                              </button>
+                            )}
+                          </div>
+
+                          {(edge.waypoints ?? []).map((wp, idx) => (
+                            <button
+                              key={`${edge.id}-wp-${idx}`}
+                              type="button"
+                              className="waypoint"
+                              aria-label={t("waypoint")}
+                              style={{ left: wp.x, top: wp.y }}
+                              onPointerDown={(ev) =>
+                                startWaypointDrag(ev, edge.id, idx)
+                              }
+                              onContextMenu={(ev) => {
+                                ev.preventDefault();
+                                ev.stopPropagation();
+                                openAnchoredMenu(
+                                  { x: ev.clientX, y: ev.clientY },
+                                  [
+                                    {
+                                      label: t("removeWaypoint"),
+                                      icon: "x",
+                                      danger: true,
+                                      fn: () =>
+                                        editEdge(edge.id, {
+                                          waypoints: (
+                                            edge.waypoints ?? []
+                                          ).filter((_, i) => i !== idx),
+                                        }),
+                                    },
+                                  ],
+                                );
+                              }}
+                            />
+                          ))}
+                        </div>
+                      );
+                    })}
+
+                    {/* Exchange Count Pill Tags */}
+                    {!lod &&
+                      exchanges.map((ex) => {
+                        const fg = collapsedAncestor(doc, ex.from);
+                        const tg = collapsedAncestor(doc, ex.to);
+                        if (fg && fg.id === tg?.id) return null;
+                        const boxA = fg
+                          ? groupBox(fg)
+                          : nodeBox(
+                              doc.nodes.find((n) => n.id === ex.from)!,
+                              lod,
+                              keepExpandedIds.has(ex.from),
+                            );
+                        const boxB = tg
+                          ? groupBox(tg)
+                          : nodeBox(
+                              doc.nodes.find((n) => n.id === ex.to)!,
+                              lod,
+                              keepExpandedIds.has(ex.to),
+                            );
+                        const geom = exchangeRoute(boxA, boxB);
+                        const sent = ex.items.filter(
+                          (m) => m.fromId === ex.from,
+                        ).length;
+                        const back = ex.items.length - sent;
+                        const latest = ex.items[ex.items.length - 1];
+                        return (
+                          <div
+                            key={`ex-tag-${ex.id}`}
+                            className={`exchange-tag ${geom.side ? "side" : ""}`}
+                            style={{ left: geom.label.x, top: geom.label.y }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setExchangeModal(ex)}
+                            >
+                              <Icon name="chat" />
+                              {sent > 0 && <i className="mc f">↓{sent}</i>}
+                              {back > 0 && <i className="mc b">↑{back}</i>}
+                              <em>
+                                {latest.text.slice(0, 20)}
+                                {latest.text.length > 20 ? "…" : ""}
+                              </em>
+                            </button>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+
+                {/* Marquee Selection Box */}
+                {marquee && (
+                  <div
+                    className="fs-marquee"
+                    style={{
+                      left: marquee.x,
+                      top: marquee.y,
+                      width: marquee.w,
+                      height: marquee.h,
+                    }}
+                  />
+                )}
+              </div>
+
+              {/* Empty Canvas Welcome Card */}
+              {routeName === "canvas" && doc.nodes.length === 0 && (
+                <div className="fs-welcome-overlay">
+                  <div className="fs-welcome-card">
+                    <div className="fs-welcome-mark">
+                      <BrandMark />
+                    </div>
+                    <span className="eyebrow">{t("welcomeEyebrow")}</span>
+                    <h1>{t("welcomeTitle")}</h1>
+                    <p>{t("welcomeDescription")}</p>
+                    <div className="fs-welcome-actions">
+                      <button
+                        type="button"
+                        className="button button-primary"
+                        onClick={() => {
+                          edit((d) =>
+                            Object.assign(
+                              d,
+                              sample(d, "review", {
+                                workspaceId: activeWorkspaceId || undefined,
+                                cwd: activeWorkspaceCwd,
+                              }),
+                            ),
+                          );
+                          setTimeout(() => fitView(true), 50);
+                        }}
+                      >
+                        <Icon name="play" />
+                        <span>{t("startWithReview")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="button"
+                        onClick={() => createCanvasNode("agent")}
+                      >
+                        <Icon name="plus" />
+                        <span>{t("newAgent")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="button"
+                        onClick={() => setRouteName("workflows")}
+                      >
+                        <Icon name="box" />
+                        <span>{t("workflowLibrary")}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Offscreen Waiting Indicators */}
+              {routeName === "canvas" && (
+                <div className="fs-indicators">
+                  {waitingAgentNodes
+                    .filter((n) => isNodeVisible(n, true))
+                    .map((n) => {
+                      const cg = collapsedAncestor(doc, n.id);
+                      const box = cg
+                        ? groupBox(cg)
+                        : nodeBox(n, lod, keepExpandedIds.has(n.id));
+                      const cx = (box.x + box.w / 2) * view.zoom + view.x;
+                      const cy = (box.y + box.h / 2) * view.zoom + view.y;
+                      if (
+                        cx > 0 &&
+                        cy > 28 &&
+                        cx < vpSize.width &&
+                        cy < vpSize.height - 44
+                      ) {
+                        return null;
+                      }
+                      const ix = clamp(cx, 12, vpSize.width - 12);
+                      const iy = clamp(cy, 54, vpSize.height - 64);
+                      const onRight = ix > vpSize.width / 2;
+                      return (
+                        <button
+                          key={`ind-${n.id}`}
+                          type="button"
+                          className={`offscreen-indicator ${onRight ? "indicator-right" : ""}`}
+                          style={{ left: ix, top: iy }}
+                          title={t("locateWaiting")}
+                          onClick={() => revealNode(n.id)}
+                        >
+                          <Icon name="pause" />
+                          <span className="user-content">{n.title}</span>
+                          <Icon name="chev" />
+                        </button>
+                      );
+                    })}
+                </div>
+              )}
+
+              {/* Interactive SVG Minimap */}
+              {routeName === "canvas" && minimapOpen && (() => {
+                const mw = 178,
+                  mh = 104;
+                const nodeBoxes = doc.nodes
+                  .filter((n) => isNodeVisible(n))
+                  .map((n) => ({
+                    n,
+                    b: nodeBox(n, lod, keepExpandedIds.has(n.id)),
+                  }));
+                const visRect: Box = {
+                  x: -view.x / view.zoom,
+                  y: -view.y / view.zoom,
+                  w: vpSize.width / view.zoom,
+                  h: vpSize.height / view.zoom,
+                };
+                const full = bounds([...nodeBoxes.map((x) => x.b), visRect]);
+                full.x -= 36;
+                full.y -= 36;
+                full.w += 72;
+                full.h += 72;
+                const sc = Math.min(mw / full.w, mh / full.h);
+                const ox = (mw - full.w * sc) / 2;
+                const oy = (mh - full.h * sc) / 2;
+                const jumpMinimap = (clientX: number, clientY: number, svgEl: SVGSVGElement) => {
+                  const r = svgEl.getBoundingClientRect();
+                  const wx = full.x + (clientX - r.left - ox) / sc;
+                  const wy = full.y + (clientY - r.top - oy) / sc;
+                  setViewportDirect(
+                    {
+                      x: vpSize.width / 2 - wx * view.zoom,
+                      y: vpSize.height / 2 - wy * view.zoom,
+                      zoom: view.zoom,
+                    },
+                    300,
+                  );
+                };
+                return (
+                  <div className="fs-minimap">
+                    <header>
+                      <span>{t("minimap")}</span>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        onClick={() => setMinimapOpen(false)}
+                      >
+                        <Icon name="x" />
+                      </button>
+                    </header>
+                    <svg
+                      viewBox={`0 0 ${mw} ${mh}`}
+                      onPointerDown={(ev) => {
+                        const svgEl = ev.currentTarget;
+                        jumpMinimap(ev.clientX, ev.clientY, svgEl);
+                        trackPointer(ev, (next) =>
+                          jumpMinimap(next.clientX, next.clientY, svgEl),
+                        );
+                      }}
+                    >
+                      {nodeBoxes.map(({ n, b }) => {
+                        const st =
+                          n.kind === "agent"
+                            ? nodeStatusOf(snapshot, n.id)
+                            : n.kind;
+                        return (
+                          <rect
+                            key={n.id}
+                            className={`mini-node mini-${st}`}
+                            x={(b.x - full.x) * sc + ox}
+                            y={(b.y - full.y) * sc + oy}
+                            width={Math.max(2, b.w * sc)}
+                            height={Math.max(2, b.h * sc)}
+                            rx={1.8}
+                          />
+                        );
+                      })}
+                      <rect
+                        className="mini-viewport"
+                        x={(visRect.x - full.x) * sc + ox}
+                        y={(visRect.y - full.y) * sc + oy}
+                        width={Math.max(4, visRect.w * sc)}
+                        height={Math.max(4, visRect.h * sc)}
+                        rx={2}
+                      />
+                    </svg>
+                  </div>
+                );
+              })()}
+
+              {/* Bottom Controls Bar */}
+              {routeName === "canvas" && (
+                <div className="fs-canvas-controls" role="toolbar">
+                  <div className="pointer-tools">
+                    <button
+                      type="button"
+                      className={`icon-button ${tool === "pointer" ? "active" : ""}`}
+                      title={t("pointer")}
+                      onClick={() => setTool("pointer")}
+                    >
+                      <Icon name="pointer" />
+                    </button>
+                    <button
+                      type="button"
+                      className={`icon-button ${tool === "hand" ? "active" : ""}`}
+                      title={t("hand")}
+                      onClick={() => setTool("hand")}
+                    >
+                      <Icon name="hand" />
+                    </button>
+                    <i />
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title={t("undo")}
+                      disabled={!history.length}
+                      onClick={() => performUndo(false)}
+                    >
+                      <Icon name="undo" />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title={t("redo")}
+                      disabled={!future.length}
+                      onClick={() => performUndo(true)}
+                    >
+                      <Icon name="redo" />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title={t("help")}
+                      onClick={() => setHelpModal(true)}
+                    >
+                      <Icon name="help" />
+                    </button>
+                  </div>
+
+                  <div className="canvas-hint">
+                    <span>{t("doubleClickTip")}</span>
+                    <i>·</i>
+                    <kbd>Space</kbd>
+                    <span>{t("pan")}</span>
+                    <i>·</i>
+                    <kbd>Shift</kbd>
+                    <span>{t("rangeSelection")}</span>
+                  </div>
+
+                  <div className="view-tools">
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title={t("zoom")}
+                      onClick={() => {
+                        const rect = viewportRef.current?.getBoundingClientRect();
+                        if (!rect) return;
+                        animateView(
+                          zoomAt(
+                            view,
+                            rect,
+                            rect.left + rect.width / 2,
+                            rect.top + rect.height / 2,
+                            1 / 1.2,
+                          ),
+                          MOTION.region,
+                        );
+                      }}
+                    >
+                      <Icon name="off" />
+                    </button>
+                    <button
+                      type="button"
+                      className="zoom-label"
+                      onClick={() => {
+                        const px = vpSize.width / 2,
+                          py = vpSize.height / 2;
+                        animateView(
+                          {
+                            x: px - (px - view.x) / view.zoom,
+                            y: py - (py - view.y) / view.zoom,
+                            zoom: 1,
+                          },
+                          MOTION.region,
+                        );
+                      }}
+                    >
+                      {Math.round(view.zoom * 100)}%
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title={t("zoom")}
+                      onClick={() => {
+                        const rect = viewportRef.current?.getBoundingClientRect();
+                        if (!rect) return;
+                        animateView(
+                          zoomAt(
+                            view,
+                            rect,
+                            rect.left + rect.width / 2,
+                            rect.top + rect.height / 2,
+                            1.2,
+                          ),
+                          MOTION.region,
+                        );
+                      }}
+                    >
+                      <Icon name="plus" />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title={t("fitView")}
+                      onClick={(ev) => fitView(ev.shiftKey)}
+                    >
+                      <Icon name="fit" />
+                    </button>
+                    <button
+                      type="button"
+                      className={`icon-button ${minimapOpen ? "active" : ""}`}
+                      title={t("minimap")}
+                      onClick={() => setMinimapOpen((v) => !v)}
+                    >
+                      <Icon name="canvas" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Snap Preview Overlay & Floating Windows */}
+              <div
+                className={`snap-preview ${snapPreview ? `snap-${snapPreview}` : ""}`}
+              />
+              {routeName === "canvas" && (
+                <div className="fs-floating-layer">
+                  {doc.nodes
+                    .filter((n) => !!n.window)
+                    .map((n) => renderNodeCard(n, "window"))}
+                </div>
+              )}
+
+              {/* Full-Page Surfaces */}
+              {routeName === "workflows" && (
+                <WorkflowsSurface
+                  tab={libraryTab}
+                  onTabChange={setLibraryTab}
+                  doc={doc}
+                  snapshot={snapshot}
+                  onInstantiate={handleInstantiateTemplate}
+                  onPreviewTemplate={setTemplatePreviewModal}
+                  onDeleteTemplate={(id) =>
+                    edit((d) => {
+                      d.templates = (d.templates ?? []).filter(
+                        (x) => x.id !== id,
+                      );
+                    })
+                  }
+                  onRestoreSnapshot={handleRestoreSnapshot}
+                  onDeleteSnapshot={(id) =>
+                    edit((d) => {
+                      d.snapshots = (d.snapshots ?? []).filter(
+                        (x) => x.id !== id,
+                      );
+                    })
+                  }
+                  onReturnCanvas={() => setRouteName("canvas")}
+                />
+              )}
+
+              {routeName === "activity" && (
+                <ActivitySurface
+                  tab={activityTab}
+                  onTabChange={setActivityTab}
+                  doc={doc}
+                  snapshot={snapshot}
+                  onRevealNode={revealNode}
+                  onRunCommand={(runId, action) =>
+                    void bridge.command(runId, action).catch(reportError)
+                  }
+                  onReleaseToken={(runId, tokenId, accept) =>
+                    void bridge
+                      .release(runId, tokenId, accept)
+                      .catch(reportError)
+                  }
+                  onExtractStep={(nodeId, text, seq) =>
+                    extractDisplayFrom(nodeId, text, seq, true)
+                  }
+                  onReturnCanvas={() => setRouteName("canvas")}
+                />
+              )}
+
+              {routeName === "settings" && (
+                <SettingsSurface
+                  doc={doc}
+                  prefs={prefs}
+                  onUpdatePrefs={(changes) =>
+                    edit(
+                      (d) => {
+                        d.prefs = { ...d.prefs, ...changes };
+                      },
+                      { remember: false },
+                    )
+                  }
+                  onUpdateSettings={(changes) =>
+                    edit((d) => {
+                      d.settings = { ...d.settings, ...changes };
+                    })
+                  }
+                  onToggleLanguage={(lang) => setLanguage(lang)}
+                  onExportJson={handleExportJson}
+                  onTriggerImport={() => importInputRef.current?.click()}
+                  onOpenExistingSessions={() =>
+                    void bridge
+                      .sessions()
+                      .then(setSessionModal)
+                      .catch(reportError)
+                  }
+                  onLoadStarter={() => {
                     edit((d) =>
                       Object.assign(
                         d,
                         sample(d, "review", {
-                          workspaceId: workspace || undefined,
+                          workspaceId: activeWorkspaceId || undefined,
+                          cwd: activeWorkspaceCwd,
                         }),
                       ),
                     );
-                    setTimeout(() => flow.fitView({ padding: 0.15 }), 100);
+                    setRouteName("canvas");
+                    setTimeout(() => fitView(true), 60);
                   }}
-                >
-                  {tr("从三步工作流开始")}
-                  <ArrowUpRight size={13} />
-                </button>
-              </div>
-            )}
-            <div className="fs-canvas-hint">
-              <span>{tr("双击创建")}</span>
-              <kbd>Space</kbd>
-              <span>{tr("平移")}</span>
-              <kbd>Shift</kbd>
-              <span>{tr("多选")}</span>
-              <button onClick={() => setMap(!map)}>{tr("小地图")}</button>
+                />
+              )}
+
+              {routeName === "conversation" && (
+                <div className="fs-conversation-surface">
+                  <header className="conversation-heading">
+                    <span>
+                      <Icon name="chat" />
+                      <b className="user-content">
+                        {conversationFocusAgent?.title ?? t("newAgent")}
+                      </b>
+                    </span>
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={(ev) =>
+                        openAnchoredMenu(
+                          ev.currentTarget,
+                          doc.nodes
+                            .filter((n) => n.kind === "agent")
+                            .map((ag) => ({
+                              label: ag.title,
+                              icon: "agent",
+                              checked: conversationFocusAgent?.id === ag.id,
+                              fn: () => setLastAgentId(ag.id),
+                            })),
+                        )
+                      }
+                    >
+                      <Icon name="agent" />
+                      <span>Agent</span>
+                    </button>
+                    {conversationFocusAgent?.sessionId && (
+                      <button
+                        type="button"
+                        className="button"
+                        onClick={() =>
+                          bridge.openChat(conversationFocusAgent.sessionId!)
+                        }
+                      >
+                        <Icon name="pop" />
+                        <span>{t("openNativeChat")}</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={() => setRouteName("canvas")}
+                    >
+                      <Icon name="canvas" />
+                      <span>{t("returnCanvas")}</span>
+                    </button>
+                  </header>
+                  <div className="conversation-node-host">
+                    {conversationFocusAgent ? (
+                      renderNodeCard(conversationFocusAgent, "conversation")
+                    ) : (
+                      <div className="surface-empty" style={{ width: "100%" }}>
+                        <Icon name="agent" />
+                        <h3>{t("noStarters")}</h3>
+                        <button
+                          type="button"
+                          className="button button-primary"
+                          onClick={() => {
+                            const created = createCanvasNode("agent");
+                            setLastAgentId(created.id);
+                          }}
+                        >
+                          <Icon name="plus" />
+                          <span>{t("newAgent")}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
-          </main>
-          {inspector && (
-            <aside className="fs-inspector">
-              <header>
-                <span>{tr("检查器")}</span>
-                <button onClick={() => setInspector(false)}>
-                  <X size={16} />
+          </div>
+
+          {/* Right Contextual Inspector */}
+          <InspectorPanel
+            open={inspectorOpen && routeName === "canvas"}
+            doc={doc}
+            snapshot={snapshot}
+            workspaces={workspaces}
+            selectedNode={selectedNode}
+            selectedEdge={selectedEdge}
+            onClose={() => setInspectorOpen(false)}
+            onEditNode={editNode}
+            onEditEdge={editEdge}
+            onDeleteSelection={deleteSelection}
+            onUngroup={ungroup}
+            onReleaseToken={(runId, tokenId, accept) =>
+              void bridge.release(runId, tokenId, accept).catch(reportError)
+            }
+            onOpenNativeChat={(sid) => bridge.openChat(sid)}
+            onOpenDetail={openDetailCard}
+            onOpenWindow={openWindow}
+            onSetGroupPorts={(gid, ports) => editNode(gid, { ports })}
+            onOpenMergePorts={(gid) =>
+              setMergePortsModal({
+                groupId: gid,
+                name: t("inputPort"),
+                selectedPortIds: new Set(),
+              })
+            }
+            onSaveTemplate={handleSaveTemplateDialog}
+            onSyncTemplate={handleOpenSyncTemplate}
+            onDetachTemplate={(gid) =>
+              editNode(gid, {
+                templateId: undefined,
+                templateRevision: undefined,
+              })
+            }
+          />
+        </div>
+
+        {/* Bottom Execution Drawer */}
+        {(routeName === "canvas" || routeName === "conversation") && (
+          <>
+            <div className={`fs-bottom-panel ${bottomOpen ? "open" : ""}`}>
+              <header className="bottom-panel-header">
+                <div>
+                  {(["events", "outputs", "waiting"] as const).map((tb) => (
+                    <button
+                      key={tb}
+                      type="button"
+                      className={bottomTab === tb ? "active" : ""}
+                      onClick={() => setBottomTab(tb)}
+                    >
+                      {t(
+                        tb === "events"
+                          ? "execution"
+                          : tb === "outputs"
+                            ? "outputsTab"
+                            : "waitingTab",
+                      )}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => setRouteName("activity")}
+                >
+                  <Icon name="pop" />
+                  <span>{t("activity")}</span>
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => setBottomOpen(false)}
+                >
+                  <Icon name="x" />
                 </button>
               </header>
-              {selectedNode ? (
-                <>
-                  <div className="fs-section-label">
-                    {selectedNode.kind === "agent"
-                      ? "AGENT"
-                      : selectedNode.kind.toUpperCase()}
-                  </div>
-                  <label>
-                    {tr("名称")}
-                    <input
-                      value={selectedNode.title}
-                      onChange={(e) =>
-                        editNode(selectedNode.id, { title: e.target.value })
+              <div className="bottom-panel-content">
+                {bottomTab === "events" ? (
+                  totalStepEvents > 0 ? (
+                    [...(snapshot?.runs ?? [])]
+                      .reverse()
+                      .flatMap((run) =>
+                        [...run.steps].reverse().map((step) => ({ run, step })),
+                      )
+                      .slice(0, 30)
+                      .map(({ run, step }) => {
+                        const title =
+                          run.graph.nodes.find((n) => n.id === step.nodeId)
+                            ?.title ?? step.nodeId;
+                        return (
+                          <div
+                            key={step.id}
+                            className={`event-row event-${step.state}`}
+                          >
+                            <i className="event-dot">
+                              <Icon
+                                name={
+                                  step.state === "completed" ? "check" : "bolt"
+                                }
+                              />
+                            </i>
+                            <div>
+                              <b>{t(step.state)}</b>
+                              <button
+                                type="button"
+                                className="event-agent user-content"
+                                onClick={() => revealNode(step.nodeId)}
+                              >
+                                {title} ·{" "}
+                                {t("roundBadge", { round: step.iteration })}
+                              </button>
+                            </div>
+                            <time>{formatTime(step.createdAt)}</time>
+                          </div>
+                        );
+                      })
+                  ) : (
+                    <p className="muted">{t("noEvents")}</p>
+                  )
+                ) : bottomTab === "outputs" ? (
+                  (snapshot?.runs ?? [])
+                    .flatMap((r) =>
+                      r.steps
+                        .filter((s) => s.state === "completed" && s.output)
+                        .map((s) => ({ r, s })),
+                    )
+                    .reverse()
+                    .map(({ r, s }) => (
+                      <div key={s.id} className="event-row event-completed">
+                        <i className="event-dot">
+                          <Icon name="quote" />
+                        </i>
+                        <div>
+                          <b>
+                            {r.graph.nodes.find((n) => n.id === s.nodeId)
+                              ?.title ?? s.nodeId}
+                          </b>
+                          <p className="user-content">
+                            {s.output!.slice(0, 140)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() =>
+                            extractDisplayFrom(s.nodeId, s.output, s.endSeq, true)
+                          }
+                        >
+                          <Icon name="quote" />
+                          <span>{t("quoteMessage")}</span>
+                        </button>
+                      </div>
+                    ))
+                ) : waitingAgentNodes.length ? (
+                  waitingAgentNodes.map((n) => (
+                    <div key={n.id} className="event-row event-waiting">
+                      <i className="event-dot">
+                        <Icon name="pause" />
+                      </i>
+                      <div>
+                        <b>{n.title}</b>
+                      </div>
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => revealNode(n.id)}
+                      >
+                        <Icon name="chev" />
+                        <span>{t("locate")}</span>
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <p className="muted">{t("noWaiting")}</p>
+                )}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="fs-bottom-toggle"
+              onClick={() => setBottomOpen((v) => !v)}
+            >
+              <Icon name="bolt" />
+              <span>{t("activity")}</span>
+              <span className="bottom-event-count">
+                {snapshot?.runs.length ?? 0}
+              </span>
+              <span className="fs-bottom-summary">
+                {doc.nodes.filter((n) => n.kind === "agent").length} Agent ·{" "}
+                {doc.edges.length} {t("continuation")}/{t("reference")}
+              </span>
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* ---------- Floating Menu ---------- */}
+      {menu && (
+        <div
+          className="fs-menu"
+          style={{ left: menu.x, top: menu.y }}
+          role="menu"
+        >
+          {menu.items.map((item, idx) =>
+            item.divider ? (
+              <hr key={idx} />
+            ) : item.heading ? (
+              <small key={idx}>{item.heading}</small>
+            ) : (
+              <button
+                key={idx}
+                type="button"
+                role="menuitem"
+                disabled={item.disabled}
+                className={item.danger ? "danger" : ""}
+                onClick={() => {
+                  setMenu(null);
+                  item.fn?.();
+                }}
+              >
+                <span className="menu-icon">
+                  {item.icon ? <Icon name={item.icon} /> : null}
+                </span>
+                <span>
+                  {item.label}
+                  {item.description && <small>{item.description}</small>}
+                </span>
+                {item.checked ? (
+                  <Icon name="check" />
+                ) : item.shortcut ? (
+                  <kbd>{item.shortcut}</kbd>
+                ) : null}
+              </button>
+            ),
+          )}
+        </div>
+      )}
+
+      {/* ---------- Dialogs Host ---------- */}
+      {/* 1. Command & @ Mention Palette */}
+      {paletteDialog && (
+        <div
+          className="fs-dialog-host"
+          onClick={() => setPaletteDialog(null)}
+        >
+          <section
+            ref={dialogRef}
+            className="dialog command-dialog"
+            role="dialog"
+            aria-modal="true"
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <div className="dialog-body">
+              <div className="command-input">
+                <Icon name={paletteDialog.targetNodeId ? "at" : "search"} />
+                <input
+                  autoFocus
+                  placeholder={t("commandSearch")}
+                  value={paletteDialog.query}
+                  onChange={(ev) =>
+                    setPaletteDialog((prev) =>
+                      prev
+                        ? { ...prev, query: ev.target.value, index: 0 }
+                        : null,
+                    )
+                  }
+                  onKeyDown={(ev) => {
+                    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+                      ev.preventDefault();
+                      setPaletteDialog((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              index: clamp(
+                                prev.index + (ev.key === "ArrowDown" ? 1 : -1),
+                                0,
+                                Math.max(0, paletteEntries.length - 1),
+                              ),
+                            }
+                          : null,
+                      );
+                    } else if (ev.key === "Enter") {
+                      ev.preventDefault();
+                      const picked = paletteEntries[paletteDialog.index];
+                      if (picked) {
+                        setPaletteDialog(null);
+                        picked.fn();
                       }
-                    />
-                  </label>
-                  {selectedNode.kind === "agent" && (
-                    <>
-                      <label>
-                        {tr("工作区")}
-                        <select
-                          disabled={!!selectedNode.sessionId}
-                          value={selectedNode.workspaceId ?? ""}
-                          onChange={(e) =>
-                            editNode(selectedNode.id, {
-                              workspaceId: e.target.value || undefined,
-                            })
-                          }
-                        >
-                          <option value="">{tr("当前工作区")}</option>
-                          {workspaces.map((w) => (
-                            <option key={w.id} value={w.id}>
-                              {w.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        {tr("任务预设")}
-                        <textarea
-                          value={selectedNode.task}
-                          onChange={(e) =>
-                            editNode(selectedNode.id, { task: e.target.value })
-                          }
-                          placeholder={tr("接到上游结果后做什么")}
-                        />
-                      </label>
-                      <label>
-                        {tr("原生对话触发接续")}
-                        <select
-                          value={selectedNode.nativeTrigger}
-                          onChange={(e) =>
-                            editNode(selectedNode.id, {
-                              nativeTrigger: e.target
-                                .value as FlowNode["nativeTrigger"],
-                            })
-                          }
-                        >
-                          <option value="inherit">
-                            {tr("继承全局（")}
-                            {doc.settings.nativeChatTriggers
-                              ? tr("开启")
-                              : tr("关闭")}
-                            ）
-                          </option>
-                          <option value="enabled">{tr("开启")}</option>
-                          <option value="disabled">{tr("关闭")}</option>
-                        </select>
-                      </label>
-                      <label>
-                        {tr("参与方式")}
-                        <select
-                          value={selectedNode.participation}
-                          onChange={(e) =>
-                            editNode(selectedNode.id, {
-                              participation: e.target
-                                .value as FlowNode["participation"],
-                            })
-                          }
-                        >
-                          <option value="global">{tr("参与工作流")}</option>
-                          <option value="manual">{tr("仅手动")}</option>
-                          <option value="paused">{tr("暂停参与")}</option>
-                        </select>
-                      </label>
-                      <div className="fs-inspector-note">
-                        {tr(
-                          "引用口提供资料。标题栏的接续口决定下一步何时运行。",
+                    }
+                  }}
+                />
+                <kbd>Esc</kbd>
+              </div>
+              <div className="command-results">
+                {paletteEntries.length ? (
+                  paletteEntries.map((entry, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      className={`command-result ${paletteDialog.index === idx ? "active" : ""}`}
+                      onClick={() => {
+                        setPaletteDialog(null);
+                        entry.fn();
+                      }}
+                    >
+                      <span className="command-icon">
+                        <Icon name={entry.icon} />
+                      </span>
+                      <div>
+                        <b className="user-content">{entry.label}</b>
+                        {entry.detail && (
+                          <small className="user-content">{entry.detail}</small>
                         )}
                       </div>
-                      {selectedNode.sessionId && (
-                        <button
-                          onClick={() =>
-                            bridge.openChat(selectedNode.sessionId!)
-                          }
-                        >
-                          <MessageSquare size={14} />
-                          {tr("打开原生对话")}
-                        </button>
-                      )}
-                    </>
-                  )}
-                  <button className="fs-danger" onClick={remove}>
-                    <Trash2 size={14} />
-                    {tr("从画布移除")}
-                  </button>
-                  <small>{tr("移除节点不会删除 DSH 会话。")}</small>
-                </>
-              ) : selectedEdge ? (
-                <>
-                  <div className="fs-section-label">
-                    {selectedEdge.kind === "continuation"
-                      ? tr("接续")
-                      : tr("引用")}
+                      <span>{entry.section}</span>
+                      {paletteDialog.index === idx && <kbd>↵</kbd>}
+                    </button>
+                  ))
+                ) : (
+                  <div className="command-empty">{t("noSearchResults")}</div>
+                )}
+              </div>
+              <footer className="command-hint">
+                <kbd>↑ ↓</kbd>
+                <span>{t("rangeSelection")}</span>
+                <kbd>Enter</kbd>
+                <span>
+                  {t(paletteDialog.targetNodeId ? "reference" : "run")}
+                </span>
+              </footer>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* 2. 4-Bucket Global Launch Preview Dialog */}
+      {launchDialog && (() => {
+        const chosenRoots = launchDialog.plan.roots.filter(
+          (id) => !launchDialog.excluded.has(id),
+        );
+        const reach = new Set<string>(chosenRoots);
+        const walk = (id: string) => {
+          for (const e of doc.edges) {
+            if (
+              e.kind === "continuation" &&
+              e.trigger !== "off" &&
+              e.source === id &&
+              !reach.has(e.target)
+            ) {
+              reach.add(e.target);
+              walk(e.target);
+            }
+          }
+        };
+        chosenRoots.forEach(walk);
+        const downstream = [...reach].filter((id) => !chosenRoots.includes(id));
+        const confirmIds = downstream.filter((id) => {
+          const n = doc.nodes.find((x) => x.id === id);
+          return (
+            n?.participation === "manual" ||
+            doc.edges.some(
+              (e) =>
+                e.kind === "continuation" &&
+                e.target === id &&
+                reach.has(e.source) &&
+                e.trigger === "confirm",
+            )
+          );
+        });
+        const followIds = downstream.filter((id) => !confirmIds.includes(id));
+        const skippedRows = [
+          ...launchDialog.plan.roots
+            .filter((id) => launchDialog.excluded.has(id))
+            .map((nodeId) => ({ nodeId, reason: t("cancel") })),
+          ...launchDialog.plan.skipped.map((s) => ({
+            nodeId: s.nodeId,
+            reason: tr(s.reason),
+          })),
+        ];
+
+        const titleOf = (id: string) =>
+          doc.nodes.find((n) => n.id === id)?.title ?? id;
+        const upstreamNames = (id: string) =>
+          doc.edges
+            .filter(
+              (e) =>
+                e.kind === "continuation" &&
+                e.trigger !== "off" &&
+                e.target === id &&
+                reach.has(e.source),
+            )
+            .map((e) => titleOf(e.source))
+            .join(" + ");
+
+        return (
+          <div
+            className="fs-dialog-host"
+            onClick={() => setLaunchDialog(null)}
+          >
+            <section
+              ref={dialogRef}
+              className="dialog"
+              role="dialog"
+              aria-modal="true"
+              onClick={(ev) => ev.stopPropagation()}
+            >
+              <header className="dialog-header">
+                <div>
+                  <h2>{t("runAll")}</h2>
+                  <p>{t("launchDescription")}</p>
+                </div>
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => setLaunchDialog(null)}
+                >
+                  <Icon name="x" />
+                </button>
+              </header>
+              <div className="dialog-body">
+                <div className="launch-summary">
+                  <div className="launch-stat now">
+                    <b>{chosenRoots.length}</b>
+                    <span>{t("launchNow")}</span>
                   </div>
-                  <h3>
-                    {titleOf(selectedEdge.source)} →{" "}
-                    {titleOf(selectedEdge.target)}
-                  </h3>
-                  {selectedEdge.kind === "continuation" ? (
-                    <>
-                      <label>
-                        {tr("传递内容")}
-                        <select
-                          value={selectedEdge.mode}
-                          onChange={(e) =>
-                            edit((d) => {
-                              d.edges.find(
-                                (x) => x.id === selectedEdge.id,
-                              )!.mode = e.target.value as FlowEdge["mode"];
-                            })
-                          }
-                        >
-                          <option value="conclusion">{tr("本轮结论")}</option>
-                          <option value="session">{tr("会话文本快照")}</option>
-                          <option
-                            value="fork"
-                            disabled={
-                              !!doc.nodes.find(
-                                (n) => n.id === selectedEdge.target,
-                              )?.sessionId
+                  <div className="launch-stat next">
+                    <b>{followIds.length}</b>
+                    <span>{t("launchNext")}</span>
+                  </div>
+                  <div className="launch-stat confirm">
+                    <b>{confirmIds.length}</b>
+                    <span>{t("launchConfirm")}</span>
+                  </div>
+                  <div className="launch-stat">
+                    <b>{skippedRows.length}</b>
+                    <span>{t("launchNone")}</span>
+                  </div>
+                </div>
+
+                <section className="launch-section">
+                  <h4>{t("launchNow")}</h4>
+                  {launchDialog.plan.roots.length ? (
+                    launchDialog.plan.roots.map((id) => {
+                      const checked = !launchDialog.excluded.has(id);
+                      const hidden = !isNodeVisible(
+                        doc.nodes.find((n) => n.id === id),
+                        true,
+                      );
+                      return (
+                        <label key={id} className="launch-row">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(ev) =>
+                              setLaunchDialog((prev) => {
+                                if (!prev) return null;
+                                const next = new Set(prev.excluded);
+                                if (ev.target.checked) next.delete(id);
+                                else next.add(id);
+                                return { ...prev, excluded: next };
+                              })
                             }
-                          >
-                            {tr("历史分叉（仅草稿）")}
-                          </option>
-                        </select>
-                      </label>
-                      <label>
-                        {tr("触发方式")}
-                        <select
-                          value={selectedEdge.trigger}
-                          onChange={(e) =>
-                            edit((d) => {
-                              d.edges.find(
-                                (x) => x.id === selectedEdge.id,
-                              )!.trigger = e.target
-                                .value as FlowEdge["trigger"];
-                            })
-                          }
-                        >
-                          <option value="auto">{tr("自动接续")}</option>
-                          <option value="confirm">{tr("等待确认")}</option>
-                          <option value="off">{tr("不自动触发")}</option>
-                        </select>
-                      </label>
-                      <label>
-                        {tr("循环最多轮数")}
-                        <input
-                          type="number"
-                          min={1}
-                          value={selectedEdge.maxRounds}
-                          onChange={(e) =>
-                            edit((d) => {
-                              d.edges.find(
-                                (x) => x.id === selectedEdge.id,
-                              )!.maxRounds = Number(e.target.value);
-                            })
-                          }
-                        />
-                      </label>
-                      <p className="fs-inspector-note">
-                        {tr(
-                          "会话引用包含用户与助手文本，不包含工具过程。排队前固定内容。",
-                        )}
-                      </p>
-                    </>
+                          />
+                          <span className="node-avatar agent-avatar">
+                            <Icon name="agent" />
+                          </span>
+                          <div>
+                            <b className="user-content">{titleOf(id)}</b>
+                            {hidden && <small>{t("hidden")}</small>}
+                          </div>
+                          <span>{t(nodeStatusOf(snapshot, id))}</span>
+                        </label>
+                      );
+                    })
                   ) : (
-                    <label className="fs-inline">
+                    <div className="surface-empty">
+                      <h3>{t("noStarters")}</h3>
+                      <p>{t("noStartersDescription")}</p>
+                    </div>
+                  )}
+                </section>
+
+                {followIds.length > 0 && (
+                  <section className="launch-section">
+                    <h4>{t("launchNext")}</h4>
+                    {followIds.map((id) => (
+                      <div key={id} className="launch-row is-follow">
+                        <i>
+                          <Icon name="chev" />
+                        </i>
+                        <span className="node-avatar agent-avatar">
+                          <Icon name="agent" />
+                        </span>
+                        <div>
+                          <b className="user-content">{titleOf(id)}</b>
+                          <small>
+                            {t("afterStep", { name: upstreamNames(id) })}
+                          </small>
+                        </div>
+                      </div>
+                    ))}
+                  </section>
+                )}
+
+                {confirmIds.length > 0 && (
+                  <section className="launch-section">
+                    <h4>{t("launchConfirm")}</h4>
+                    {confirmIds.map((id) => (
+                      <div key={id} className="launch-row is-follow is-confirm">
+                        <i>
+                          <Icon name="chev" />
+                        </i>
+                        <span className="node-avatar agent-avatar">
+                          <Icon name="pause" />
+                        </span>
+                        <div>
+                          <b className="user-content">{titleOf(id)}</b>
+                          <small>
+                            {t("afterStep", { name: upstreamNames(id) })}
+                          </small>
+                        </div>
+                      </div>
+                    ))}
+                  </section>
+                )}
+
+                {skippedRows.length > 0 && (
+                  <details className="launch-skipped">
+                    <summary>
+                      <Icon name="chev" />
+                      {t("launchNone")} · {skippedRows.length}
+                    </summary>
+                    {skippedRows.map((row) => (
+                      <div
+                        key={row.nodeId}
+                        className="launch-row is-follow is-none"
+                      >
+                        <i />
+                        <span className="node-avatar agent-avatar">
+                          <Icon name="agent" />
+                        </span>
+                        <div>
+                          <b className="user-content">{titleOf(row.nodeId)}</b>
+                          <small>{row.reason}</small>
+                        </div>
+                      </div>
+                    ))}
+                  </details>
+                )}
+              </div>
+              <footer className="dialog-footer">
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => setLaunchDialog(null)}
+                >
+                  <span>{t("cancel")}</span>
+                </button>
+                <button
+                  type="button"
+                  className="button button-primary"
+                  disabled={!chosenRoots.length}
+                  onClick={() => {
+                    const excludeRootIds = [...launchDialog.excluded];
+                    setLaunchDialog(null);
+                    void bridge
+                      .start({
+                        kind: "global",
+                        nodeIds: [],
+                        excludeRootIds,
+                      })
+                      .then(() => setBottomOpen(true))
+                      .catch(reportError);
+                  }}
+                >
+                  <Icon name="play" />
+                  <span>{t("runCount", { count: chosenRoots.length })}</span>
+                </button>
+              </footer>
+            </section>
+          </div>
+        );
+      })()}
+
+      {/* 3. Rename / Form Modal */}
+      {formModal && (
+        <FormDialog
+          dialogRef={dialogRef}
+          modal={formModal}
+          onClose={() => setFormModal(null)}
+        />
+      )}
+
+      {/* 4. Add Existing DSH Session Modal */}
+      {sessionModal && (
+        <div
+          className="fs-dialog-host"
+          onClick={() => setSessionModal(null)}
+        >
+          <section
+            ref={dialogRef}
+            className="dialog"
+            role="dialog"
+            aria-modal="true"
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <header className="dialog-header">
+              <div>
+                <h2>{t("existingSession")}</h2>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setSessionModal(null)}
+              >
+                <Icon name="x" />
+              </button>
+            </header>
+            <div className="dialog-body">
+              <div className="fs-session-list">
+                {sessionModal.filter(
+                  (s) => !doc.nodes.some((n) => n.sessionId === s.sessionId),
+                ).length ? (
+                  sessionModal
+                    .filter(
+                      (s) =>
+                        !doc.nodes.some((n) => n.sessionId === s.sessionId),
+                    )
+                    .map((s) => (
+                      <button
+                        key={s.sessionId}
+                        type="button"
+                        className="fs-session-pick"
+                        onClick={() => {
+                          const created: FlowNode = {
+                            ...newNode("agent", 120, 160, s.title),
+                            sessionId: s.sessionId,
+                            cwd: s.cwd,
+                            expanded: true,
+                            tab: "conversation",
+                          };
+                          edit((d) => d.nodes.push(created));
+                          setSessionModal(null);
+                          revealNode(created.id);
+                        }}
+                      >
+                        <Icon name="chat" />
+                        <div>
+                          <b className="user-content">{s.title}</b>
+                          {s.cwd && <small>{s.cwd}</small>}
+                        </div>
+                      </button>
+                    ))
+                ) : (
+                  <p className="muted">{t("noExistingSessions")}</p>
+                )}
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* 5. Workspace File Preview Modal */}
+      {fileModal && (
+        <div className="fs-dialog-host" onClick={() => setFileModal(null)}>
+          <section
+            ref={dialogRef}
+            className="dialog file-dialog"
+            role="dialog"
+            aria-modal="true"
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <header className="dialog-header">
+              <div>
+                <h2>{fileModal.path.split("/").pop()}</h2>
+                <p>{fileModal.path}</p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setFileModal(null)}
+              >
+                <Icon name="x" />
+              </button>
+            </header>
+            <div className="dialog-body">
+              <div className="code-toolbar">
+                <span>
+                  {t("lineCount", {
+                    count: fileModal.content.split("\n").length,
+                  })}
+                </span>
+              </div>
+              <div className="code-view">
+                {fileModal.content.split("\n").map((line, i) => (
+                  <div key={i} className="code-line">
+                    <span className="line-number">{i + 1}</span>
+                    <code>{line || " "}</code>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <footer className="dialog-footer">
+              <button
+                type="button"
+                className="button"
+                onClick={() => {
+                  void navigator.clipboard.writeText(fileModal.content);
+                  showToast(t("copied"));
+                }}
+              >
+                <Icon name="file" />
+                <span>{t("copy")}</span>
+              </button>
+              <button
+                type="button"
+                className="button"
+                onClick={() => setFileModal(null)}
+              >
+                <span>{t("close")}</span>
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+
+      {/* 6. Template Preview Modal */}
+      {templatePreviewModal && (
+        <div
+          className="fs-dialog-host"
+          onClick={() => setTemplatePreviewModal(null)}
+        >
+          <section
+            ref={dialogRef}
+            className="dialog"
+            role="dialog"
+            aria-modal="true"
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <header className="dialog-header">
+              <div>
+                <h2>
+                  {templatePreviewModal.builtin
+                    ? t(templatePreviewModal.title)
+                    : templatePreviewModal.title}
+                </h2>
+                <p>
+                  {templatePreviewModal.builtin
+                    ? t(templatePreviewModal.description)
+                    : templatePreviewModal.description}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setTemplatePreviewModal(null)}
+              >
+                <Icon name="x" />
+              </button>
+            </header>
+            <div className="dialog-body">
+              <div className="template-graph template-preview-graph">
+                <MiniGraph
+                  nodes={templatePreviewModal.nodes}
+                  edges={templatePreviewModal.edges}
+                />
+              </div>
+              <div className="template-preview-list">
+                {templatePreviewModal.nodes
+                  .filter((n) => n.kind === "agent")
+                  .map((n) => (
+                    <div key={n.id}>
+                      <Icon name="agent" />
+                      <div>
+                        <b className="user-content">{n.title}</b>
+                        <p className="user-content">{n.task || n.draft}</p>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+            <footer className="dialog-footer">
+              <button
+                type="button"
+                className="button"
+                onClick={() => setTemplatePreviewModal(null)}
+              >
+                <span>{t("cancel")}</span>
+              </button>
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={() => {
+                  const tpl = templatePreviewModal;
+                  setTemplatePreviewModal(null);
+                  handleInstantiateTemplate(tpl);
+                }}
+              >
+                <Icon name="plus" />
+                <span>{t("useTemplate")}</span>
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+
+      {/* 7. Template Sync Diff Modal */}
+      {syncModal && (
+        <div className="fs-dialog-host" onClick={() => setSyncModal(null)}>
+          <section
+            ref={dialogRef}
+            className="dialog"
+            role="dialog"
+            aria-modal="true"
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <header className="dialog-header">
+              <div>
+                <h2>{t("syncTemplate")}</h2>
+                <p>{t("syncDialogDescription")}</p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setSyncModal(null)}
+              >
+                <Icon name="x" />
+              </button>
+            </header>
+            <div className="dialog-body">
+              <div className="sync-diff">
+                <div>
+                  <Icon name="canvas" />
+                  <b>{t("syncStructure")}</b>
+                  <small>v{syncModal.plan.template.revision}</small>
+                </div>
+                {syncModal.plan.outside > 0 && (
+                  <div>
+                    <Icon name="at" />
+                    <b>
+                      {t("syncOutsideKept", { count: syncModal.plan.outside })}
+                    </b>
+                  </div>
+                )}
+                {syncModal.plan.locked.length > 0 && (
+                  <div>
+                    <Icon name="pin" />
+                    <b>
+                      {t("syncRunKept", {
+                        count: syncModal.plan.locked.length,
+                      })}
+                    </b>
+                  </div>
+                )}
+                {syncModal.plan.added.length > 0 && (
+                  <div>
+                    <Icon name="plus" />
+                    <b>
+                      {t("syncAdded", { count: syncModal.plan.added.length })}
+                    </b>
+                  </div>
+                )}
+                {syncModal.plan.removed.length > 0 && (
+                  <div>
+                    <Icon name="x" />
+                    <b>
+                      {t("syncRemoved", {
+                        count: syncModal.plan.removed.length,
+                      })}
+                    </b>
+                  </div>
+                )}
+                {syncModal.plan.edited.map((n) => (
+                  <div key={n.id}>
+                    <Icon name="quote" />
+                    <b className="user-content">{n.title}</b>
+                    <small>{t("syncEdited")}</small>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <footer className="dialog-footer">
+              <button
+                type="button"
+                className="button"
+                onClick={() => setSyncModal(null)}
+              >
+                <span>{t("cancel")}</span>
+              </button>
+              {syncModal.plan.edited.length > 0 && (
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => {
+                    const { groupId, plan } = syncModal;
+                    setSyncModal(null);
+                    edit((d) =>
+                      synchronizeTemplate(d, groupId, plan.template, false, {
+                        workspaceId: activeWorkspaceId || undefined,
+                        cwd: activeWorkspaceCwd,
+                      }),
+                    );
+                    showToast(t("templateSynced"));
+                  }}
+                >
+                  <span>{t("syncUseTemplate")}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={() => {
+                  const { groupId, plan } = syncModal;
+                  setSyncModal(null);
+                  edit((d) =>
+                    synchronizeTemplate(d, groupId, plan.template, true, {
+                      workspaceId: activeWorkspaceId || undefined,
+                      cwd: activeWorkspaceCwd,
+                    }),
+                  );
+                  showToast(t("templateSynced"));
+                }}
+              >
+                <Icon name="undo" />
+                <span>
+                  {t(
+                    syncModal.plan.edited.length > 0
+                      ? "syncKeepMine"
+                      : "syncTemplate",
+                  )}
+                </span>
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+
+      {/* 8. Merge Composite Input Ports Modal */}
+      {mergePortsModal && (() => {
+        const grp = doc.nodes.find((n) => n.id === mergePortsModal.groupId);
+        const inPorts = grp
+          ? inferGroupPorts(doc, grp).filter((p) => p.direction === "in")
+          : [];
+        return (
+          <div
+            className="fs-dialog-host"
+            onClick={() => setMergePortsModal(null)}
+          >
+            <section
+              ref={dialogRef}
+              className="dialog"
+              role="dialog"
+              aria-modal="true"
+              onClick={(ev) => ev.stopPropagation()}
+            >
+              <header className="dialog-header">
+                <div>
+                  <h2>{t("mergePorts")}</h2>
+                </div>
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => setMergePortsModal(null)}
+                >
+                  <Icon name="x" />
+                </button>
+              </header>
+              <div className="dialog-body">
+                <label className="field-label">{t("portName")}</label>
+                <input
+                  className="text-field"
+                  value={mergePortsModal.name}
+                  onChange={(ev) =>
+                    setMergePortsModal((prev) =>
+                      prev ? { ...prev, name: ev.target.value } : null,
+                    )
+                  }
+                />
+                <div className="merge-port-list">
+                  {inPorts.map((p) => (
+                    <label key={p.id}>
                       <input
                         type="checkbox"
-                        checked={selectedEdge.always}
-                        onChange={(e) =>
-                          edit((d) => {
-                            d.edges.find(
-                              (x) => x.id === selectedEdge.id,
-                            )!.always = e.target.checked;
+                        checked={mergePortsModal.selectedPortIds.has(p.id)}
+                        onChange={(ev) =>
+                          setMergePortsModal((prev) => {
+                            if (!prev) return null;
+                            const next = new Set(prev.selectedPortIds);
+                            if (ev.target.checked) next.add(p.id);
+                            else next.delete(p.id);
+                            return { ...prev, selectedPortIds: next };
                           })
                         }
                       />
-                      {tr("每次都附带")}
+                      <span>
+                        {t(p.kind)} · {p.name}
+                      </span>
                     </label>
-                  )}
-                  {snapshot?.runs.filter(r => ["running", "waiting", "paused"].includes(r.state)).flatMap((run) =>
-                    run.tokens
-                      .filter(
-                        (token) =>
-                          token.edgeId === selectedEdge.id &&
-                          !token.ready &&
-                          !token.consumed &&
-                          !token.dismissed,
-                      )
-                      .map((token) => (
-                        <div className="fs-wait" key={token.id}>
-                          <strong>{tr("待发内容")}</strong>
-                          <pre>{token.source.text.slice(0, 600)}</pre>
-                          <button
-                            onClick={() =>
-                              void bridge
-                                .release(run.id, token.id, true)
-                                .catch(error)
-                            }
-                          >
-                            {tr("放行")}
-                          </button>
-                          <button
-                            onClick={() =>
-                              void bridge
-                                .release(run.id, token.id, false)
-                                .catch(error)
-                            }
-                          >
-                            {tr("跳过")}
-                          </button>
-                        </div>
-                      )),
-                  )}
-                  <button className="fs-danger" onClick={remove}>
-                    <Trash2 size={14} />
-                    {tr("删除连线")}
-                  </button>
-                </>
-              ) : (
-                <div className="fs-inspector-note">
-                  {tr("选择节点或连线，查看任务、上下文与接续设置。")}
+                  ))}
                 </div>
-              )}
-            </aside>
-          )}
-        </div>
-        <footer className="fs-bottom-bar">
-          <button onClick={() => setBottom(!bottom)}>
-            <Clock size={14} />
-            {tr("运行记录")}
-            <span>{snapshot?.runs.length ?? 0}</span>
-            {bottom ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          </button>
-          <span className="fs-grow" />
-          <small>
-            {doc.nodes.filter((n) => n.kind === "agent").length}{" "}
-            {tr("个 Agent ·")}
-            {doc.edges.length} {tr("条连接")}
-          </small>
-        </footer>
-        {bottom && (
-          <div className="fs-runs">
-            {snapshot?.runs.length ? (
-              [...snapshot.runs]
-                .reverse()
-                .map((run) => (
-                  <RunRow
-                    key={run.id}
-                    run={run}
-                    bridge={bridge}
-                    select={select}
-                    error={error}
-                  />
-                ))
-            ) : (
-              <p>{tr("从一个 Agent 开始，执行轨迹会出现在这里。")}</p>
-            )}
-          </div>
-        )}
-        {errorText && (
-          <div className="fs-toast" role="alert">
-            <AlertCircle size={16} />
-            <span>{errorText}</span>
-            <button onClick={() => setError("")}>
-              <X size={14} />
-            </button>
-          </div>
-        )}
-        {settings && (
-          <Modal title={tr("画布设置")} close={() => setSettings(false)}>
-            <label className="fs-inline">
-              <input
-                type="checkbox"
-                checked={doc.settings.nativeChatTriggers}
-                onChange={(e) =>
-                  edit((d) => {
-                    d.settings.nativeChatTriggers = e.target.checked;
-                  })
-                }
-              />
-              {tr("原生对话默认触发接续")}
-            </label>
-            <p>{tr("节点可以单独覆盖。已开始的运行保留当时的接续关系。")}</p>
-            <label className="fs-inline">
-              <input
-                type="checkbox"
-                checked={doc.settings.reducedMotion}
-                onChange={(e) =>
-                  edit((d) => {
-                    d.settings.reducedMotion = e.target.checked;
-                  })
-                }
-              />
-              {tr("减弱动效")}
-            </label>
-            <hr />
-            <button
-              onClick={() => {
-                const a = document.createElement("a"),
-                  url = URL.createObjectURL(
-                    new Blob([JSON.stringify(doc, null, 2)], {
-                      type: "application/json",
-                    }),
-                  );
-                a.href = url;
-                a.download = "flowspace.json";
-                a.click();
-                URL.revokeObjectURL(url);
-              }}
-            >
-              <Download size={15} />
-              {tr("导出画布")}
-            </button>
-            <label className="fs-file-input">
-              <Upload size={15} />
-              {tr("导入画布")}
-              <input
-                type="file"
-                accept=".json"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file)
-                    void file
-                      .text()
-                      .then((text) => {
-                        const data = JSON.parse(text) as FlowspaceDocument;
-                        return bridge.save(data);
-                      })
-                      .then((result) => {
-                        docRef.current = result;
-                        setDoc(result);
-                      })
-                      .catch(error);
-                }}
-              />
-            </label>
-          </Modal>
-        )}
-        {sessionList && (
-          <Modal title={tr("添加已有会话")} close={() => setSessionList(null)}>
-            {sessionList
-              .filter(
-                (s) => !doc.nodes.some((n) => n.sessionId === s.sessionId),
-              )
-              .map((s) => (
+              </div>
+              <footer className="dialog-footer">
                 <button
-                  className="fs-session-row"
-                  key={s.sessionId}
+                  type="button"
+                  className="button"
+                  onClick={() => setMergePortsModal(null)}
+                >
+                  <span>{t("cancel")}</span>
+                </button>
+                <button
+                  type="button"
+                  className="button button-primary"
                   onClick={() => {
-                    const n = {
-                      ...newNode("agent", 100, 100, s.title),
-                      sessionId: s.sessionId,
-                      cwd: s.cwd,
-                    };
-                    edit((d) => d.nodes.push(n));
-                    setSessionList(null);
+                    if (!grp) return;
+                    const all = inferGroupPorts(doc, grp);
+                    const chosen = inPorts.filter((p) =>
+                      mergePortsModal.selectedPortIds.has(p.id),
+                    );
+                    if (
+                      chosen.length >= 2 &&
+                      chosen.every((p) => p.kind === chosen[0].kind)
+                    ) {
+                      const merged: GroupPort = {
+                        id: uid(),
+                        kind: chosen[0].kind,
+                        direction: "in",
+                        name: mergePortsModal.name || t("inputPort"),
+                        nodes: [
+                          ...new Set(chosen.flatMap((p) => p.nodes)),
+                        ],
+                        hidden: false,
+                      };
+                      editNode(grp.id, {
+                        ports: [
+                          ...all.filter(
+                            (p) => !mergePortsModal.selectedPortIds.has(p.id),
+                          ),
+                          merged,
+                        ],
+                      });
+                    }
+                    setMergePortsModal(null);
                   }}
                 >
-                  <MessageSquare size={16} />
-                  <span>
-                    {s.title}
-                    <small>{s.cwd}</small>
-                  </span>
+                  <span>{t("save")}</span>
                 </button>
-              ))}
-          </Modal>
-        )}
-        {launchDialog && (
-          <Modal
-            title={tr("启动清单")}
-            close={() => setLaunchDialog(undefined)}
+              </footer>
+            </section>
+          </div>
+        );
+      })()}
+
+      {/* 9. Exchange History Viewer Modal */}
+      {exchangeModal && (
+        <div
+          className="fs-dialog-host"
+          onClick={() => setExchangeModal(null)}
+        >
+          <section
+            ref={dialogRef}
+            className="dialog"
+            role="dialog"
+            aria-modal="true"
+            onClick={(ev) => ev.stopPropagation()}
           >
-            {(
-              [
-                ["立即运行", launchDialog.plan.roots],
-                ["后续接续", launchDialog.plan.later],
-                ["等待确认", launchDialog.plan.confirmation],
-              ] as const
-            ).map(([title, ids]) => (
-              <section key={title}>
-                <h4>
-                  {tr(title)} · {ids.length}
-                </h4>
-                {ids.map((id) =>
-                  title === "立即运行" ? (
-                    <label className="fs-inline" key={id}>
-                      <input
-                        type="checkbox"
-                        checked={
-                          !launchDialog.request.excludeRootIds?.includes(id)
-                        }
-                        onChange={(e) =>
-                          setLaunchDialog(
-                            (previous) =>
-                              previous && {
-                                ...previous,
-                                request: {
-                                  ...previous.request,
-                                  excludeRootIds: e.target.checked
-                                    ? previous.request.excludeRootIds?.filter(
-                                        (x) => x !== id,
-                                      )
-                                    : [
-                                        ...(previous.request.excludeRootIds ??
-                                          []),
-                                        id,
-                                      ],
-                                },
-                              },
-                          )
-                        }
-                      />
-                      {titleOf(id)}
-                    </label>
-                  ) : (
-                    <p key={id}>{titleOf(id)}</p>
-                  ),
-                )}
-              </section>
-            ))}
-            {!!launchDialog.plan.skipped.length && (
-              <section>
-                <h4>{tr("本次不运行")}</h4>
-                {launchDialog.plan.skipped.map((s) => (
-                  <p key={s.nodeId}>
-                    {titleOf(s.nodeId)} <small>{s.reason}</small>
-                  </p>
+            <header className="dialog-header">
+              <div>
+                <h2>{t("exchange")}</h2>
+                <p>{t("exchangeReadOnly")}</p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setExchangeModal(null)}
+              >
+                <Icon name="x" />
+              </button>
+            </header>
+            <div className="dialog-body">
+              <div className="exchange-messages">
+                {exchangeModal.items.map((item) => {
+                  const fromTitle =
+                    doc.nodes.find((n) => n.id === item.fromId)?.title ??
+                    item.fromId;
+                  const toTitle =
+                    doc.nodes.find((n) => n.id === item.toId)?.title ??
+                    item.toId;
+                  return (
+                    <article key={item.id} className="exchange-message">
+                      <header>
+                        <b className="user-content">
+                          {fromTitle} → {toTitle}
+                        </b>
+                        <time>{formatTime(item.at)}</time>
+                      </header>
+                      <p className="user-content">{item.text}</p>
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => {
+                          setExchangeModal(null);
+                          extractDisplayFrom(
+                            item.fromId,
+                            item.text,
+                            item.seq,
+                            true,
+                          );
+                        }}
+                      >
+                        <Icon name="quote" />
+                        <span>{t("quoteMessage")}</span>
+                      </button>
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* 10. Help & Wire Legend Modal */}
+      {helpModal && (
+        <div className="fs-dialog-host" onClick={() => setHelpModal(false)}>
+          <section
+            ref={dialogRef}
+            className="dialog"
+            role="dialog"
+            aria-modal="true"
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <header className="dialog-header">
+              <div>
+                <h2>{t("keyboardHint")}</h2>
+                <p>{t("helpDescription")}</p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setHelpModal(false)}
+              >
+                <Icon name="x" />
+              </button>
+            </header>
+            <div className="dialog-body">
+              <div className="shortcut-list">
+                {(
+                  [
+                    ["doubleClickTip", "Double Click"],
+                    ["pan", "Space + Drag"],
+                    ["rangeSelection", "Shift + Drag"],
+                    ["command", "Ctrl K"],
+                    ["runSelection", "Ctrl Enter"],
+                    ["fitView", "F / Shift F"],
+                    ["groupSelection", "G"],
+                    ["undo", "Ctrl Z"],
+                    ["redo", "Ctrl Shift Z"],
+                    ["executionDetail", "D"],
+                    ["openWindow", "Alt Enter"],
+                    ["deleteNode", "Delete"],
+                  ] as const
+                ).map(([key, sc]) => (
+                  <div key={key}>
+                    <span>{t(key)}</span>
+                    <kbd>{sc}</kbd>
+                  </div>
                 ))}
-              </section>
-            )}
-            <button
-              className="fs-primary"
-              disabled={
-                !launchDialog.plan.roots.some(
-                  (id) => !launchDialog.request.excludeRootIds?.includes(id),
-                )
-              }
-              onClick={() => {
-                const request = launchDialog.request;
-                setLaunchDialog(undefined);
-                void bridge.start(request).catch(error);
-              }}
-            >
-              <Play size={14} />
-              {tr("确认启动")}
-            </button>
-          </Modal>
-        )}
-      </div>
-    </ActionsContext.Provider>
-  );
-}
-function RunRow({
-  run,
-  bridge,
-  select,
-  error,
-}: {
-  run: FlowspaceRun;
-  bridge: CanvasBridge;
-  select: (id: string) => void;
-  error: (e: unknown) => void;
-}) {
-  return (
-    <details
-      className="fs-run-row"
-      open={["waiting", "error", "interrupted"].includes(run.state)}
-    >
-      <summary>
-        <span className={"fs-status " + run.state}>
-          <i />
-          {tr(statuses[run.state])}
-        </span>
-        <b>{run.title}</b>
-        <small>
-          {run.steps.filter((s) => s.state === "completed").length}/
-          {run.steps.length} {tr("完成 ·")}
-          {run.origin === "chat" ? tr("原生对话") : tr("画布")}
-        </small>
-        <span className="fs-grow" />
-        {["running", "waiting"].includes(run.state) && (
-          <button
-            onClick={(e) => {
-              e.preventDefault();
-              void bridge.command(run.id, "pause").catch(error);
-            }}
-          >
-            <Pause size={13} />
-          </button>
-        )}
-        {["paused", "interrupted"].includes(run.state) && (
-          <button
-            onClick={(e) => {
-              e.preventDefault();
-              void bridge.command(run.id, "resume").catch(error);
-            }}
-          >
-            <Play size={13} />
-            {tr("继续")}
-          </button>
-        )}
-        {!["completed", "cancelled"].includes(run.state) && (
-          <button
-            onClick={(e) => {
-              e.preventDefault();
-              void bridge.command(run.id, "cancel").catch(error);
-            }}
-          >
-            <Square size={12} />
-          </button>
-        )}
-      </summary>
-      <div className="fs-run-steps">
-        {run.steps.map((step) => (
-          <button key={step.id} onClick={() => select(step.nodeId)}>
-            <span className={"fs-status " + step.state}>
-              <i />
-              {tr(statuses[step.state])}
-            </span>
-            <b>{run.graph.nodes.find((n) => n.id === step.nodeId)?.title}</b>
-            <small>
-              {tr("第")}
-              {step.iteration} {tr("轮")}
-            </small>
-            {step.error && <p>{step.error}</p>}
-          </button>
-        ))}
-        {run.notes.map((note, i) => (
-          <p key={i}>{note}</p>
-        ))}
-      </div>
-    </details>
-  );
-}
-function Modal({
-  title,
-  close,
-  children,
-}: {
-  title: string;
-  close: () => void;
-  children: ReactNode;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement;
-    ref.current?.querySelector<HTMLElement>("button")?.focus();
-    return () => previous?.focus();
-  }, []);
-  return (
-    <div className="fs-modal-backdrop" onClick={close}>
+              </div>
+              <div className="help-legend">
+                <svg viewBox="0 0 64 16">
+                  <path
+                    d="M2 8H62"
+                    stroke="var(--text-2)"
+                    strokeWidth="2.8"
+                  />
+                </svg>
+                <b>{t("legendContinuation")}</b>
+                <svg viewBox="0 0 64 16">
+                  <path
+                    d="M2 8H62"
+                    stroke="var(--accent)"
+                    strokeWidth="1.6"
+                    strokeDasharray="5 4"
+                  />
+                </svg>
+                <b>{t("legendReference")}</b>
+                <svg viewBox="0 0 64 16">
+                  <path
+                    d="M2 8C20 1 44 1 62 8"
+                    stroke="var(--m-f)"
+                    strokeWidth="1.5"
+                  />
+                  <path
+                    d="M2 8C20 15 44 15 62 8"
+                    stroke="var(--m-b)"
+                    strokeWidth="1.5"
+                  />
+                </svg>
+                <b>{t("legendExchange")}</b>
+                <svg viewBox="0 0 64 16">
+                  <path
+                    d="M2 8H62"
+                    stroke="var(--k-display)"
+                    strokeWidth="1.4"
+                    strokeDasharray="1.5 4"
+                  />
+                </svg>
+                <b>{t("legendDisplay")}</b>
+              </div>
+            </div>
+            <footer className="dialog-footer">
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={() => setHelpModal(false)}
+              >
+                <span>{t("close")}</span>
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+
+      {/* Hidden File Input for JSON Import */}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept="application/json,.json"
+        hidden
+        onChange={(ev) => {
+          const f = ev.target.files?.[0];
+          if (f) void handleImportFile(f);
+          ev.target.value = "";
+        }}
+      />
+
+      {/* Toast */}
       <div
-        ref={ref}
-        className="fs-modal"
+        role="status"
+        aria-live="polite"
+        className={`fs-toast ${toastState.visible ? "visible" : ""} ${toastState.error ? "is-error" : ""}`}
+      >
+        {toastState.text}
+      </div>
+    </div>
+  );
+}
+
+function dictRoleLabel(role: string): string {
+  const key = `role_${role}`;
+  const val = t(key);
+  return val === key ? role : val;
+}
+
+function FormDialog({
+  dialogRef,
+  modal,
+  onClose,
+}: {
+  dialogRef: React.RefObject<HTMLDivElement>;
+  modal: {
+    title: string;
+    description?: string;
+    initialValue: string;
+    secondaryLabel?: string;
+    secondaryInitial?: string;
+    onSubmit: (val: string, secondary?: string) => void;
+  };
+  onClose: () => void;
+}) {
+  const [val, setVal] = useState(modal.initialValue);
+  const [sec, setSec] = useState(modal.secondaryInitial ?? "");
+  return (
+    <div className="fs-dialog-host" onClick={onClose}>
+      <section
+        ref={dialogRef}
+        className="dialog"
         role="dialog"
         aria-modal="true"
-        aria-label={title}
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") close();
-          if (e.key === "Tab") {
-            const items = Array.from(
-              ref.current!.querySelectorAll<HTMLElement>(
-                'button:not(:disabled),input,select,textarea,[tabindex="0"]',
-              ),
-            );
-            if (e.shiftKey && document.activeElement === items[0]) {
-              e.preventDefault();
-              items.at(-1)?.focus();
-            } else if (!e.shiftKey && document.activeElement === items.at(-1)) {
-              e.preventDefault();
-              items[0]?.focus();
-            }
-          }
-        }}
+        onClick={(ev) => ev.stopPropagation()}
       >
-        <header>
-          <h2>{title}</h2>
-          <button onClick={close} aria-label={tr("关闭")}>
-            <X size={18} />
+        <header className="dialog-header">
+          <div>
+            <h2>{modal.title}</h2>
+            {modal.description && <p>{modal.description}</p>}
+          </div>
+          <button type="button" className="icon-button" onClick={onClose}>
+            <Icon name="x" />
           </button>
         </header>
-        <div className="fs-modal-body">{children}</div>
-      </div>
+        <form
+          onSubmit={(ev) => {
+            ev.preventDefault();
+            if (!val.trim()) return;
+            modal.onSubmit(val.trim(), sec.trim());
+            onClose();
+          }}
+        >
+          <div className="dialog-body">
+            <label className="field-label">{t("name")}</label>
+            <input
+              autoFocus
+              required
+              className="text-field"
+              value={val}
+              onChange={(ev) => setVal(ev.target.value)}
+            />
+            {modal.secondaryLabel && (
+              <>
+                <label className="field-label">{modal.secondaryLabel}</label>
+                <textarea
+                  className="text-field"
+                  rows={3}
+                  value={sec}
+                  onChange={(ev) => setSec(ev.target.value)}
+                />
+              </>
+            )}
+          </div>
+          <footer className="dialog-footer">
+            <button type="button" className="button" onClick={onClose}>
+              <span>{t("cancel")}</span>
+            </button>
+            <button
+              type="submit"
+              className="button button-primary"
+              disabled={!val.trim()}
+            >
+              <span>{t("save")}</span>
+            </button>
+          </footer>
+        </form>
+      </section>
     </div>
   );
 }

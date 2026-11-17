@@ -1,0 +1,1523 @@
+/* ============================================================
+   FlowSpace · Full Surfaces (Workflows Library, Activity Run Cards, Settings),
+   Menus, Dialogs, Command/@ Palette, Responsive & Reduced Motion
+   Migrated from omp-studio agent-canvas prototype (surfaces.css)
+   ============================================================ */
+
+.fs-root .fs-surface {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  overflow-y: auto;
+  z-index: 16;
+}
+.fs-root .fs-surface::before {
+  content: "";
+  position: sticky;
+  display: block;
+  top: 0;
+  height: 0;
+  pointer-events: none;
+  box-shadow:
+    220px 60px 260px 120px var(--aurora-a),
+    680px 40px 240px 100px var(--aurora-b);
+}
+.fs-root .surface-page {
+  position: relative;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 40px 40px 70px;
+  --enter-x: var(--shift-lg);
+  animation: omp-enter var(--dur-slower) var(--ease-nav) backwards;
+}
+.fs-root .surface-page-header {
+  margin-bottom: 24px;
+}
+.fs-root .surface-page-header h1 {
+  font: 650 30px/1.2 var(--font-display);
+  letter-spacing: -0.8px;
+  margin: 10px 0 10px;
+  background: linear-gradient(
+    100deg,
+    var(--text) 30%,
+    color-mix(in srgb, var(--text) 50%, var(--accent))
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.fs-root .surface-page-header p {
+  font-size: 13.5px;
+  color: var(--text-3);
+  margin: 0;
+  max-width: 600px;
+  line-height: 1.7;
+}
+.fs-root .surface-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  margin-bottom: 18px;
+  border-radius: 11px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.fs-root .surface-tabs button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.fs-root .surface-tabs button:hover {
+  color: var(--text);
+}
+.fs-root .surface-tabs button[aria-selected="true"],
+.fs-root .surface-tabs button.selected {
+  color: var(--text);
+  font-weight: 600;
+  background: var(--surface);
+  box-shadow:
+    0 0 0 1px var(--border-strong),
+    0 2px 6px var(--shadow);
+}
+.fs-root .surface-tabs button > span {
+  font: 600 10px var(--font-mono);
+  color: var(--text-faint);
+  padding: 0 6px;
+  border-radius: var(--r-full);
+  background: var(--surface-3);
+}
+.fs-root .surface-empty {
+  text-align: center;
+  padding: 56px 20px;
+  color: var(--text-3);
+  grid-column: 1 / -1;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--r-10);
+}
+.fs-root .surface-empty > .ic {
+  width: 26px;
+  height: 26px;
+  padding: 9px;
+  box-sizing: content-box;
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--glyph);
+}
+.fs-root .surface-empty h3 {
+  font-size: 15px;
+  color: var(--text);
+  font-weight: 600;
+  margin: 14px 0 6px;
+}
+.fs-root .surface-empty p {
+  font-size: 12.5px;
+  margin: 0 0 18px;
+}
+
+/* ---------- Workflow Library & Snapshot MiniGraph Cards ---------- */
+.fs-root .template-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+.fs-root .template-card,
+.fs-root .snapshot-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-10);
+  background: var(--surface);
+  overflow: hidden;
+  animation: var(--motion-reveal);
+  animation-delay: calc(var(--i, 0) * var(--stagger));
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    translate var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease);
+}
+.fs-root .template-card:hover,
+.fs-root .snapshot-card:hover {
+  border-color: var(--accent-border);
+  translate: 0 -3px;
+  box-shadow:
+    0 22px 40px -22px color-mix(in srgb, var(--accent) calc(70% * var(--glow)), transparent),
+    0 8px 18px -10px var(--shadow);
+}
+.fs-root .template-graph {
+  height: 132px;
+  border-bottom: 1px solid var(--border);
+  background-color: var(--canvas);
+  background-image: radial-gradient(
+    rgb(var(--grid-rgb) / 0.14) 1px,
+    transparent 1.3px
+  );
+  background-size: 14px 14px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.fs-root .mini-graph {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.fs-root .mg-node {
+  fill: var(--surface);
+  stroke: var(--border-float);
+  stroke-width: 1.2;
+}
+.fs-root .mg-node.mg-agent {
+  stroke: var(--accent);
+  stroke-dasharray: 3 2.4;
+}
+.fs-root .mg-node.mg-done,
+.fs-root .mg-node.mg-running {
+  stroke: var(--green);
+  stroke-dasharray: none;
+}
+.fs-root .mg-node.mg-waiting,
+.fs-root .mg-node.mg-paused {
+  stroke: var(--amber);
+  stroke-dasharray: none;
+}
+.fs-root .mg-node.mg-other {
+  stroke: var(--glyph);
+}
+.fs-root .mg-dot {
+  fill: var(--accent);
+}
+.fs-root .mg-dot.mg-done,
+.fs-root .mg-dot.mg-running {
+  fill: var(--green);
+}
+.fs-root .mg-dot.mg-waiting {
+  fill: var(--amber);
+}
+.fs-root .mg-dot.mg-other {
+  fill: var(--glyph);
+}
+.fs-root .mg-bar {
+  fill: var(--surface-3);
+}
+.fs-root .mg-flow {
+  fill: none;
+  stroke: var(--text-3);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+.fs-root .mg-flow.mg-confirm {
+  stroke-dasharray: 6 4;
+}
+.fs-root .mg-ref {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.1;
+  stroke-dasharray: 3 3;
+  stroke-linecap: round;
+  opacity: 0.8;
+}
+.fs-root .template-card:hover .mg-flow {
+  stroke: var(--accent);
+  stroke-dasharray: 6 6;
+  animation: cv-flow var(--loop-spin) linear infinite;
+}
+.fs-root .template-text {
+  flex: 1;
+  min-width: 0;
+  padding: 14px 16px 4px;
+}
+.fs-root .template-text h3 {
+  font: 600 15px/1.35 var(--font-display);
+  margin: 0 0 5px;
+}
+.fs-root .template-text p {
+  font-size: 12.5px;
+  color: var(--text-3);
+  margin: 0;
+  line-height: 1.65;
+}
+.fs-root .template-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 10px;
+}
+.fs-root .template-meta span {
+  font-size: 10.5px;
+  color: var(--text-3);
+  padding: 1px 8px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+}
+.fs-root .template-meta span.warn {
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+.fs-root .template-meta span.bad {
+  color: var(--red);
+  background: var(--red-soft);
+}
+.fs-root .template-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 16px 16px;
+}
+.fs-root .template-actions .button {
+  flex: 1;
+}
+.fs-root .snapshot-recent {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.7;
+}
+.fs-root .snapshot-recent li {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fs-root .snapshot-recent .ic {
+  width: 11px;
+  height: 11px;
+  color: var(--accent);
+  flex: none;
+}
+
+/* ---------- Activity Overview: One Launch, One Card ---------- */
+.fs-root .activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.fs-root .run-card {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-10);
+  background: var(--surface);
+  overflow: hidden;
+  --rc: var(--text-3);
+  animation: var(--motion-reveal);
+  animation-delay: calc(var(--i, 0) * var(--stagger));
+}
+.fs-root .run-card.run-running {
+  --rc: var(--green);
+  border-color: color-mix(in srgb, var(--green) 40%, var(--border-strong));
+  box-shadow: 0 0 34px -14px color-mix(in srgb, var(--green) calc(70% * var(--glow)), transparent);
+}
+.fs-root .run-card.run-waiting,
+.fs-root .run-card.run-paused {
+  --rc: var(--amber);
+  border-color: var(--amber);
+}
+.fs-root .run-card.run-completed,
+.fs-root .run-card.run-done {
+  --rc: var(--green);
+}
+.fs-root .run-card.run-error,
+.fs-root .run-card.run-cancelled,
+.fs-root .run-card.run-interrupted {
+  --rc: var(--red);
+}
+.fs-root .run-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+}
+.fs-root .run-ring {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  rotate: -90deg;
+}
+.fs-root .run-ring circle {
+  fill: none;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+}
+.fs-root .run-ring .ring-track {
+  stroke: var(--surface-3);
+}
+.fs-root .run-ring .ring-value {
+  stroke: var(--rc);
+  transition: stroke-dashoffset var(--dur-hero) var(--ease-out);
+  filter: drop-shadow(0 0 3px var(--rc));
+}
+.fs-root .run-ring-wrap {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+.fs-root .run-ring-wrap > b {
+  position: absolute;
+  font: 700 11px var(--font-mono);
+  color: var(--rc);
+}
+.fs-root .run-head-title {
+  flex: 1;
+  min-width: 0;
+}
+.fs-root .run-head h3 {
+  font: 600 15px/1.35 var(--font-display);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fs-root .run-head p {
+  margin: 3px 0 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.fs-root .run-head time {
+  font: 11px var(--font-mono);
+  color: var(--text-faint);
+}
+.fs-root .run-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.fs-root .run-steps {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 0 16px 14px;
+  overflow-x: auto;
+}
+.fs-root .run-step {
+  position: relative;
+  flex: 1;
+  min-width: 120px;
+  padding: 9px 12px 9px 0;
+  text-align: left;
+  --sc: var(--glyph);
+}
+.fs-root .run-step::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  right: 0;
+  top: 14px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--surface-3);
+}
+.fs-root .run-step:last-child::before {
+  display: none;
+}
+.fs-root .run-step > i {
+  position: relative;
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--sc);
+  margin-bottom: 8px;
+  z-index: 1;
+}
+.fs-root .run-step > b {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fs-root .run-step > small {
+  display: block;
+  font-size: 11px;
+  color: var(--sc);
+  margin-top: 1px;
+}
+.fs-root .run-step:hover > b {
+  color: var(--accent);
+}
+.fs-root .step-completed,
+.fs-root .step-done {
+  --sc: var(--green);
+}
+.fs-root .step-completed > i,
+.fs-root .step-done > i {
+  background: var(--green);
+}
+.fs-root .step-completed::before,
+.fs-root .step-done::before {
+  background: var(--green);
+}
+.fs-root .step-running {
+  --sc: var(--green);
+}
+.fs-root .step-running > i {
+  animation: omp-pulse var(--loop-pulse) var(--ease-loop) infinite;
+  box-shadow: 0 0 0 4px var(--green-soft);
+}
+.fs-root .step-running::before {
+  background: linear-gradient(90deg, var(--green), var(--surface-3)) 0 0 / 200%
+    100%;
+  animation: cv-shimmer 2s linear infinite;
+}
+.fs-root .step-waiting {
+  --sc: var(--amber);
+}
+.fs-root .step-waiting > i {
+  box-shadow: 0 0 0 4px var(--amber-soft);
+}
+.fs-root .step-queued {
+  --sc: var(--accent);
+}
+.fs-root .step-error,
+.fs-root .step-aborted,
+.fs-root .step-interrupted,
+.fs-root .step-stopped {
+  --sc: var(--red);
+}
+.fs-root .step-error > i,
+.fs-root .step-aborted > i,
+.fs-root .step-interrupted > i {
+  background: var(--red);
+}
+.fs-root .step-pending > small {
+  color: var(--text-faint);
+}
+.fs-root .run-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.fs-root .run-blocker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 220px;
+  font-size: 12px;
+  color: var(--amber);
+}
+.fs-root .run-blocker .ic {
+  width: 13px;
+  height: 13px;
+}
+.fs-root .run-blocker .button {
+  min-height: 26px;
+  font-size: 11.5px;
+  margin-left: 4px;
+}
+.fs-root .run-next {
+  flex: 1;
+  min-width: 160px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.fs-root .run-timeline {
+  border-top: 1px solid var(--border);
+}
+.fs-root .run-timeline > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 16px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  cursor: pointer;
+  list-style: none;
+}
+.fs-root .run-timeline > summary::-webkit-details-marker {
+  display: none;
+}
+.fs-root .run-timeline > summary:hover {
+  color: var(--text);
+}
+.fs-root .run-timeline > summary .ic {
+  width: 11px;
+  height: 11px;
+  transition: rotate var(--dur) var(--ease-out);
+}
+.fs-root .run-timeline[open] > summary .ic {
+  rotate: 90deg;
+}
+.fs-root .run-timeline > div {
+  padding: 0 16px 10px;
+}
+.fs-root .event-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 38px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.fs-root .event-row:last-child {
+  border-bottom: 0;
+}
+.fs-root .event-dot {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: var(--text-faint);
+  background: var(--surface-2);
+  flex: none;
+}
+.fs-root .event-dot .ic {
+  width: 11px;
+  height: 11px;
+}
+.fs-root .event-row > div {
+  flex: 1;
+  min-width: 0;
+}
+.fs-root .event-row b {
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.fs-root .event-row time {
+  font: 10.5px var(--font-mono);
+  color: var(--text-faint);
+  padding-top: 3px;
+}
+.fs-root .event-agent {
+  display: inline-block;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  margin-left: 6px;
+}
+.fs-root .event-agent:hover {
+  color: var(--accent);
+}
+.fs-root .event-row p {
+  margin: 3px 0 0;
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.55;
+}
+.fs-root .event-completed .event-dot {
+  color: var(--green);
+  background: var(--green-soft);
+}
+.fs-root .event-waiting .event-dot,
+.fs-root .event-queued .event-dot {
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+.fs-root .event-error .event-dot,
+.fs-root .event-aborted .event-dot,
+.fs-root .event-interrupted .event-dot {
+  color: var(--red);
+  background: var(--red-soft);
+}
+.fs-root .event-running .event-dot {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.fs-root .artifact-row,
+.fs-root .queue-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-8);
+  background: var(--surface);
+  animation: var(--motion-reveal);
+}
+.fs-root .artifact-row > .ic,
+.fs-root .queue-row > .ic {
+  color: var(--accent);
+  width: 18px;
+  height: 18px;
+}
+.fs-root .queue-row > .ic {
+  color: var(--amber);
+}
+.fs-root .artifact-row > div,
+.fs-root .queue-row > div {
+  flex: 1;
+  min-width: 0;
+}
+.fs-root .artifact-row b,
+.fs-root .queue-row b {
+  font-size: 13px;
+  font-weight: 600;
+}
+.fs-root .artifact-row small,
+.fs-root .queue-row p {
+  display: block;
+  color: var(--text-3);
+  font-size: 12px;
+  margin: 3px 0 0;
+  line-height: 1.5;
+}
+
+/* ---------- Settings Surface ---------- */
+.fs-root .settings-page {
+  max-width: 760px;
+}
+.fs-root .settings-section {
+  margin: 0 0 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-10);
+  background: var(--surface);
+  padding: 6px 18px;
+  animation: var(--motion-reveal);
+}
+.fs-root .settings-section h2 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  margin: 12px 0 2px;
+  text-transform: uppercase;
+}
+.fs-root .setting-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  justify-content: space-between;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border);
+}
+.fs-root .setting-row:last-child {
+  border-bottom: 0;
+}
+.fs-root .setting-row b {
+  font-size: 13px;
+  font-weight: 500;
+}
+.fs-root .setting-row p {
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.6;
+  max-width: 440px;
+  margin: 3px 0 0;
+}
+.fs-root .setting-row .choice-buttons {
+  min-width: 196px;
+}
+
+/* ---------- Floating Context & Dropdown Menu ---------- */
+.fs-root .fs-menu {
+  position: fixed;
+  z-index: 95;
+  min-width: 220px;
+  max-width: 330px;
+  max-height: calc(100svh - 24px);
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  background: var(--glass);
+  backdrop-filter: blur(20px) saturate(1.6);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  box-shadow: var(--float-shadow);
+  animation: var(--motion-pop);
+}
+.fs-root .fs-menu > button {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: 8px;
+  text-align: left;
+  color: var(--text);
+  font-size: 12.5px;
+  animation: var(--motion-fade);
+}
+.fs-root .fs-menu > button:not(:disabled):hover,
+.fs-root .fs-menu > button:focus-visible {
+  background: var(--accent-soft);
+  outline: none;
+}
+.fs-root .fs-menu > button > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+.fs-root .fs-menu .menu-icon {
+  width: 15px;
+  color: var(--text-3);
+  margin-top: 1px;
+}
+.fs-root .fs-menu > button:not(:disabled):hover .menu-icon {
+  color: var(--accent);
+}
+.fs-root .fs-menu .ic {
+  width: 14px;
+  height: 14px;
+}
+.fs-root .fs-menu > button > .ic {
+  color: var(--accent);
+}
+.fs-root .fs-menu small {
+  display: block;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.5;
+  margin-top: 2px;
+}
+.fs-root .fs-menu > small {
+  padding: 6px 9px 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+.fs-root .fs-menu hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 4px 2px;
+}
+
+/* ---------- Modal Dialogs ---------- */
+.fs-root .fs-dialog-host {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--canvas) 58%, transparent);
+  padding: 24px;
+  backdrop-filter: blur(8px) saturate(1.2);
+  -webkit-backdrop-filter: blur(8px) saturate(1.2);
+  animation: var(--motion-fade);
+}
+.fs-root .dialog {
+  position: relative;
+  width: min(560px, 100%);
+  max-height: calc(100svh - 70px);
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  box-shadow:
+    0 40px 100px -20px var(--shadow),
+    0 0 0 1px var(--border),
+    0 0 80px -30px color-mix(in srgb, var(--accent) calc(70% * var(--glow)), transparent);
+  animation: var(--motion-sheet);
+  overflow: hidden;
+}
+.fs-root .dialog::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent),
+    var(--accent-2),
+    transparent
+  );
+  opacity: 0.8;
+}
+.fs-root .dialog-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 22px 22px 14px;
+}
+.fs-root .dialog-header > div {
+  flex: 1;
+  min-width: 0;
+}
+.fs-root .dialog-header h2 {
+  font: 650 18px/1.3 var(--font-display);
+  letter-spacing: -0.3px;
+  margin: 0;
+  outline: none;
+}
+.fs-root .dialog-header p {
+  font-size: 12.5px;
+  color: var(--text-3);
+  margin: 6px 0 0;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.fs-root .dialog-header > .icon-button {
+  width: 26px;
+  height: 26px;
+  margin: -4px -6px 0 0;
+}
+.fs-root .dialog-header .ic {
+  width: 13px;
+  height: 13px;
+}
+.fs-root .dialog-body {
+  padding: 0 22px 20px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.fs-root .dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 22px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.fs-root .dialog-footer .button {
+  min-height: 32px;
+  padding: 0 16px;
+}
+
+/* 4-Bucket Launch Preview Dialog */
+.fs-root .launch-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 2px 0 14px;
+}
+.fs-root .launch-stat {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  --lc: var(--text-3);
+}
+.fs-root .launch-stat b {
+  display: block;
+  font: 650 22px/1.1 var(--font-display);
+  color: var(--lc);
+  font-variant-numeric: tabular-nums;
+}
+.fs-root .launch-stat span {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.fs-root .launch-stat.now {
+  --lc: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-softer);
+}
+.fs-root .launch-stat.next {
+  --lc: var(--text);
+}
+.fs-root .launch-stat.confirm {
+  --lc: var(--amber);
+}
+.fs-root .launch-section > h4 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 12px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+.fs-root .launch-section > h4::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.fs-root .launch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.fs-root label.launch-row:hover {
+  background: var(--hover);
+}
+.fs-root .launch-row input {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  border: 1.5px solid var(--glyph);
+  display: grid;
+  place-items: center;
+  flex: none;
+  margin: 0;
+  cursor: pointer;
+}
+.fs-root .launch-row input:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.fs-root .launch-row input:checked::after {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border-left: 2px solid var(--on-accent);
+  border-bottom: 2px solid var(--on-accent);
+  rotate: -45deg;
+  translate: 0 -1px;
+}
+.fs-root .launch-row:has(input:not(:checked)) b {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+.fs-root .launch-row > div {
+  flex: 1;
+  min-width: 0;
+}
+.fs-root .launch-row b {
+  font-size: 13px;
+  font-weight: 600;
+}
+.fs-root .launch-row small {
+  display: block;
+  color: var(--text-faint);
+  font-size: 11px;
+  margin-top: 1px;
+}
+.fs-root .launch-row > span:last-child {
+  font-size: 11px;
+  color: var(--text-faint);
+  flex: none;
+}
+.fs-root .launch-row .node-avatar {
+  --kc: var(--accent);
+  width: 26px;
+  height: 26px;
+}
+.fs-root .launch-row.is-follow {
+  cursor: default;
+  padding-left: 14px;
+}
+.fs-root .launch-row.is-follow .node-avatar {
+  --kc: var(--text-3);
+  width: 22px;
+  height: 22px;
+}
+.fs-root .launch-row.is-confirm .node-avatar {
+  --kc: var(--amber);
+}
+.fs-root .launch-row.is-none {
+  opacity: 0.72;
+}
+.fs-root .launch-skipped > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 12px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  cursor: pointer;
+  list-style: none;
+}
+.fs-root .launch-skipped > summary::-webkit-details-marker {
+  display: none;
+}
+.fs-root .launch-skipped > summary::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.fs-root .launch-skipped > summary .ic {
+  width: 11px;
+  height: 11px;
+  transition: rotate var(--dur) var(--ease-out);
+}
+.fs-root .launch-skipped[open] > summary .ic {
+  rotate: 90deg;
+}
+
+/* Command & @ Mention Palette */
+.fs-root .command-dialog {
+  width: min(620px, 100%);
+  align-self: start;
+  margin-top: 10vh;
+  background: var(--glass);
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+}
+.fs-root .command-dialog .dialog-body {
+  padding: 0;
+}
+.fs-root .command-input {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.fs-root .command-input .ic {
+  color: var(--accent);
+  width: 18px;
+  height: 18px;
+}
+.fs-root .command-input input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  font-size: 15.5px;
+  min-height: 28px;
+  caret-color: var(--accent);
+}
+.fs-root .command-results {
+  overflow-y: auto;
+  max-height: min(410px, calc(100svh - 280px));
+  padding: 6px;
+}
+.fs-root .command-result {
+  width: 100%;
+  display: flex;
+  gap: 11px;
+  align-items: center;
+  min-height: 42px;
+  padding: 7px 12px;
+  text-align: left;
+  border-radius: 10px;
+}
+.fs-root .command-result.active,
+.fs-root .command-result:hover {
+  background: var(--accent-soft);
+}
+.fs-root .command-result.active {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.fs-root .command-result > div {
+  flex: 1;
+  min-width: 0;
+}
+.fs-root .command-result b {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  display: block;
+}
+.fs-root .command-result small {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  display: block;
+  margin-top: 1px;
+}
+.fs-root .command-result > span:last-of-type {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.fs-root .command-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+  color: var(--text-3);
+  flex: none;
+}
+.fs-root .command-result.active .command-icon {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.fs-root .command-icon .ic {
+  width: 14px;
+  height: 14px;
+}
+.fs-root .command-hint {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 10px 18px;
+  border-top: 1px solid var(--border);
+}
+.fs-root .command-hint > span {
+  margin-right: 12px;
+}
+.fs-root .command-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+/* File Preview, Template Preview, Sync Diff, Help Legend & Exchanges */
+.fs-root .file-dialog {
+  width: min(760px, 100%);
+}
+.fs-root .file-dialog .dialog-body {
+  padding: 0;
+}
+.fs-root .code-toolbar {
+  padding: 8px 22px;
+  color: var(--text-faint);
+  font: 11px var(--font-mono);
+  display: flex;
+  gap: 18px;
+  border-block: 1px solid var(--border);
+}
+.fs-root .code-view {
+  padding: 10px 0;
+  overflow: auto;
+  background: var(--code-bg);
+}
+.fs-root .code-line {
+  display: flex;
+  min-height: 22px;
+  font-size: 12px;
+  white-space: pre;
+  line-height: 1.85;
+}
+.fs-root .code-line:hover {
+  background: var(--hover);
+}
+.fs-root .code-line code {
+  padding: 0 14px;
+  flex: 1;
+  white-space: pre;
+}
+.fs-root .line-number {
+  width: 46px;
+  flex: none;
+  text-align: right;
+  color: var(--glyph);
+  font: 11px/2 var(--font-mono);
+  user-select: none;
+}
+.fs-root .template-preview-graph {
+  height: 150px;
+  margin: 0 0 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.fs-root .template-preview-list > div {
+  display: flex;
+  gap: 11px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.fs-root .template-preview-list > div > .ic {
+  margin-top: 2px;
+  color: var(--accent);
+}
+.fs-root .template-preview-list b {
+  font-size: 13px;
+  font-weight: 600;
+}
+.fs-root .template-preview-list p {
+  margin: 3px 0 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.fs-root .merge-port-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+.fs-root .merge-port-list label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.fs-root .merge-port-list input {
+  accent-color: var(--accent);
+}
+.fs-root .sync-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 0;
+}
+.fs-root .sync-diff > div {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 12.5px;
+}
+.fs-root .sync-diff > div .ic {
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+  flex: none;
+}
+.fs-root .sync-diff small {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 11px;
+  flex: none;
+}
+.fs-root .shortcut-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 22px;
+}
+.fs-root .shortcut-list > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.fs-root .help-legend {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px 14px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.fs-root .help-legend svg {
+  width: 64px;
+  height: 16px;
+  overflow: visible;
+}
+.fs-root .help-legend path {
+  fill: none;
+  stroke-linecap: round;
+}
+.fs-root .help-legend b {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-2);
+}
+.fs-root .exchange-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fs-root .exchange-message {
+  --c: var(--m-f);
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--c) 28%, transparent);
+  background: color-mix(in srgb, var(--c) 8%, var(--surface));
+}
+.fs-root .exchange-message > header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--c);
+}
+.fs-root .exchange-message > header time {
+  margin-left: auto;
+  color: var(--text-faint);
+  font: 10.5px var(--font-mono);
+}
+.fs-root .exchange-message > p {
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin: 4px 0 6px;
+  user-select: text;
+}
+
+.fs-root .fs-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fs-root .fs-session-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  text-align: left;
+}
+.fs-root .fs-session-pick:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-softer);
+}
+.fs-root .fs-session-pick > div {
+  flex: 1;
+  min-width: 0;
+}
+.fs-root .fs-session-pick b {
+  display: block;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-root .fs-session-pick small {
+  display: block;
+  color: var(--text-faint);
+  font: 11px var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Toast Notification */
+.fs-root .fs-toast {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  translate: -50% var(--shift-md);
+  padding: 9px 16px;
+  border-radius: var(--r-full);
+  background: var(--text);
+  color: var(--bg);
+  font-size: 12.5px;
+  font-weight: 500;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 150;
+  box-shadow: 0 14px 34px -10px var(--shadow);
+  transition:
+    opacity var(--dur) var(--ease),
+    translate var(--dur-slower) var(--ease-spring);
+  max-width: min(560px, 88vw);
+}
+.fs-root .fs-toast.is-error {
+  background: var(--red);
+  color: #fff;
+}
+.fs-root .fs-toast.visible {
+  opacity: 1;
+  translate: -50% 0;
+  pointer-events: auto;
+}
+
+/* ---------- Container & Viewport Responsive Rules ---------- */
+@container flowspace (max-width: 1060px) {
+  .fs-root .canvas-hint,
+  .fs-root .header-save > span,
+  .fs-root .toolbar-search > span,
+  .fs-root .toolbar-actions > kbd,
+  .fs-root .workspace-breadcrumb > span,
+  .fs-root .workspace-breadcrumb > i {
+    display: none;
+  }
+  .fs-root .canvas-title {
+    max-width: 190px;
+  }
+  .fs-root .surface-page {
+    padding: 30px 24px 50px;
+  }
+}
+
+@container flowspace (max-width: 860px) {
+  .fs-root .workspace-chip > span,
+  .fs-root .waiting-button > span,
+  .fs-root .toolbar-button > span,
+  .fs-root .route-nav button > span:not(.route-badge) {
+    display: none;
+  }
+  .fs-root .fs-inspector.open {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    width: 276px;
+    box-shadow: -20px 0 50px var(--shadow);
+  }
+  .fs-root .inspector-content,
+  .fs-root .inspector-header,
+  .fs-root .inspector-empty {
+    width: 275px;
+  }
+  .fs-root .launch-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .fs-root .shortcut-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+@container flowspace (max-width: 700px) {
+  .fs-root .fs-side {
+    position: absolute;
+    left: 0;
+    top: 46px;
+    bottom: 0;
+    width: 224px;
+    z-index: 60;
+    background: var(--surface);
+    transform: translateX(-105%);
+    visibility: hidden;
+    pointer-events: none;
+    transition:
+      transform var(--dur-slow) var(--ease-nav),
+      visibility var(--dur-slow) var(--ease);
+  }
+  .fs-root .fs-side.mobile-open {
+    width: 224px;
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+    border-right: 1px solid var(--border-strong);
+    box-shadow: 20px 0 50px var(--shadow);
+  }
+  .fs-root .canvas-title {
+    display: none;
+  }
+}
+
+/* ---------- View Transition Theme Reveal ---------- */
+:root[data-theme-transition]::view-transition-old(root) {
+  animation: none;
+  z-index: 0;
+}
+:root[data-theme-transition]::view-transition-new(root) {
+  animation: cv-reveal 480ms cubic-bezier(0.16, 0.84, 0.44, 1);
+  z-index: 1;
+  mix-blend-mode: normal;
+}
+:root[data-theme-transition] * {
+  transition-duration: 0s !important;
+}
+
+/* ---------- Reduced Motion (L1) ---------- */
+.fs-root[data-perf-tier="L1"] *,
+.fs-root[data-perf-tier="L1"] *::before,
+.fs-root[data-perf-tier="L1"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  animation-delay: 0s !important;
+  transition-duration: 0s !important;
+}
+.fs-root[data-perf-tier="L1"] .edge-flow,
+.fs-root[data-perf-tier="L1"] .progress-line i::after,
+.fs-root[data-perf-tier="L1"] .status > i::after,
+.fs-root[data-perf-tier="L1"] .status-dot::after,
+.fs-root[data-perf-tier="L1"] .fs-canvas-area::before,
+.fs-root[data-perf-tier="L1"] .fs-viewport::before,
+.fs-root[data-perf-tier="L1"] .node::after,
+.fs-root[data-perf-tier="L1"] .node.status-running::before {
+  display: none !important;
+}

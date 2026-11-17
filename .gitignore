@@ -1,5 +1,7 @@
 node_modules/
 **/lib/
+!packages/flowspace/lib/
+!packages/flowspace/lib/**
 .local/
 .backups/
 artifacts/

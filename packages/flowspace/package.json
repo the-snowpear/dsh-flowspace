@@ -1,7 +1,13 @@
 {
   "name": "dsh-flowspace",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Persistent agent canvas and visual workflows for DeepSeek Harness",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/the-snowpear/dsh-flowspace.git",
+    "directory": "packages/flowspace"
+  },
+  "homepage": "https://github.com/the-snowpear/dsh-flowspace#readme",
   "type": "module",
   "license": "MIT",
   "main": "./lib/index.js",

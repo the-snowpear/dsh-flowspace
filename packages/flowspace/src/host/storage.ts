@@ -2,9 +2,46 @@ import { z } from "zod";
 import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
 import type { FlowspaceDocument, FlowspaceRun } from "../types.ts";
 
+const groupPort = z.object({
+  id: z.string(),
+  kind: z.enum(["reference", "continuation"]),
+  direction: z.enum(["in", "out"]),
+  name: z.string(),
+  nodes: z.array(z.string()),
+  hidden: z.boolean(),
+});
+
+const boardColumn = z.object({
+  id: z.string(),
+  name: z.string(),
+  cards: z.array(
+    z.object({
+      id: z.string(),
+      text: z.string(),
+    }),
+  ),
+});
+
+const windowState = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+  w: z.number().positive(),
+  h: z.number().positive(),
+  snap: z.enum(["left", "right", "max"]).nullable().optional(),
+  z: z.number().optional(),
+});
+
 const node = z.object({
   id: z.string(),
-  kind: z.enum(["agent", "note", "file", "display", "group"]),
+  kind: z.enum([
+    "agent",
+    "note",
+    "file",
+    "display",
+    "group",
+    "board",
+    "detail",
+  ]),
   title: z.string(),
   x: z.number().finite(),
   y: z.number().finite(),
@@ -26,7 +63,34 @@ const node = z.object({
   fixed: z.boolean(),
   collapsed: z.boolean(),
   lastSubmittedTask: z.string().optional(),
+  tab: z.enum(["task", "conversation", "execution"]).optional(),
+  pinned: z.boolean().optional(),
+  roleLabel: z.string().optional(),
+  rerun: z.enum(["change", "update", "always"]).optional(),
+  color: z.enum(["violet", "teal", "blue", "amber"]).optional(),
+  ports: z.array(groupPort).optional(),
+  templateId: z.string().optional(),
+  templateRevision: z.number().int().positive().optional(),
+  templateSlotId: z.string().optional(),
+  titleKey: z.string().optional(),
+  window: windowState.nullable().optional(),
+  columns: z.array(boardColumn).optional(),
+  items: z.array(z.string()).optional(),
+  selectedItems: z.array(z.string()).optional(),
+  nudge: z
+    .object({
+      by: z.string(),
+      origY: z.number().finite().optional(),
+      origH: z.number().positive().optional(),
+    })
+    .optional(),
 });
+
+const waypoint = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+});
+
 const edge = z.object({
   id: z.string(),
   source: z.string(),
@@ -38,7 +102,51 @@ const edge = z.object({
   always: z.boolean(),
   sentVersion: z.string().optional(),
   originMode: z.enum(["conclusion", "session", "fork"]).optional(),
+  waypoints: z.array(waypoint).optional(),
+  placedCapsules: z.array(z.string()).optional(),
 });
+
+const workflowTemplate = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  revision: z.number().int().positive(),
+  builtin: z.boolean().optional(),
+  color: z.enum(["violet", "teal", "blue", "amber"]).optional(),
+  w: z.number().positive(),
+  h: z.number().positive(),
+  nodes: z.array(node),
+  edges: z.array(edge),
+  ports: z.array(groupPort),
+});
+
+const canvasSnapshot = z.object({
+  id: z.string(),
+  title: z.string(),
+  createdAt: z.number(),
+  nodes: z.array(node),
+  edges: z.array(edge),
+  viewport: z.object({
+    x: z.number(),
+    y: z.number(),
+    zoom: z.number().positive(),
+  }),
+  summary: z
+    .object({
+      drafts: z.number(),
+      stopping: z.number(),
+      awaiting: z.number(),
+      queued: z.number(),
+      recentOutputs: z.array(
+        z.object({
+          title: z.string(),
+          snippet: z.string(),
+        }),
+      ),
+    })
+    .optional(),
+});
+
 export const documentSchema: z.ZodType<FlowspaceDocument> = z.object({
   version: z.literal(1),
   id: z.literal("main"),
@@ -54,7 +162,19 @@ export const documentSchema: z.ZodType<FlowspaceDocument> = z.object({
     nativeChatTriggers: z.boolean(),
     reducedMotion: z.boolean(),
   }),
+  prefs: z
+    .object({
+      theme: z.enum(["dark", "light", "auto"]).optional(),
+      wheel: z.enum(["zoom", "pan"]).optional(),
+      snap: z.boolean().optional(),
+      filter: z.enum(["auto", "running", "all"]).optional(),
+      hiddenWorkspaces: z.array(z.string()).optional(),
+    })
+    .optional(),
+  templates: z.array(workflowTemplate).optional(),
+  snapshots: z.array(canvasSnapshot).optional(),
 });
+
 // Run records are internal to the scheduler. The typed JSON record is not revalidated at every hop.
 export const flowspaceDomain = defineDomain({
   name: "flowspace",

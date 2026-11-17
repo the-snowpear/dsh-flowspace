@@ -13,6 +13,7 @@ import type {
   SourceRequest,
   StartRequest,
   WorkspaceBrief,
+  WorkspaceFilePreview,
 } from "../types.ts";
 import type { RemoteResult } from "@deepseek-ai/dsh-typert-protocol";
 import type {} from "../../lib/typert.remote-client.js";
@@ -31,6 +32,8 @@ export interface CanvasBridge {
   display(req: SourceRequest): Promise<FlowNode>;
   sessions(): Promise<SessionBrief[]>;
   workspaces(): Promise<WorkspaceBrief[]>;
+  workspaceFiles(cwd?: string): Promise<string[]>;
+  readWorkspaceFile(path: string, cwd?: string): Promise<WorkspaceFilePreview>;
   retain(node: FlowNode): SessionReference;
   openChat(sessionId: string): void;
   openCanvas(nodeId?: string): void;
@@ -166,6 +169,17 @@ export class FlowClient implements CanvasBridge {
   }
   async workspaces(): Promise<WorkspaceBrief[]> {
     return value(await this.ctx.remote.flowspace.workspaces());
+  }
+  async workspaceFiles(cwd?: string): Promise<string[]> {
+    return value(await this.ctx.remote.flowspace.workspaceFiles({ cwd }));
+  }
+  async readWorkspaceFile(
+    path: string,
+    cwd?: string,
+  ): Promise<WorkspaceFilePreview> {
+    return value(
+      await this.ctx.remote.flowspace.readWorkspaceFile({ path, cwd }),
+    );
   }
   retain(node: FlowNode): SessionReference {
     const reference = this.ctx.sessions.retain(node.sessionId as SessionId, {

@@ -17,7 +17,7 @@ import type {
   RunStep,
 } from "../types.ts";
 import type { RuntimeAdapter } from "../core/scheduler.ts";
-import { uid } from "../core/document.ts";
+import { uid, boardSummaryText } from "../core/document.ts";
 
 export const plainText = (blocks: readonly ContentBlock[]): string =>
   blocks
@@ -229,30 +229,53 @@ export class DshRuntime implements RuntimeAdapter {
     };
   }
   async reference(node: FlowNode): Promise<ContextSnapshot> {
-    if (node.kind === "display" && !node.fixed && node.sourceNodeId) {
+    if (
+      (node.kind === "display" || node.kind === "detail") &&
+      !node.fixed &&
+      !node.pinned &&
+      node.sourceNodeId
+    ) {
       const source = this.findNode(node.sourceNodeId);
       if (source) return this.capture(source, "conclusion");
     }
     if (node.kind === "file") {
-      const target = await this.ctx.fs.resolve(node.text, { cwd: node.cwd });
-      const info = await this.ctx.fs.stat(target);
-      if (!info) throw new Error(`文件不存在：${node.text}`);
+      const paths = (
+        node.selectedItems?.length
+          ? node.selectedItems
+          : node.text.split("\n")
+      )
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (!paths.length) throw new Error(`文件不存在：${node.text}`);
+      const resolved: string[] = [];
+      const versions: string[] = [];
+      for (const p of paths) {
+        const target = await this.ctx.fs.resolve(p, { cwd: node.cwd });
+        const info = await this.ctx.fs.stat(target);
+        if (!info) throw new Error(`文件不存在：${p}`);
+        resolved.push(target.displayPath);
+        versions.push(String(info.version));
+      }
       return {
         id: uid(),
         kind: "file",
         sourceNodeId: node.id,
         title: node.title,
-        text: `请按任务需要读取文件：${target.displayPath}`,
-        version: info.version,
+        text: `请按任务需要读取文件：${resolved.join("、")}`,
+        version: versions.length === 1 ? versions[0] : versions.join(","),
         capturedAt: Date.now(),
       };
     }
+    const text =
+      node.kind === "board" && node.columns
+        ? boardSummaryText(node.columns, node.selectedItems) || node.text
+        : node.text;
     return {
       id: uid(),
       kind: "text",
       sourceNodeId: node.id,
       title: node.title,
-      text: node.text,
+      text,
       seq: node.sourceSeq,
       capturedAt: Date.now(),
     };
