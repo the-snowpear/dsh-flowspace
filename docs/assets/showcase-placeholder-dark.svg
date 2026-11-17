@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 296" width="960" height="296" role="img" aria-label="FlowSpace Showcase Preview Slot">
+  <defs>
+    <style>
+      .sans { font-family: 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei UI', sans-serif; }
+      .mono { font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      @keyframes ghostDash {
+        to { stroke-dashoffset: -20; }
+      }
+      @keyframes plaqueBreathe {
+        0%, 100% { stroke-opacity: 0.4; }
+        50% { stroke-opacity: 0.95; }
+      }
+      .ghost-wire {
+        stroke-dasharray: 4 6;
+        animation: ghostDash 2.2s linear infinite;
+      }
+      .plaque {
+        animation: plaqueBreathe 3.2s ease-in-out infinite;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .ghost-wire, .plaque { animation: none !important; }
+      }
+    </style>
+    <pattern id="scGrid" width="20" height="20" patternUnits="userSpaceOnUse">
+      <circle cx="10" cy="10" r="0.95" fill="#252936" />
+    </pattern>
+  </defs>
+
+  <!-- Outer App Mock Silhouette -->
+  <rect x="1" y="1" width="958" height="294" rx="15" fill="#0c0e12" stroke="#2a2e3b" stroke-width="1.2" />
+  <rect x="54" y="1" width="698" height="294" fill="url(#scGrid)" />
+
+  <!-- Left DSH Sidebar Silhouette -->
+  <rect x="1" y="1" width="52" height="294" rx="15" fill="#14171f" />
+  <rect x="28" y="1" width="25" height="294" fill="#14171f" />
+  <line x1="53" y1="1" x2="53" y2="295" stroke="#2a2e3b" stroke-width="1" />
+  <rect x="14" y="22" width="24" height="24" rx="7" fill="#20232b" />
+  <rect x="14" y="58" width="24" height="24" rx="7" fill="#a899ed22" stroke="#a899ed55" stroke-width="1" />
+  <rect x="22.8" y="66.8" width="6.5" height="6.5" rx="1.8" transform="rotate(45 26 70)" fill="#a899ed" stroke="#14171f" stroke-width="1" />
+  <rect x="14" y="94" width="24" height="24" rx="7" fill="#20232b" />
+
+  <!-- Right Contextual Inspector Silhouette -->
+  <rect x="752" y="1" width="207" height="294" rx="15" fill="#17191f" />
+  <rect x="752" y="1" width="24" height="294" fill="#17191f" />
+  <line x1="752" y1="1" x2="752" y2="295" stroke="#2a2e3b" stroke-width="1" />
+  <text x="770" y="28" class="mono" font-size="10" fill="#8e93a2">INSPECTOR &#183; 检查器</text>
+  <rect x="770" y="42" width="170" height="26" rx="6" fill="#20232b" opacity="0.65" />
+  <rect x="770" y="80" width="110" height="8" rx="4" fill="#20232b" opacity="0.55" />
+  <rect x="770" y="98" width="170" height="52" rx="8" fill="#0c0e12" stroke="#222632" stroke-width="1" />
+  <rect x="770" y="166" width="170" height="26" rx="6" fill="#a899ed22" opacity="0.6" />
+  <rect x="770" y="206" width="140" height="8" rx="4" fill="#20232b" opacity="0.45" />
+  <rect x="770" y="222" width="96" height="8" rx="4" fill="#20232b" opacity="0.45" />
+
+  <!-- Background Ghost Nodes & Wires on Canvas -->
+  <g opacity="0.45">
+    <rect x="86" y="48" width="140" height="82" rx="10" fill="#17191f" stroke="#2a2e3b" stroke-width="1" />
+    <rect x="86" y="166" width="140" height="78" rx="10" fill="#17191f" stroke="#2a2e3b" stroke-width="1" />
+    <rect x="572" y="100" width="148" height="96" rx="10" fill="#17191f" stroke="#a899ed55" stroke-width="1" />
+    <path d="M 226 72 C 350 72, 430 124, 572 124" fill="none" stroke="#a899ed" stroke-width="1.8" class="ghost-wire" />
+    <path d="M 226 206 C 360 206, 430 176, 572 176" fill="none" stroke="#879bb8" stroke-width="1.6" class="ghost-wire" />
+  </g>
+
+  <!-- Center Frosted Showcase Plaque -->
+  <rect x="193" y="80" width="420" height="136" rx="14" fill="#17191f" fill-opacity="0.95" stroke="#a899ed" stroke-width="1.3" class="plaque" />
+  <rect x="334" y="98" width="138" height="22" rx="11" fill="#a899ed22" />
+  <text x="403" y="112.5" text-anchor="middle" class="mono" font-size="10" font-weight="600" fill="#a899ed">SHOWCASE SLOT</text>
+  <text x="403" y="143" text-anchor="middle" class="sans" font-size="15" font-weight="700" fill="#eeedf5">实机演示与截图预留区 &#183; Interactive Preview</text>
+  <text x="403" y="167" text-anchor="middle" class="sans" font-size="12" fill="#c4c7d4">可在此替换画布全局启动、原生对话展开及门控放行演示</text>
+  <text x="403" y="187" text-anchor="middle" class="mono" font-size="10" fill="#8e93a2">Drop-in slot for screen recording (.gif / .mp4) or screenshot</text>
+  <text x="403" y="204" text-anchor="middle" class="mono" font-size="9.5" fill="#5c6170">docs/assets/showcase-demo.gif</text>
+</svg>

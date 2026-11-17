@@ -1,0 +1,256 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 380" width="960" height="380" role="img" aria-label="FlowSpace — Persistent Agent Infinite Canvas for DeepSeek Harness">
+  <defs>
+    <style>
+      .sans { font-family: 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei UI', sans-serif; }
+      .mono { font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      @keyframes fsDash {
+        to { stroke-dashoffset: -24; }
+      }
+      @keyframes fsBreathe {
+        0%, 100% { opacity: 0.42; }
+        50% { opacity: 1; }
+      }
+      @keyframes fsCardPulse {
+        0%, 100% { stroke-opacity: 0.45; }
+        50% { stroke-opacity: 1; }
+      }
+      @keyframes fsFloat {
+        0%, 100% { transform: translateY(0px); }
+        50% { transform: translateY(-2.5px); }
+      }
+      .ref-wire {
+        stroke-dasharray: 5 5;
+        animation: fsDash 1.8s linear infinite;
+      }
+      .breathe {
+        animation: fsBreathe 2.4s ease-in-out infinite;
+      }
+      .breathe-slow {
+        animation: fsBreathe 3.4s ease-in-out infinite;
+      }
+      .running-card {
+        animation: fsCardPulse 2.4s ease-in-out infinite;
+      }
+      .float-badge {
+        animation: fsFloat 3.6s ease-in-out infinite;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .ref-wire, .breathe, .breathe-slow, .running-card, .float-badge {
+          animation: none !important;
+        }
+        animate, animateMotion, animateTransform {
+          display: none !important;
+        }
+      }
+    </style>
+
+    <pattern id="dotGrid" width="22" height="22" patternUnits="userSpaceOnUse">
+      <circle cx="11" cy="11" r="1.05" fill="#252936" />
+    </pattern>
+
+    <radialGradient id="violetGlow" cx="68%" cy="46%" r="44%">
+      <stop offset="0%" stop-color="#a899ed" stop-opacity="0.14" />
+      <stop offset="65%" stop-color="#a899ed" stop-opacity="0.03" />
+      <stop offset="100%" stop-color="#a899ed" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient id="mintGlow" cx="84%" cy="68%" r="32%">
+      <stop offset="0%" stop-color="#69bf9a" stop-opacity="0.08" />
+      <stop offset="100%" stop-color="#69bf9a" stop-opacity="0" />
+    </radialGradient>
+
+    <linearGradient id="execGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#a899ed" stop-opacity="0.65" />
+      <stop offset="100%" stop-color="#a899ed" stop-opacity="1" />
+    </linearGradient>
+
+    <linearGradient id="gateGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#a899ed" />
+      <stop offset="100%" stop-color="#e9af57" />
+    </linearGradient>
+
+    <filter id="cardShadow" x="-8%" y="-8%" width="116%" height="122%">
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#00000055" />
+    </filter>
+
+    <filter id="orbGlow" x="-120%" y="-120%" width="340%" height="340%">
+      <feGaussianBlur stdDeviation="3.2" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <clipPath id="outerClip">
+      <rect x="1" y="1" width="958" height="378" rx="16" />
+    </clipPath>
+  </defs>
+
+  <!-- Canvas Frame -->
+  <g clip-path="url(#outerClip)">
+    <rect x="1" y="1" width="958" height="378" fill="#0c0e12" />
+    <rect x="1" y="39" width="958" height="340" fill="url(#dotGrid)" />
+    <rect x="1" y="1" width="958" height="378" fill="url(#violetGlow)" />
+    <rect x="1" y="1" width="958" height="378" fill="url(#mintGlow)" />
+
+    <!-- Top Window / Canvas Chrome -->
+    <rect x="1" y="1" width="958" height="38" fill="#14171f" />
+    <line x1="1" y1="39" x2="959" y2="39" stroke="#2a2e3b" stroke-width="1" />
+    <circle cx="24" cy="20" r="4" fill="#5c6170" opacity="0.55" />
+    <circle cx="38" cy="20" r="4" fill="#5c6170" opacity="0.55" />
+    <circle cx="52" cy="20" r="4" fill="#5c6170" opacity="0.55" />
+    <text x="72" y="24" class="mono" font-size="11" fill="#8e93a2">dsh://flowspace/canvas &#183; main</text>
+
+    <!-- Live Host Status Pill -->
+    <rect x="742" y="9" width="198" height="22" rx="11" fill="#17191f" stroke="#2a2e3b" stroke-width="1" />
+    <circle cx="757" cy="20" r="3.6" fill="#69bf9a" class="breathe" />
+    <text x="768" y="24" class="mono" font-size="10.5" fill="#c4c7d4">Host Scheduler &#183; Active</text>
+  </g>
+  <rect x="1" y="1" width="958" height="378" rx="16" fill="none" stroke="#2a2e3b" stroke-width="1.2" />
+
+  <!-- ================= LEFT COLUMN: BRAND & POSITIONING ================= -->
+  <g transform="translate(44, 68)">
+    <!-- Custom FlowSpace Emblem -->
+    <rect x="0" y="0" width="46" height="46" rx="12" fill="#a899ed22" stroke="#a899ed55" stroke-width="1.2" />
+    <path d="M 13 16 C 22 16, 22 30, 32 30" fill="none" stroke="#a899ed" stroke-width="2" stroke-linecap="round" />
+    <path d="M 13 31 C 21 31, 23 17, 32 17" fill="none" stroke="#879bb8" stroke-width="1.5" stroke-dasharray="2.5 2.5" stroke-linecap="round" />
+    <rect x="9.8" y="12.8" width="6.5" height="6.5" rx="1.8" transform="rotate(45 13 16)" fill="#a899ed" stroke="#17191f" stroke-width="1.2" />
+    <circle cx="13" cy="31" r="3.2" fill="#879bb8" />
+    <circle cx="32" cy="17" r="3.2" fill="#69bf9a" />
+    <rect x="28.8" y="26.8" width="6.5" height="6.5" rx="1.8" transform="rotate(45 32 30)" fill="#a899ed" stroke="#17191f" stroke-width="1.2" />
+
+    <!-- Eyebrow -->
+    <text x="58" y="19" class="mono" font-size="11" font-weight="600" letter-spacing="0.06em" fill="#a899ed">DEEPSEEK HARNESS &#183; 0.2.2-rc.3</text>
+    <text x="58" y="36" class="mono" font-size="10.5" letter-spacing="0.04em" fill="#8e93a2">PERSISTENT AGENT CANVAS PLUGIN</text>
+
+    <!-- Title -->
+    <text x="0" y="98" class="sans" font-size="44" font-weight="700" letter-spacing="-0.025em" fill="#eeedf5">FlowSpace</text>
+
+    <!-- Subtitle -->
+    <text x="0" y="130" class="sans" font-size="14.5" font-weight="600" fill="#c4c7d4">Visual Workflows Over Real DSH Sessions</text>
+    <text x="0" y="153" class="sans" font-size="13" fill="#8e93a2">真实持久会话 &#183; 引用线供上下文 &#183; 接续线推执行</text>
+
+    <line x1="0" y1="174" x2="342" y2="174" stroke="#2a2e3b" stroke-width="1" />
+
+    <!-- 2x2 Legend Pills -->
+    <g transform="translate(0, 190)">
+      <rect x="0" y="0" width="166" height="28" rx="8" fill="#17191f" stroke="#2a2e3b" stroke-width="1" />
+      <rect x="12.5" y="10.5" width="7" height="7" rx="1.8" transform="rotate(45 16 14)" fill="#a899ed" stroke="#17191f" stroke-width="1.2" />
+      <text x="29" y="18" class="sans" font-size="11.5" font-weight="500" fill="#c4c7d4">Continuation &#183; 接续</text>
+
+      <rect x="176" y="0" width="166" height="28" rx="8" fill="#17191f" stroke="#2a2e3b" stroke-width="1" />
+      <circle cx="192" cy="14" r="3.8" fill="#879bb8" />
+      <text x="204" y="18" class="sans" font-size="11.5" font-weight="500" fill="#c4c7d4">Reference &#183; 引用</text>
+
+      <rect x="0" y="36" width="166" height="28" rx="8" fill="#17191f" stroke="#2a2e3b" stroke-width="1" />
+      <circle cx="16" cy="50" r="3.8" fill="#69bf9a" />
+      <text x="29" y="54" class="sans" font-size="11.5" font-weight="500" fill="#c4c7d4">Host-Owned &#183; 驻留</text>
+
+      <rect x="176" y="36" width="166" height="28" rx="8" fill="#17191f" stroke="#2a2e3b" stroke-width="1" />
+      <circle cx="192" cy="50" r="3.8" fill="#e9af57" />
+      <text x="204" y="54" class="sans" font-size="11.5" font-weight="500" fill="#c4c7d4">Confirm Gate &#183; 门控</text>
+    </g>
+  </g>
+
+  <!-- ================= RIGHT COLUMN: LIVE WORKFLOW GRAPH ================= -->
+  <rect x="424" y="56" width="514" height="304" rx="13" fill="#101217" fill-opacity="0.55" stroke="#2a2e3b" stroke-width="1" stroke-dasharray="4 4" />
+  <rect x="424" y="56" width="514" height="28" rx="13" fill="#17191f" fill-opacity="0.7" />
+  <text x="440" y="74" class="mono" font-size="10.5" font-weight="600" fill="#8e93a2">GROUP &#183; Parallel Context &amp; Gated Continuation</text>
+  <text x="844" y="74" class="mono" font-size="10" fill="#a899ed">run #04 &#183; active</text>
+
+  <!-- WIRES -->
+  <path d="M 582 112 C 604 112, 604 140, 626 140" fill="none" stroke="url(#execGrad)" stroke-width="2.2" />
+  <path d="M 768 140 C 788 140, 788 166, 808 166" fill="none" stroke="url(#gateGrad)" stroke-width="2.2" stroke-dasharray="3 2" />
+  <path d="M 582 316 C 608 316, 602 250, 626 250" fill="none" stroke="#879bb8" stroke-width="1.7" class="ref-wire" />
+  <path d="M 582 194 C 618 194, 606 306, 696 306 C 768 306, 776 266, 808 266" fill="none" stroke="#879bb8" stroke-width="1.6" opacity="0.85" class="ref-wire" />
+
+  <!-- Animated Particles on Wires -->
+  <circle r="3.6" fill="#a899ed" filter="url(#orbGlow)">
+    <animateMotion dur="2.4s" repeatCount="indefinite" path="M 582 112 C 604 112, 604 140, 626 140" calcMode="spline" keyTimes="0;1" keySplines="0.4 0 0.2 1" />
+  </circle>
+  <circle r="3.2" fill="#e9af57" filter="url(#orbGlow)">
+    <animateMotion dur="2.8s" begin="0.9s" repeatCount="indefinite" path="M 768 140 C 788 140, 788 166, 808 166" calcMode="spline" keyTimes="0;1" keySplines="0.4 0 0.2 1" />
+  </circle>
+  <circle r="2.6" fill="#879bb8">
+    <animateMotion dur="3.2s" repeatCount="indefinite" path="M 582 316 C 608 316, 602 250, 626 250" />
+  </circle>
+
+  <!-- NODE 1: Spec Agent (Completed) -->
+  <g filter="url(#cardShadow)">
+    <rect x="444" y="96" width="138" height="110" rx="10" fill="#17191f" stroke="#2a2e3b" stroke-width="1.1" />
+    <line x1="444" y1="126" x2="582" y2="126" stroke="#222632" stroke-width="1" />
+    <rect x="454" y="104" width="16" height="16" rx="4.5" fill="#a899ed22" />
+    <circle cx="462" cy="112" r="3" fill="#a899ed" />
+    <text x="476" y="116" class="sans" font-size="11.5" font-weight="600" fill="#eeedf5">Spec Agent</text>
+    <circle cx="456" cy="140" r="3" fill="#69bf9a" />
+    <text x="464" y="143.5" class="mono" font-size="9.5" fill="#69bf9a">completed</text>
+    <text x="536" y="143.5" class="mono" font-size="9.5" fill="#8e93a2">seq#14</text>
+    <rect x="454" y="153" width="112" height="5" rx="2.5" fill="#20232b" />
+    <rect x="454" y="163" width="84" height="5" rx="2.5" fill="#20232b" />
+    <line x1="444" y1="182" x2="582" y2="182" stroke="#222632" stroke-width="1" />
+    <text x="455" y="197" class="mono" font-size="9.5" fill="#8e93a2">context</text>
+    <text x="540" y="197" class="mono" font-size="9.5" fill="#a899ed">done</text>
+  </g>
+  <rect x="440.0" y="108.0" width="8" height="8" rx="1.8" transform="rotate(45 444 112)" fill="#a899ed" stroke="#17191f" stroke-width="1.8" />
+  <rect x="578.0" y="108.0" width="8" height="8" rx="1.8" transform="rotate(45 582 112)" fill="#a899ed" stroke="#17191f" stroke-width="1.8" />
+  <circle cx="582" cy="194" r="4.2" fill="#879bb8" stroke="#17191f" stroke-width="1.8" />
+
+  <!-- NODE 2: design.md (File Reference Node) -->
+  <g filter="url(#cardShadow)">
+    <rect x="444" y="232" width="138" height="96" rx="10" fill="#17191f" stroke="#2a2e3b" stroke-width="1.1" />
+    <line x1="444" y1="260" x2="582" y2="260" stroke="#222632" stroke-width="1" />
+    <rect x="454" y="239" width="16" height="16" rx="4.5" fill="#e9af5722" />
+    <rect x="459" y="243" width="6" height="8" rx="1" fill="#e9af57" />
+    <text x="476" y="251" class="sans" font-size="11.5" font-weight="600" fill="#eeedf5">design.md</text>
+    <text x="454" y="279" class="mono" font-size="9.5" fill="#8e93a2">docs/design.md</text>
+    <rect x="454" y="287" width="76" height="14" rx="4" fill="#879bb824" />
+    <text x="460" y="297" class="mono" font-size="8.8" fill="#879bb8">file reference</text>
+    <line x1="444" y1="305" x2="582" y2="305" stroke="#222632" stroke-width="1" />
+    <text x="455" y="320" class="mono" font-size="9.5" fill="#8e93a2">ref-out</text>
+  </g>
+  <circle cx="582" cy="316" r="4.2" fill="#879bb8" stroke="#17191f" stroke-width="1.8" />
+
+  <!-- NODE 3: Builder Agent (Running — Active Violet Highlight) -->
+  <g filter="url(#cardShadow)">
+    <rect x="626" y="124" width="142" height="140" rx="10" fill="#17191f" stroke="#a899ed" stroke-width="1.5" class="running-card" />
+    <line x1="626" y1="154" x2="768" y2="154" stroke="#222632" stroke-width="1" />
+    <rect x="636" y="132" width="16" height="16" rx="4.5" fill="#a899ed22" class="breathe" />
+    <circle cx="644" cy="140" r="3.2" fill="#a899ed" class="breathe" />
+    <text x="658" y="144" class="sans" font-size="11.5" font-weight="600" fill="#eeedf5">Builder</text>
+    <circle cx="638" cy="168" r="3" fill="#a899ed" class="breathe" />
+    <text x="646" y="171.5" class="mono" font-size="9.5" fill="#a899ed">running</text>
+    <text x="716" y="171.5" class="mono" font-size="9.5" fill="#8e93a2">DSH chat</text>
+    <rect x="636" y="181" width="118" height="5" rx="2.5" fill="#20232b" />
+    <rect x="636" y="191" width="96" height="5" rx="2.5" fill="#a899ed22" />
+    <rect x="636" y="205" width="106" height="18" rx="9" fill="#879bb824" stroke="#2a2e3b" stroke-width="0.8" />
+    <circle cx="646" cy="214" r="2.5" fill="#879bb8" />
+    <text x="653" y="217.5" class="mono" font-size="9" fill="#c4c7d4">design.md &#183; sent</text>
+    <line x1="626" y1="236" x2="768" y2="236" stroke="#222632" stroke-width="1" />
+    <text x="638" y="253" class="mono" font-size="9.5" fill="#8e93a2">context</text>
+    <text x="726" y="253" class="mono" font-size="9.5" font-weight="600" fill="#a899ed">&#9632; stop</text>
+  </g>
+  <rect x="621.8" y="135.8" width="8.5" height="8.5" rx="1.8" transform="rotate(45 626 140)" fill="#a899ed" stroke="#17191f" stroke-width="1.8" />
+  <rect x="763.8" y="135.8" width="8.5" height="8.5" rx="1.8" transform="rotate(45 768 140)" fill="#a899ed" stroke="#17191f" stroke-width="1.8" />
+  <circle cx="626" cy="250" r="4.2" fill="#879bb8" stroke="#17191f" stroke-width="1.8" />
+  <circle cx="768" cy="250" r="4.2" fill="#879bb8" stroke="#17191f" stroke-width="1.8" />
+
+  <!-- NODE 4: Verify Agent (Waiting Confirmation Gate) -->
+  <g filter="url(#cardShadow)">
+    <rect x="808" y="150" width="118" height="130" rx="10" fill="#17191f" stroke="#e9af57" stroke-width="1.3" stroke-opacity="0.75" />
+    <line x1="808" y1="180" x2="926" y2="180" stroke="#222632" stroke-width="1" />
+    <rect x="818" y="158" width="16" height="16" rx="4.5" fill="#e9af5722" />
+    <circle cx="826" cy="166" r="3" fill="#e9af57" />
+    <text x="840" y="170" class="sans" font-size="11.5" font-weight="600" fill="#eeedf5">Verifier</text>
+    <circle cx="820" cy="194" r="3" fill="#e9af57" class="breathe-slow" />
+    <text x="828" y="197.5" class="mono" font-size="9.5" fill="#e9af57">confirm gate</text>
+    <g class="float-badge">
+      <rect x="818" y="208" width="98" height="24" rx="6" fill="#e9af5722" stroke="#e9af57" stroke-width="0.9" stroke-opacity="0.6" />
+      <text x="867" y="223.5" text-anchor="middle" class="sans" font-size="10" font-weight="600" fill="#e9af57">&#10003; Release &#183; 放行</text>
+    </g>
+    <line x1="808" y1="252" x2="926" y2="252" stroke="#222632" stroke-width="1" />
+    <text x="819" y="269" class="mono" font-size="9.5" fill="#8e93a2">join (2/2)</text>
+  </g>
+  <rect x="804.0" y="162.0" width="8" height="8" rx="1.8" transform="rotate(45 808 166)" fill="#e9af57" stroke="#17191f" stroke-width="1.8" />
+  <rect x="922.0" y="162.0" width="8" height="8" rx="1.8" transform="rotate(45 926 166)" fill="#a899ed" stroke="#17191f" stroke-width="1.8" />
+  <circle cx="808" cy="266" r="4.2" fill="#879bb8" stroke="#17191f" stroke-width="1.8" />
+</svg>

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 144 24" width="144" height="24" role="img" aria-label="Node.js: &gt;= 24.9">
+  <defs>
+    <style>
+      .mono { font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      @keyframes bPulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+      .b-pulse { animation: bPulse 2.4s ease-in-out infinite; }
+      @media (prefers-reduced-motion: reduce) { .b-pulse { animation: none !important; } }
+    </style>
+    <clipPath id="clip_Nodejs">
+      <rect x="0.5" y="0.5" width="143" height="23" rx="6" />
+    </clipPath>
+  </defs>
+  <g clip-path="url(#clip_Nodejs)">
+    <rect x="0" y="0" width="76" height="24" fill="#ffffff" />
+    <rect x="76" y="0" width="68" height="24" fill="#29856318" />
+    <line x1="76" y1="0" x2="76" y2="24" stroke="#d8dce8" stroke-width="1" />
+  </g>
+  <rect x="0.5" y="0.5" width="143" height="23" rx="6" fill="none" stroke="#d8dce8" stroke-width="1" />
+  <circle cx="13" cy="12" r="3" fill="#298563" />
+  <text x="22" y="15.5" class="mono" font-size="10.5" fill="#3e4254">Node.js</text>
+  <text x="110" y="15.5" text-anchor="middle" class="mono" font-size="10.5" font-weight="600" fill="#298563">&gt;= 24.9</text>
+</svg>

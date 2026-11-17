@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 288" width="960" height="288" role="img" aria-label="FlowSpace Host-Owned Orchestration Architecture">
+  <defs>
+    <style>
+      .sans { font-family: 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei UI', sans-serif; }
+      .mono { font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      @keyframes archBreathe {
+        0%, 100% { opacity: 0.45; }
+        50% { opacity: 1; }
+      }
+      .pulse { animation: archBreathe 2.6s ease-in-out infinite; }
+      @media (prefers-reduced-motion: reduce) {
+        .pulse { animation: none !important; }
+        animateMotion { display: none !important; }
+      }
+    </style>
+    <pattern id="archGrid" width="20" height="20" patternUnits="userSpaceOnUse">
+      <circle cx="10" cy="10" r="0.95" fill="#cfd4e3" />
+    </pattern>
+    <filter id="archGlow" x="-120%" y="-120%" width="340%" height="340%">
+      <feGaussianBlur stdDeviation="2.8" result="b" />
+      <feMerge>
+        <feMergeNode in="b" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="1" y="1" width="958" height="286" rx="15" fill="#f1f2f7" stroke="#d8dce8" stroke-width="1.2" />
+  <rect x="1" y="42" width="958" height="245" rx="15" fill="url(#archGrid)" />
+  <rect x="1" y="1" width="958" height="42" rx="15" fill="#e9ebf3" />
+  <rect x="1" y="24" width="958" height="19" fill="#e9ebf3" />
+  <line x1="1" y1="43" x2="959" y2="43" stroke="#d8dce8" stroke-width="1" />
+
+  <text x="24" y="27" class="mono" font-size="11" font-weight="600" letter-spacing="0.05em" fill="#7561bd">ARCHITECTURE &#183; RENDERING NEVER DRIVES EXECUTION</text>
+  <text x="936" y="27" text-anchor="end" class="mono" font-size="10.5" fill="#6e7485">Client &#8644; Typert Remote &#8644; Host &amp; Core</text>
+
+  <!-- ============ ZONE 1: CLIENT ============ -->
+  <rect x="24" y="60" width="252" height="204" rx="12" fill="#ffffff" stroke="#d8dce8" stroke-width="1.2" />
+  <text x="42" y="84" class="mono" font-size="11" font-weight="600" fill="#5d7496">src/client</text>
+  <text x="258" y="84" text-anchor="end" class="sans" font-size="11" fill="#6e7485">画布与原生会话</text>
+  <line x1="24" y1="96" x2="276" y2="96" stroke="#e3e6f0" stroke-width="1" />
+
+  <rect x="40" y="110" width="220" height="40" rx="8" fill="#f7f8fc" stroke="#e3e6f0" stroke-width="1" />
+  <text x="52" y="128" class="sans" font-size="11.5" font-weight="600" fill="#222430">React Flow 12 Canvas</text>
+  <text x="52" y="142" class="mono" font-size="9.5" fill="#6e7485">Editable Doc &#183; Undo never replays</text>
+
+  <rect x="40" y="158" width="220" height="40" rx="8" fill="#f7f8fc" stroke="#e3e6f0" stroke-width="1" />
+  <text x="52" y="176" class="sans" font-size="11.5" font-weight="600" fill="#222430">DSH Native UI Slots</text>
+  <text x="52" y="190" class="mono" font-size="9.5" fill="#6e7485">main &#183; sidebar &#183; header badge</text>
+
+  <rect x="40" y="206" width="220" height="42" rx="8" fill="#7561bd18" stroke="#7561bd48" stroke-width="0.9" />
+  <text x="52" y="224" class="sans" font-size="11.5" font-weight="600" fill="#222430">conversation.content</text>
+  <text x="52" y="238" class="mono" font-size="9.5" fill="#7561bd">Native Chat &#183; Models &#183; Approvals</text>
+
+  <!-- ============ BRIDGE 1: TYPERT REMOTE ============ -->
+  <path d="M 276 140 L 368 140" fill="none" stroke="#7561bd" stroke-width="1.8" />
+  <path d="M 368 184 L 276 184" fill="none" stroke="#298563" stroke-width="1.8" stroke-dasharray="4 4" />
+  <polygon points="368,140 361,136 361,144" fill="#7561bd" />
+  <polygon points="276,184 283,180 283,188" fill="#298563" />
+
+  <circle r="3.4" fill="#7561bd" filter="url(#archGlow)">
+    <animateMotion dur="2s" repeatCount="indefinite" path="M 276 140 L 368 140" />
+  </circle>
+  <circle r="3.2" fill="#298563" filter="url(#archGlow)">
+    <animateMotion dur="2.3s" repeatCount="indefinite" path="M 368 184 L 276 184" />
+  </circle>
+
+  <rect x="285" y="104" width="74" height="22" rx="11" fill="#ffffff" stroke="#d8dce8" stroke-width="1" />
+  <text x="322" y="118.5" text-anchor="middle" class="mono" font-size="9.2" fill="#3e4254">Typert RPC</text>
+  <text x="322" y="206" text-anchor="middle" class="sans" font-size="10" fill="#6e7485">切页不断流</text>
+
+  <!-- ============ ZONE 2: CORE SCHEDULER ============ -->
+  <rect x="368" y="60" width="248" height="204" rx="12" fill="#ffffff" stroke="#7561bd" stroke-width="1.4" stroke-opacity="0.7" />
+  <circle cx="384" cy="80" r="3.5" fill="#7561bd" class="pulse" />
+  <text x="394" y="84" class="mono" font-size="11" font-weight="600" fill="#7561bd">src/core</text>
+  <text x="598" y="84" text-anchor="end" class="sans" font-size="11" fill="#6e7485">纯状态机调度</text>
+  <line x1="368" y1="96" x2="616" y2="96" stroke="#e3e6f0" stroke-width="1" />
+
+  <rect x="384" y="110" width="216" height="40" rx="8" fill="#f7f8fc" stroke="#e3e6f0" stroke-width="1" />
+  <text x="396" y="128" class="sans" font-size="11.5" font-weight="600" fill="#222430">Immutable Run Snapshot</text>
+  <text x="396" y="142" class="mono" font-size="9.5" fill="#6e7485">Pins graph, scope &amp; edge rules</text>
+
+  <rect x="384" y="158" width="216" height="40" rx="8" fill="#f7f8fc" stroke="#e3e6f0" stroke-width="1" />
+  <text x="396" y="176" class="sans" font-size="11.5" font-weight="600" fill="#222430">Joins &amp; Scope Gates</text>
+  <text x="396" y="190" class="mono" font-size="9.5" fill="#6e7485">Upstream barriers &amp; confirm hold</text>
+
+  <rect x="384" y="206" width="216" height="42" rx="8" fill="#a7742918" stroke="#a77429" stroke-width="0.8" stroke-opacity="0.5" />
+  <text x="396" y="224" class="sans" font-size="11.5" font-weight="600" fill="#222430">Bounded Loop &amp; Pause</text>
+  <text x="396" y="238" class="mono" font-size="9.5" fill="#a77429">Default &#8804;3 cycles &#183; zero DSH deps</text>
+
+  <!-- ============ BRIDGE 2: CORE <-> HOST ============ -->
+  <path d="M 616 146 L 684 146" fill="none" stroke="#7561bd" stroke-width="1.8" />
+  <path d="M 684 178 L 616 178" fill="none" stroke="#298563" stroke-width="1.8" />
+  <polygon points="684,146 677,142 677,150" fill="#7561bd" />
+  <polygon points="616,178 623,174 623,182" fill="#298563" />
+
+  <circle r="3.2" fill="#7561bd" filter="url(#archGlow)">
+    <animateMotion dur="1.8s" begin="0.4s" repeatCount="indefinite" path="M 616 146 L 684 146" />
+  </circle>
+  <circle r="3.2" fill="#298563" filter="url(#archGlow)">
+    <animateMotion dur="1.9s" begin="0.8s" repeatCount="indefinite" path="M 684 178 L 616 178" />
+  </circle>
+
+  <!-- ============ ZONE 3: HOST ADAPTER & STORAGE ============ -->
+  <rect x="684" y="60" width="252" height="204" rx="12" fill="#ffffff" stroke="#d8dce8" stroke-width="1.2" />
+  <circle cx="700" cy="80" r="3.5" fill="#298563" class="pulse" />
+  <text x="710" y="84" class="mono" font-size="11" font-weight="600" fill="#298563">src/host</text>
+  <text x="918" y="84" text-anchor="end" class="sans" font-size="11" fill="#6e7485">宿主适配与持久化</text>
+  <line x1="684" y1="96" x2="936" y2="96" stroke="#e3e6f0" stroke-width="1" />
+
+  <rect x="700" y="110" width="220" height="40" rx="8" fill="#f7f8fc" stroke="#e3e6f0" stroke-width="1" />
+  <text x="712" y="128" class="sans" font-size="11.5" font-weight="600" fill="#222430">sessionController</text>
+  <text x="712" y="142" class="mono" font-size="9.5" fill="#6e7485">create &#183; prompt &#183; cancel &#183; fork</text>
+
+  <rect x="700" y="158" width="220" height="40" rx="8" fill="#f7f8fc" stroke="#e3e6f0" stroke-width="1" />
+  <text x="712" y="176" class="sans" font-size="11.5" font-weight="600" fill="#222430">sessionQuery &amp; spillStore</text>
+  <text x="712" y="190" class="mono" font-size="9.5" fill="#6e7485">Exact atSeq foldSurface capture</text>
+
+  <rect x="700" y="206" width="220" height="42" rx="8" fill="#29856318" stroke="#298563" stroke-width="0.8" stroke-opacity="0.5" />
+  <text x="712" y="224" class="sans" font-size="11.5" font-weight="600" fill="#222430">storageDomain: &quot;flowspace&quot;</text>
+  <text x="712" y="238" class="mono" font-size="9.5" fill="#298563">Documents &amp; Runs v1 &#183; Zod boundary</text>
+</svg>

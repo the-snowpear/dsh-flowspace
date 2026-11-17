@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 288" width="960" height="288" role="img" aria-label="FlowSpace Dual Port Semantics: Continuation vs Reference">
+  <defs>
+    <style>
+      .sans { font-family: 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei UI', sans-serif; }
+      .mono { font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      @keyframes portDash {
+        to { stroke-dashoffset: -24; }
+      }
+      @keyframes portPulse {
+        0%, 100% { opacity: 0.45; }
+        50% { opacity: 1; }
+      }
+      .ref-flow {
+        stroke-dasharray: 5 5;
+        animation: portDash 1.7s linear infinite;
+      }
+      .pulse {
+        animation: portPulse 2.4s ease-in-out infinite;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .ref-flow, .pulse { animation: none !important; }
+        animateMotion { display: none !important; }
+      }
+    </style>
+    <pattern id="miniGrid" width="18" height="18" patternUnits="userSpaceOnUse">
+      <circle cx="9" cy="9" r="0.95" fill="#cfd4e3" />
+    </pattern>
+    <filter id="glowP" x="-120%" y="-120%" width="340%" height="340%">
+      <feGaussianBlur stdDeviation="3" result="b" />
+      <feMerge>
+        <feMergeNode in="b" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- ============ LEFT CARD: CONTINUATION WIRE ============ -->
+  <rect x="2" y="2" width="468" height="284" rx="14" fill="#ffffff" stroke="#d8dce8" stroke-width="1.2" />
+  <rect x="20" y="18" width="28" height="28" rx="8" fill="#7561bd18" />
+  <rect x="29.5" y="27.5" width="9" height="9" rx="1.8" transform="rotate(45 34 32)" fill="#7561bd" stroke="#ffffff" stroke-width="1.4" />
+  <text x="58" y="30" class="sans" font-size="14" font-weight="700" fill="#222430">Continuation Wire &#183; 接续线</text>
+  <text x="58" y="46" class="mono" font-size="10.5" fill="#7561bd">Header 45&#176; Diamond Port &#183; 推进下游任务执行</text>
+
+  <!-- Stage -->
+  <rect x="20" y="62" width="432" height="118" rx="10" fill="#f1f2f7" stroke="#e3e6f0" stroke-width="1" />
+  <rect x="20" y="62" width="432" height="118" rx="10" fill="url(#miniGrid)" />
+
+  <!-- Continuation Curve -->
+  <path d="M 164 124 C 208 92, 260 156, 308 124" fill="none" stroke="#7561bd" stroke-width="2.4" />
+  <circle r="4" fill="#7561bd" filter="url(#glowP)">
+    <animateMotion dur="2.3s" repeatCount="indefinite" path="M 164 124 C 208 92, 260 156, 308 124" calcMode="spline" keyTimes="0;1" keySplines="0.42 0 0.2 1" />
+  </circle>
+
+  <!-- Midpoint Callout -->
+  <rect x="184" y="72" width="104" height="20" rx="10" fill="#ffffff" stroke="#7561bd48" stroke-width="1" />
+  <text x="236" y="85.5" text-anchor="middle" class="mono" font-size="9.5" fill="#7561bd">turn/end &#8594; next</text>
+
+  <!-- Upstream Header Chip -->
+  <rect x="38" y="102" width="126" height="44" rx="8" fill="#ffffff" stroke="#d8dce8" stroke-width="1.1" />
+  <circle cx="54" cy="124" r="3.5" fill="#298563" />
+  <text x="64" y="121" class="sans" font-size="11.5" font-weight="600" fill="#222430">Upstream</text>
+  <text x="64" y="135" class="mono" font-size="9.5" fill="#6e7485">exec-out</text>
+  <rect x="159.5" y="119.5" width="9" height="9" rx="1.8" transform="rotate(45 164 124)" fill="#7561bd" stroke="#ffffff" stroke-width="1.8" />
+
+  <!-- Downstream Header Chip -->
+  <rect x="308" y="102" width="126" height="44" rx="8" fill="#ffffff" stroke="#7561bd" stroke-width="1.3" />
+  <circle cx="326" cy="124" r="3.5" fill="#7561bd" class="pulse" />
+  <text x="336" y="121" class="sans" font-size="11.5" font-weight="600" fill="#222430">Downstream</text>
+  <text x="336" y="135" class="mono" font-size="9.5" fill="#7561bd">exec-in &#183; admit</text>
+  <rect x="303.5" y="119.5" width="9" height="9" rx="1.8" transform="rotate(45 308 124)" fill="#7561bd" stroke="#ffffff" stroke-width="1.8" />
+
+  <!-- Mode Pills -->
+  <g transform="translate(20, 194)">
+    <rect x="0" y="0" width="124" height="24" rx="6" fill="#7561bd18" />
+    <text x="62" y="15.5" text-anchor="middle" class="mono" font-size="10" font-weight="600" fill="#7561bd">Auto &#183; 自动触发</text>
+
+    <rect x="132" y="0" width="144" height="24" rx="6" fill="#a7742918" />
+    <text x="204" y="15.5" text-anchor="middle" class="mono" font-size="10" font-weight="600" fill="#a77429">Confirm &#183; 确认放行</text>
+
+    <rect x="284" y="0" width="148" height="24" rx="6" fill="#eceef5" />
+    <text x="358" y="15.5" text-anchor="middle" class="mono" font-size="10" fill="#3e4254">Loop &#183; 有界循环 &#8804;3</text>
+  </g>
+  <text x="20" y="244" class="sans" font-size="11.5" fill="#3e4254">上游结束瞬间固定载荷：支持结论、会话快照或历史分叉 (Fork)</text>
+  <text x="20" y="264" class="mono" font-size="10" fill="#6e7485">Pins payload at turn/end &#183; Conclusion, Snapshot, or History Fork</text>
+
+  <!-- ============ RIGHT CARD: REFERENCE WIRE ============ -->
+  <rect x="490" y="2" width="468" height="284" rx="14" fill="#ffffff" stroke="#d8dce8" stroke-width="1.2" />
+  <rect x="508" y="18" width="28" height="28" rx="8" fill="#5d74961e" />
+  <circle cx="522" cy="32" r="5" fill="#5d7496" stroke="#ffffff" stroke-width="1.5" />
+  <text x="546" y="30" class="sans" font-size="14" font-weight="700" fill="#222430">Reference Wire &#183; 引用线</text>
+  <text x="546" y="46" class="mono" font-size="10.5" fill="#5d7496">Footer Circular Port &#183; 纯上下文供给，绝不触发运行</text>
+
+  <!-- Stage -->
+  <rect x="508" y="62" width="432" height="118" rx="10" fill="#f1f2f7" stroke="#e3e6f0" stroke-width="1" />
+  <rect x="508" y="62" width="432" height="118" rx="10" fill="url(#miniGrid)" />
+
+  <!-- Reference Curve -->
+  <path d="M 652 124 C 696 154, 748 94, 796 124" fill="none" stroke="#5d7496" stroke-width="2" class="ref-flow" />
+  <circle r="3.2" fill="#5d7496">
+    <animateMotion dur="3s" repeatCount="indefinite" path="M 652 124 C 696 154, 748 94, 796 124" />
+  </circle>
+
+  <!-- Midpoint Callout -->
+  <rect x="664" y="72" width="120" height="20" rx="10" fill="#ffffff" stroke="#d8dce8" stroke-width="1" />
+  <text x="724" y="85.5" text-anchor="middle" class="mono" font-size="9.5" fill="#5d7496">pinned atSeq &#183; 只读</text>
+
+  <!-- Source Footer Chip -->
+  <rect x="526" y="102" width="126" height="44" rx="8" fill="#ffffff" stroke="#d8dce8" stroke-width="1.1" />
+  <text x="540" y="121" class="sans" font-size="11.5" font-weight="600" fill="#222430">Source / File</text>
+  <text x="540" y="135" class="mono" font-size="9.5" fill="#6e7485">ref-out &#183; seq#18</text>
+  <circle cx="652" cy="124" r="4.8" fill="#5d7496" stroke="#ffffff" stroke-width="1.8" />
+
+  <!-- Target Footer Chip with Capsule -->
+  <rect x="796" y="96" width="128" height="56" rx="8" fill="#ffffff" stroke="#d8dce8" stroke-width="1.1" />
+  <text x="810" y="115" class="sans" font-size="11.5" font-weight="600" fill="#222430">Target Agent</text>
+  <rect x="808" y="123" width="104" height="19" rx="9.5" fill="#5d74961e" />
+  <circle cx="819" cy="132.5" r="2.6" fill="#5d7496" />
+  <text x="827" y="136" class="mono" font-size="9" fill="#3e4254">ref &#183; 已附带</text>
+  <circle cx="796" cy="124" r="4.8" fill="#5d7496" stroke="#ffffff" stroke-width="1.8" />
+
+  <!-- Mode Pills -->
+  <g transform="translate(508, 194)">
+    <rect x="0" y="0" width="132" height="24" rx="6" fill="#5d74961e" />
+    <text x="66" y="15.5" text-anchor="middle" class="mono" font-size="10" font-weight="600" fill="#5d7496">Conclusion &#183; 结论</text>
+
+    <rect x="140" y="0" width="152" height="24" rx="6" fill="#29856318" />
+    <text x="216" y="15.5" text-anchor="middle" class="mono" font-size="10" font-weight="600" fill="#298563">foldSurface &#183; 快照</text>
+
+    <rect x="300" y="0" width="132" height="24" rx="6" fill="#eceef5" />
+    <text x="366" y="15.5" text-anchor="middle" class="mono" font-size="10" fill="#3e4254">File &#183; 路径按需读</text>
+  </g>
+  <text x="508" y="244" class="sans" font-size="11.5" fill="#3e4254">精确锁定事件前缀 (atSeq)，仅提取对话正文与摘要，排除工具噪音</text>
+  <text x="508" y="264" class="mono" font-size="10" fill="#6e7485">Exact atSeq prefix &#183; Never triggers execution on its own</text>
+</svg>

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 184 24" width="184" height="24" role="img" aria-label="Scheduler: Host-Owned">
+  <defs>
+    <style>
+      .mono { font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      @keyframes bPulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+      .b-pulse { animation: bPulse 2.4s ease-in-out infinite; }
+      @media (prefers-reduced-motion: reduce) { .b-pulse { animation: none !important; } }
+    </style>
+    <clipPath id="clip_Scheduler">
+      <rect x="0.5" y="0.5" width="183" height="23" rx="6" />
+    </clipPath>
+  </defs>
+  <g clip-path="url(#clip_Scheduler)">
+    <rect x="0" y="0" width="92" height="24" fill="#ffffff" />
+    <rect x="92" y="0" width="92" height="24" fill="#5d74961e" />
+    <line x1="92" y1="0" x2="92" y2="24" stroke="#d8dce8" stroke-width="1" />
+  </g>
+  <rect x="0.5" y="0.5" width="183" height="23" rx="6" fill="none" stroke="#d8dce8" stroke-width="1" />
+  <circle cx="13" cy="12" r="3" fill="#5d7496" class="b-pulse" />
+  <text x="22" y="15.5" class="mono" font-size="10.5" fill="#3e4254">Scheduler</text>
+  <text x="138" y="15.5" text-anchor="middle" class="mono" font-size="10.5" font-weight="600" fill="#5d7496">Host-Owned</text>
+</svg>

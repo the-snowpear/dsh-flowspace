@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 28" width="960" height="28" role="presentation" aria-hidden="true">
+  <defs>
+    <style>
+      @keyframes divPulse {
+        0%, 100% { opacity: 0.45; }
+        50% { opacity: 1; }
+      }
+      .center-gem { animation: divPulse 3.2s ease-in-out infinite; }
+      @media (prefers-reduced-motion: reduce) {
+        .center-gem { animation: none !important; }
+      }
+    </style>
+    <linearGradient id="lineL" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2a2e3b" stop-opacity="0" />
+      <stop offset="65%" stop-color="#2a2e3b" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#a899ed" stop-opacity="0.65" />
+    </linearGradient>
+    <linearGradient id="lineR" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#a899ed" stop-opacity="0.65" />
+      <stop offset="35%" stop-color="#2a2e3b" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#2a2e3b" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <line x1="32" y1="14" x2="442" y2="14" stroke="url(#lineL)" stroke-width="1.1" />
+  <line x1="518" y1="14" x2="928" y2="14" stroke="url(#lineR)" stroke-width="1.1" />
+
+  <circle cx="458" cy="14" r="2.6" fill="#879bb8" opacity="0.85" />
+  <g class="center-gem">
+    <rect x="476.3" y="10.3" width="7.5" height="7.5" rx="1.8" transform="rotate(45 480 14)" fill="#a899ed" stroke="#0c0e12" stroke-width="1.2" />
+  </g>
+  <circle cx="502" cy="14" r="2.6" fill="#69bf9a" opacity="0.85" />
+</svg>
