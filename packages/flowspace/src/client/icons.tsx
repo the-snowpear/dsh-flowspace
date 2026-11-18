@@ -17,9 +17,11 @@ export const ICONS: Record<string, string> = {
   worktree: "M8 2v12 M8 6l4-2 M8 9L4 7 M8 12l4-2",
   file: "M4 2h5l3 3v9H4z M9 2v3h3",
   git: "M8 2l6 6-6 6-6-6z M8 5.5v5",
+  gitInit: "M8 2l5.5 5.5L8 13 2.5 7.5z M8 5.5v4 M6 7.5h4",
   diff: "M4 5h8 M8 2.5v5 M4 12h8",
   web: "M8 2a6 6 0 1 0 0 12a6 6 0 1 0 0-12 M2 8h12 M8 2c2.5 2 2.5 10 0 12 M8 2c-2.5 2-2.5 10 0 12",
   term: "M2 3h12v10H2z M4.5 6l2.5 2-2.5 2 M8.5 10.5h3",
+  termPlus: "M2 3h12v10H2z M4.2 6.2L6.4 8l-2.2 1.8 M9.8 6.2v3.6 M8 8h3.6",
   note: "M3 3h10v7l-3 3H3z M10 13v-3h3",
   board: "M2 3h12v10H2z M6 3v10 M10 3v10",
   pin: "M8 10v4 M5 10h6 M6 10V4h4v6",
@@ -28,6 +30,7 @@ export const ICONS: Record<string, string> = {
   card: "M2 4h12v8H2z M2 7h12",
   eye: "M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8z M8 6.5a1.5 1.5 0 1 0 0 3a1.5 1.5 0 1 0 0-3",
   eyeoff: "M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8z M3 3l10 10",
+  xray: "M2 5.2V3h2.2 M11.8 3H14v2.2 M14 10.8V13h-2.2 M4.2 13H2v-2.2 M2.8 8s2.1-3.4 5.2-3.4S13.2 8 13.2 8s-2.1 3.4-5.2 3.4S2.8 8 2.8 8z M8 6.8a1.2 1.2 0 1 0 0 2.4a1.2 1.2 0 1 0 0-2.4",
   search: "M7 3a4 4 0 1 0 0 8a4 4 0 1 0 0-8 M10 10l3.5 3.5",
   plus: "M8 3v10 M3 8h10",
   fit: "M3 6V3h3 M10 3h3v3 M13 10v3h-3 M6 13H3v-3",
@@ -44,7 +47,14 @@ export const ICONS: Record<string, string> = {
   sidebarLeft: "M2 3h12v10H2z M5.5 3v10",
   bottom: "M2 3h12v10H2z M2 10h12",
   play: "M5.5 3.5v9l7-4.5z",
+  runFrom: "M3 3.5v9 M6.5 3.5v9l6.5-4.5z",
+  runTo: "M3 3.5v9l6.5-4.5z M12.5 3.5v9",
   pause: "M5.5 3.5v9 M10.5 3.5v9",
+  mute: "M5 3.5v9 M11 3.5v9 M3 13L13 3",
+  bypass: "M1.8 9h2.6c1-4.6 6.2-4.6 7.2 0h2.6 M12 6.6L14.4 9 12 11.4 M6 11.5h4",
+  fork: "M5 3.5v3.5c0 2 3 2 3 4V13 M11 3.5V7c0 2-3 2-3 4 M5 3a1.1 1.1 0 1 0 0 .01 M11 3a1.1 1.1 0 1 0 0 .01 M8 13.2a1.1 1.1 0 1 0 0 .01",
+  turn: "M3 5.5h6.8a2.7 2.7 0 0 1 0 5.4H5.2 M7.6 8.5L5 10.9l2.6 2.4",
+  loopPlus: "M12.5 7A4.5 4.5 0 1 0 11.2 11.2 M12.5 3.6V7H9.1 M8 6.2v3.6 M6.2 8h3.6",
   stop: "M4.5 4.5h7v7h-7z",
   check: "M3.5 8.5l3 3 6-7",
   off: "M4 8h8",
@@ -55,6 +65,16 @@ export const ICONS: Record<string, string> = {
   help: "M8 2a6 6 0 1 0 0 12a6 6 0 1 0 0-12 M6.4 6.2a1.7 1.7 0 0 1 3.2.7c0 1.1-1.6 1.4-1.6 2.5 M8 11.4h.01",
   download: "M8 2.5v7.5 M5 7.5L8 10.5l3-3 M3 13h10",
   upload: "M8 10.5V3 M5 6l3-3 3 3 M3 13h10",
+  copy: "M5.5 5.5h7v7h-7z M3.5 10.5v-7h7",
+  duplicate: "M5.5 5.5h7v7h-7z M3.5 10.5v-7h7 M9 7.3v3.4 M7.3 9h3.4",
+  alignLeft: "M2.5 2.5v11 M5.2 4.8h8v2.2h-8z M5.2 9.2h5.4v2.2H5.2z",
+  alignCenter: "M8 2.5v11 M4 4.8h8v2.2H4z M5.3 9.2h5.4v2.2H5.3z",
+  alignRight: "M13.5 2.5v11 M2.8 4.8h8v2.2h-8z M5.4 9.2h5.4v2.2H5.4z",
+  alignTop: "M2.5 2.5h11 M4.8 5.2v8H7v-8z M9.2 5.2v5.4h2.2V5.2z",
+  alignMiddle: "M2.5 8h11 M4.8 4v8H7V4z M9.2 5.3v5.4h2.2V5.3z",
+  alignBottom: "M2.5 13.5h11 M4.8 2.8v8H7v-8z M9.2 5.4v5.4h2.2V5.4z",
+  distributeH: "M2.5 3v10 M13.5 3v10 M6.5 5.5h3v5h-3z",
+  distributeV: "M3 2.5h10 M3 13.5h10 M5.5 6.5h5v3h-5z",
   trash: "M3.5 4.5h9 M6 4.5V3h4v1.5 M5 4.5l.6 8.5h4.8l.6-8.5",
   refresh: "M13 8a5 5 0 1 1-1.4-3.5 M13 2.8v3.2H9.8",
   unplug: "M5 11L11 5 M4 8L2.5 9.5a2.8 2.8 0 0 0 4 4L8 12 M12 8l1.5-1.5a2.8 2.8 0 0 0-4-4L8 4",
@@ -78,6 +98,7 @@ export function Icon({
 export function kindIconName(kind: NodeKind | string): string {
   switch (kind) {
     case "agent":
+    case "subagent":
       return "agent";
     case "file":
     case "files":

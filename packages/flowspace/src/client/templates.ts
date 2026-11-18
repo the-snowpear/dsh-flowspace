@@ -1,13 +1,26 @@
 import type {
+  BoardColumn,
   CanvasSnapshot,
   FlowEdge,
   FlowNode,
   FlowspaceDocument,
   FlowspaceSnapshot,
+  GroupPort,
   WorkflowTemplate,
 } from "../types.ts";
-import { groupDescendants, newEdge, newNode, uid } from "../core/document.ts";
+import {
+  boardSummaryText,
+  emptyDocument,
+  groupDescendants,
+  newEdge,
+  newNode,
+  uid,
+} from "../core/document.ts";
 import { inferGroupPorts } from "./geometry.ts";
+import { getLanguage, t, type Locale } from "./i18n.ts";
+
+const pick = <T,>(locale: Locale, zh: T, en: T): T =>
+  locale === "en" ? en : zh;
 
 function tplAgent(
   slotId: string,
@@ -15,108 +28,595 @@ function tplAgent(
   x: number,
   y: number,
   task: string,
-  opts: Partial<FlowNode> = {},
+  opts: Partial<FlowNode> & { downstream?: boolean } = {},
 ): FlowNode {
-  return {
+  const { downstream, ...rest } = opts;
+  const node: FlowNode = {
     ...newNode("agent", x, y, title),
     id: slotId,
     templateSlotId: slotId,
     task,
     draft: task,
-    expanded: opts.expanded ?? true,
-    ...opts,
+    continuationPrompt:
+      rest.continuationPrompt ?? (downstream ? task : undefined),
+    expanded: rest.expanded ?? true,
+    ...rest,
   };
+  delete node.window;
+  return node;
 }
 
-export function builtinTemplates(): WorkflowTemplate[] {
+function tplNote(
+  slotId: string,
+  title: string,
+  x: number,
+  y: number,
+  text: string,
+  expanded = false,
+): FlowNode {
+  const node: FlowNode = {
+    ...newNode("note", x, y, title),
+    id: slotId,
+    templateSlotId: slotId,
+    text,
+    expanded,
+    pinned: true,
+  };
+  delete node.window;
+  return node;
+}
+
+function tplBoard(
+  slotId: string,
+  title: string,
+  x: number,
+  y: number,
+  columns: BoardColumn[],
+  expanded = false,
+): FlowNode {
+  const node: FlowNode = {
+    ...newNode("board", x, y, title),
+    id: slotId,
+    templateSlotId: slotId,
+    columns,
+    selectedItems: [],
+    text: boardSummaryText(columns),
+    expanded,
+    pinned: true,
+  };
+  delete node.window;
+  return node;
+}
+
+function tplTool(
+  kind: "git" | "changes" | "terminal",
+  slotId: string,
+  title: string,
+  x: number,
+  y: number,
+  expanded = false,
+): FlowNode {
+  const node: FlowNode = {
+    ...newNode(kind, x, y, title),
+    id: slotId,
+    templateSlotId: slotId,
+    expanded,
+    pinned: true,
+  };
+  delete node.window;
+  return node;
+}
+
+function tplDisplay(
+  slotId: string,
+  title: string,
+  x: number,
+  y: number,
+  sourceSlotId: string,
+  placeholderText: string,
+  fixed = false,
+): FlowNode {
+  const node: FlowNode = {
+    ...newNode("display", x, y, title),
+    id: slotId,
+    templateSlotId: slotId,
+    sourceNodeId: sourceSlotId,
+    text: placeholderText,
+    fixed,
+    expanded: true,
+  };
+  delete node.window;
+  return node;
+}
+
+export function builtinTemplates(
+  locale: Locale = getLanguage(),
+): WorkflowTemplate[] {
+  /* 1. Spec -> Plan Gate -> Adversarial Critique -> Actionable Delivery */
   const reviewNodes: FlowNode[] = [
-    tplAgent(
-      "slot-analyze",
-      "分析项目",
+    tplNote(
+      "slot-spec-note",
+      pick(locale, "规格与验收约束", "Spec & Guardrails"),
       24,
       54,
-      "阅读当前工作区，简要说明项目用途、核心架构以及最值得改进的一点。先不要修改文件。",
-      { roleLabel: "implementation" },
+      pick(
+        locale,
+        "1. 先只读核对真实代码与接口契约，禁止凭空假设。\n2. 明确影响范围、边界条件与回归验证命令。",
+        "1. Verify real code and contracts read-only first; never guess APIs.\n2. State blast radius, edge cases and exact verification commands.",
+      ),
+      false,
+    ),
+    tplAgent(
+      "slot-analyze",
+      pick(locale, "架构规划师 (Plan)", "Plan Architect"),
+      24,
+      178,
+      pick(
+        locale,
+        "阅读当前工作区与规格约束，梳理核心模块职责、潜在瓶颈，并制定分步实施计划。先不要修改文件。",
+        "Inspect the workspace and spec guardrails, map core module boundaries, and formulate a step-by-step plan without modifying files.",
+      ),
+      { roleLabel: "implementation", planMode: true, expanded: false },
     ),
     tplAgent(
       "slot-review",
-      "审查建议",
-      420,
+      pick(locale, "挑刺审查员", "Adversarial Critic"),
+      348,
       54,
-      "审查上游建议的可行性，核对代码证据、潜在风险与边界条件。先不要修改文件。",
-      { roleLabel: "review" },
+      pick(
+        locale,
+        "基于上游完整对话快照，逐条挑刺架构方案的并发安全、边界遗漏与兼容性风险，给出具体修正建议。不要修改文件。",
+        "Audit the upstream folded session transcript for race conditions, missed edge cases and compatibility risks, citing concrete code evidence.",
+      ),
+      { roleLabel: "review", downstream: true, expanded: true },
     ),
     tplAgent(
       "slot-deliver",
-      "汇总结论",
-      816,
+      pick(locale, "交付执行清单", "Delivery Checklist"),
+      704,
       54,
-      "结合上游审查结论，整理出一份简洁、可直接执行的行动清单与验收项。",
-      { roleLabel: "delivery" },
+      pick(
+        locale,
+        "结合规划与挑刺审查结论，收敛出一份可直接执行的文件级行动清单与自动化验收步骤。",
+        "Synthesize the plan and critique into a concise, file-referenced execution checklist and verification sequence.",
+      ),
+      { roleLabel: "delivery", downstream: true, expanded: true },
     ),
   ];
   const reviewEdges: FlowEdge[] = [
-    { ...newEdge("slot-analyze", "slot-review", "continuation"), id: "e-1" },
+    {
+      ...newEdge("slot-spec-note", "slot-analyze", "reference"),
+      id: "er-ref-1",
+      always: true,
+    },
+    {
+      ...newEdge("slot-spec-note", "slot-review", "reference"),
+      id: "er-ref-2",
+      always: true,
+    },
+    {
+      ...newEdge("slot-analyze", "slot-review", "continuation"),
+      id: "e-1",
+      mode: "session",
+      trigger: "auto",
+    },
     {
       ...newEdge("slot-review", "slot-deliver", "continuation"),
       id: "e-2",
+      mode: "conclusion",
       trigger: "confirm",
     },
   ];
 
+  /* 2. Parallel Repo Recon -> Join Synthesis */
   const parallelNodes: FlowNode[] = [
+    tplNote(
+      "slot-recon-goals",
+      pick(locale, "侦察焦点", "Recon Goals"),
+      24,
+      52,
+      pick(
+        locale,
+        "聚焦核心数据流、状态边界与构建测试链路，汇总高价值改进切入点。",
+        "Focus on core dataflow, state invariants and test/build pipelines; surface high-leverage wins.",
+      ),
+      false,
+    ),
     tplAgent(
       "slot-res1",
-      "探索架构与模块",
+      pick(locale, "探索架构与数据流", "Scout: Architecture & Dataflow"),
       24,
-      64,
-      "阅读当前工作区，概括架构分层、主要模块职责与数据流。不要修改文件。",
+      172,
+      pick(
+        locale,
+        "阅读当前工作区，概括分层架构、主要模块职责与核心状态数据流。不要修改文件。",
+        "Read the workspace and map layered architecture, module responsibilities and primary state dataflow. Read-only.",
+      ),
       { expanded: false, roleLabel: "implementation" },
     ),
     tplAgent(
       "slot-res2",
-      "调查测试与约束",
+      pick(locale, "调查类型与测试防线", "Scout: Types, Build & Tests"),
       24,
-      236,
-      "调查当前项目的类型检查、单元测试、集成验收与工程约束边界。不要修改文件。",
+      312,
+      pick(
+        locale,
+        "调查当前项目的构建脚本、类型检查、单元测试与集成验收约束。不要修改文件。",
+        "Investigate build scripts, typechecking, unit tests and integration verification constraints. Read-only.",
+      ),
       { expanded: false, roleLabel: "implementation" },
     ),
     tplAgent(
       "slot-synth",
-      "汇总结论",
-      384,
+      pick(locale, "全景汇合综述", "Executive Synthesis"),
+      368,
       54,
-      "等两路调查全部完成后，综合整理出一份有明确下一步推荐的项目概览。",
-      { roleLabel: "review" },
+      pick(
+        locale,
+        "等两路侦察全部完成后，交叉印证架构与验证防线，输出结构化项目全景图与优先级建议。",
+        "Once both scouts complete at the join barrier, cross-reference architecture and test coverage into an executive roadmap.",
+      ),
+      { roleLabel: "review", downstream: true, expanded: true },
     ),
   ];
   const parallelEdges: FlowEdge[] = [
+    {
+      ...newEdge("slot-recon-goals", "slot-res1", "reference"),
+      id: "ep-ref-1",
+    },
+    {
+      ...newEdge("slot-recon-goals", "slot-res2", "reference"),
+      id: "ep-ref-2",
+    },
     { ...newEdge("slot-res1", "slot-synth", "continuation"), id: "ep-1" },
     { ...newEdge("slot-res2", "slot-synth", "continuation"), id: "ep-2" },
   ];
 
-  const releaseNodes: FlowNode[] = [
-    tplAgent(
-      "slot-writer",
-      "整理变更说明",
+  /* 3. Self-Healing TDD Bounded Loop (maxRounds: 3) */
+  const tddColumns: BoardColumn[] = [
+    {
+      id: "col-todo",
+      name: pick(locale, "待办验收项", "Acceptance To-Do"),
+      cards: [
+        {
+          id: "card-red-green",
+          text: pick(
+            locale,
+            "先补失败单测覆盖目标边界，再做最小代码实现并通过类型检查",
+            "Write failing regression test first, implement minimal fix, pass typecheck",
+          ),
+        },
+      ],
+    },
+    {
+      id: "col-doing",
+      name: pick(locale, "进行中", "In Progress"),
+      cards: [],
+    },
+    {
+      id: "col-done",
+      name: pick(locale, "已验证", "Verified"),
+      cards: [],
+    },
+  ];
+  const tddNodes: FlowNode[] = [
+    tplBoard(
+      "slot-tdd-board",
+      pick(locale, "TDD 验收看板", "TDD Acceptance Board"),
       24,
       54,
-      "根据当前工作区最近的提交与文档，整理结构化的变更说明（新增、改进与修复）。",
-      { roleLabel: "delivery" },
+      tddColumns,
+      false,
+    ),
+    tplAgent(
+      "slot-tdd-author",
+      pick(locale, "测试与实现作者", "Test & Feature Author"),
+      24,
+      180,
+      pick(
+        locale,
+        "对照验收看板，先编写或更新复现/边界测试，再完成最小干净实现并运行检查命令汇报结果。",
+        "Follow the acceptance board: write or update tests first, implement the minimal clean change, and run local check commands.",
+      ),
+      {
+        roleLabel: "implementation",
+        expanded: true,
+        continuationPrompt: pick(
+          locale,
+          "阅读下游独立验证员指出的失败项或边界缺陷，做最小定向修复并重新运行测试核验；若已全部通过请简要确认。",
+          "Address the exact test/type defects cited by the Independent Verifier with minimal targeted edits and re-verify.",
+        ),
+      },
+    ),
+    tplTool(
+      "changes",
+      "slot-tdd-changes",
+      pick(locale, "本轮代码改动", "Turn Diff Snapshot"),
+      384,
+      54,
+      false,
+    ),
+    tplAgent(
+      "slot-tdd-verifier",
+      pick(locale, "独立验证员 (×3 闭环)", "Independent Verifier"),
+      384,
+      180,
+      pick(
+        locale,
+        "结合本轮改动 Diff 独立运行类型检查与测试套件：若仍有缺陷请列出精确文件行号触发回环修复；若全部通过请给出验收通过结论。",
+        "Audit the turn diff and run typecheck + tests independently: cite exact file/line failures for repair, or sign off when clean.",
+      ),
+      { roleLabel: "review", downstream: true, expanded: true },
+    ),
+    tplAgent(
+      "slot-tdd-summary",
+      pick(locale, "变更签收摘要", "Verified Delivery Summary"),
+      744,
+      180,
+      pick(
+        locale,
+        "汇总本轮 TDD 闭环的新增测试、核心代码改动与验证结果，生成简洁的提交/PR 摘要。",
+        "Summarize new test coverage, surgical code changes and verification status into a crisp PR/commit brief.",
+      ),
+      { roleLabel: "delivery", downstream: true, expanded: false },
+    ),
+  ];
+  const tddEdges: FlowEdge[] = [
+    {
+      ...newEdge("slot-tdd-board", "slot-tdd-author", "reference"),
+      id: "etdd-ref-board",
+      always: true,
+    },
+    {
+      ...newEdge("slot-tdd-changes", "slot-tdd-verifier", "reference"),
+      id: "etdd-ref-diff",
+      always: true,
+    },
+    {
+      ...newEdge("slot-tdd-author", "slot-tdd-verifier", "continuation"),
+      id: "etdd-forward",
+      mode: "conclusion",
+      trigger: "auto",
+      maxRounds: 3,
+    },
+    {
+      ...newEdge("slot-tdd-verifier", "slot-tdd-author", "continuation"),
+      id: "etdd-loopback",
+      mode: "conclusion",
+      trigger: "auto",
+      maxRounds: 3,
+      waypoints: [
+        { x: 696, y: 604 },
+        { x: 24, y: 604 },
+      ],
+    },
+    {
+      ...newEdge("slot-tdd-verifier", "slot-tdd-summary", "continuation"),
+      id: "etdd-exit",
+      mode: "conclusion",
+      trigger: "confirm",
+    },
+  ];
+
+  /* 4. A/B Hypothesis Fork & Trade-off Judge */
+  const abForkNodes: FlowNode[] = [
+    tplAgent(
+      "slot-fork-root",
+      pick(locale, "同源问题探索基线", "Root Problem Framing"),
+      24,
+      54,
+      pick(
+        locale,
+        "深入阅读相关源码，定位问题根因、关键约束与评估指标，为下游两条并行分叉方案建立统一上下文基线。不要修改文件。",
+        "Investigate relevant source files, establish root context, constraints and evaluation metrics for two competing forked designs. Read-only.",
+      ),
+      { roleLabel: "implementation", expanded: true },
+    ),
+    tplAgent(
+      "slot-fork-a",
+      pick(locale, "方案 A · 最小安全补丁", "Branch A · Minimal Safe Patch"),
+      388,
+      64,
+      pick(
+        locale,
+        "继承上游探索历史，设计并论证「改动面最小、零破坏性、最快上线」的保守修复方案及具体代码落点。",
+        "Inheriting forked history, design and justify a minimal-blast-radius, backwards-compatible patch with exact code touchpoints.",
+      ),
+      { roleLabel: "implementation", downstream: true, expanded: false },
+    ),
+    tplAgent(
+      "slot-fork-b",
+      pick(locale, "方案 B · 根治架构重构", "Branch B · Clean Refactor"),
+      388,
+      236,
+      pick(
+        locale,
+        "继承上游探索历史，设计并论证「消除历史包袱、边界最清晰、长期可演进」的架构级重构方案及迁移步骤。",
+        "Inheriting forked history, design and justify a clean structural refactor eliminating tech debt with clear migration steps.",
+      ),
+      { roleLabel: "implementation", downstream: true, expanded: false },
+    ),
+    tplAgent(
+      "slot-fork-judge",
+      pick(locale, "双方案对比裁决官", "Trade-off Judge"),
+      724,
+      54,
+      pick(
+        locale,
+        "对比 A/B 两条分叉分支的完整对话论证，从正确性、复杂度、回归风险与维护成本四维打分，给出最终胜出推荐。",
+        "Compare full transcripts from Branch A and Branch B across correctness, complexity, regression risk and maintainability; pick a winner.",
+      ),
+      { roleLabel: "review", downstream: true, expanded: true },
+    ),
+  ];
+  const abForkEdges: FlowEdge[] = [
+    {
+      ...newEdge("slot-fork-root", "slot-fork-a", "continuation"),
+      id: "efork-a",
+      mode: "fork",
+      trigger: "confirm",
+    },
+    {
+      ...newEdge("slot-fork-root", "slot-fork-b", "continuation"),
+      id: "efork-b",
+      mode: "fork",
+      trigger: "confirm",
+    },
+    {
+      ...newEdge("slot-fork-a", "slot-fork-judge", "continuation"),
+      id: "efork-join-a",
+      mode: "session",
+      trigger: "auto",
+    },
+    {
+      ...newEdge("slot-fork-b", "slot-fork-judge", "continuation"),
+      id: "efork-join-b",
+      mode: "session",
+      trigger: "auto",
+    },
+  ];
+
+  /* 5. Bug Triage: Terminal + Git -> Root Cause -> Fix + Live Display */
+  const bugHuntNodes: FlowNode[] = [
+    tplTool(
+      "terminal",
+      "slot-bug-term",
+      pick(locale, "报错终端快照", "Failing Terminal"),
+      24,
+      54,
+      false,
+    ),
+    tplTool(
+      "git",
+      "slot-bug-git",
+      pick(locale, "近期 Git 改动", "Recent Git Diff"),
+      24,
+      192,
+      false,
+    ),
+    tplAgent(
+      "slot-bug-locator",
+      pick(locale, "只读根因定位器", "Read-Only Fault Localizer"),
+      348,
+      54,
+      pick(
+        locale,
+        "交叉分析终端报错栈与近期 Git 提交/改动，精确锁定触发故障的文件、函数与触发条件。先只读定位，不要改代码。",
+        "Cross-correlate terminal failure output with recent Git changes to pinpoint exact file, function and reproduction trigger. Read-only.",
+      ),
+      { roleLabel: "review", expanded: true },
+    ),
+    tplAgent(
+      "slot-bug-fixer",
+      pick(locale, "最小修复与回归验证", "Minimal Fix & Regression Test"),
+      704,
+      54,
+      pick(
+        locale,
+        "根据已确认的根因报告，实施最小外科手术式修复，补充防回归测试并输出根因与验证复盘报告。",
+        "Apply a surgical fix for the confirmed root cause, add a regression test, and output a structured post-mortem verification report.",
+      ),
+      { roleLabel: "implementation", downstream: true, expanded: true },
+    ),
+    tplDisplay(
+      "slot-bug-report",
+      pick(locale, "故障复盘与修复报告", "Live Root-Cause & Fix Report"),
+      1056,
+      96,
+      "slot-bug-fixer",
+      pick(
+        locale,
+        "等待修复 Agent 输出最新故障根因与回归验证报告…",
+        "Follows latest root-cause analysis and verification report…",
+      ),
+      false,
+    ),
+  ];
+  const bugHuntEdges: FlowEdge[] = [
+    {
+      ...newEdge("slot-bug-term", "slot-bug-locator", "reference"),
+      id: "ebug-ref-term",
+    },
+    {
+      ...newEdge("slot-bug-git", "slot-bug-locator", "reference"),
+      id: "ebug-ref-git",
+    },
+    {
+      ...newEdge("slot-bug-locator", "slot-bug-fixer", "continuation"),
+      id: "ebug-cont",
+      mode: "session",
+      trigger: "confirm",
+    },
+  ];
+
+  /* 6. Multi-Reviewer PR Audit -> Bilingual Release Notes */
+  const releaseNodes: FlowNode[] = [
+    tplTool(
+      "git",
+      "slot-rel-git",
+      pick(locale, "Git 待发变更", "Git Repo Changes"),
+      24,
+      54,
+      false,
+    ),
+    tplAgent(
+      "slot-rel-correctness",
+      pick(locale, "正确性与安全审查", "Correctness & Security Reviewer"),
+      344,
+      58,
+      pick(
+        locale,
+        "审查当前工作区最近的提交与未提交变更，排查逻辑缺陷、权限边界与潜在性能回退。不要修改文件。",
+        "Audit recent commits and working diffs for logic bugs, security boundaries and regressions. Read-only.",
+      ),
+      { roleLabel: "review", expanded: false },
+    ),
+    tplAgent(
+      "slot-rel-dx",
+      pick(locale, "兼容性与文档核查", "DX & Breaking-Change Auditor"),
+      344,
+      214,
+      pick(
+        locale,
+        "核查公开类型契约、配置迁移影响、CLI 命令与中英文文档一致性，标记任何破坏性变更。不要修改文件。",
+        "Check public API contracts, migration impact, CLI commands and docs consistency; flag any breaking changes. Read-only.",
+      ),
+      { roleLabel: "review", expanded: false },
     ),
     tplAgent(
       "slot-proof",
-      "双语校对与核验",
-      408,
+      pick(locale, "PR 结论与双语发布说明", "PR Verdict & Bilingual Changelog"),
+      676,
       54,
-      "翻译并校对上游变更说明，核对命令、版本号与术语一致性，输出中英对照版本。",
-      { roleLabel: "review" },
+      pick(
+        locale,
+        "综合两路审查报告，先给出是否可发布的明确结论与阻塞项，再输出结构化中英双语变更说明（新增、改进、修复）。",
+        "Combine both audit reports into a ship/block verdict, followed by structured bilingual release notes (Added, Improved, Fixed).",
+      ),
+      { roleLabel: "delivery", downstream: true, expanded: true },
     ),
   ];
   const releaseEdges: FlowEdge[] = [
     {
-      ...newEdge("slot-writer", "slot-proof", "continuation"),
+      ...newEdge("slot-rel-git", "slot-rel-correctness", "reference"),
+      id: "er-git-1",
+      always: true,
+    },
+    {
+      ...newEdge("slot-rel-git", "slot-rel-dx", "reference"),
+      id: "er-git-2",
+      always: true,
+    },
+    {
+      ...newEdge("slot-rel-correctness", "slot-proof", "continuation"),
       id: "er-1",
+      mode: "conclusion",
+      trigger: "confirm",
+    },
+    {
+      ...newEdge("slot-rel-dx", "slot-proof", "continuation"),
+      id: "er-2",
+      mode: "conclusion",
       trigger: "confirm",
     },
   ];
@@ -126,19 +626,27 @@ export function builtinTemplates(): WorkflowTemplate[] {
       id: "builtin-review",
       title: "implementationReview",
       description: "implementationReviewDescription",
-      revision: 1,
+      revision: 2,
       builtin: true,
       color: "blue",
-      w: 1152,
-      h: 474,
+      w: 1044,
+      h: 476,
       nodes: reviewNodes,
       edges: reviewEdges,
       ports: [
         {
+          id: "in-spec-ref",
+          kind: "reference",
+          direction: "in",
+          name: pick(locale, "外部规格输入", "Spec context"),
+          nodes: ["slot-analyze"],
+          hidden: false,
+        },
+        {
           id: "in-analyze",
           kind: "continuation",
           direction: "in",
-          name: "分析项目",
+          name: pick(locale, "启动规划", "Start plan"),
           nodes: ["slot-analyze"],
           hidden: false,
         },
@@ -146,7 +654,7 @@ export function builtinTemplates(): WorkflowTemplate[] {
           id: "out-deliver",
           kind: "continuation",
           direction: "out",
-          name: "汇总结论",
+          name: pick(locale, "行动清单出口", "Delivery checklist"),
           nodes: ["slot-deliver"],
           hidden: false,
         },
@@ -156,11 +664,11 @@ export function builtinTemplates(): WorkflowTemplate[] {
       id: "builtin-parallel",
       title: "parallelResearch",
       description: "parallelResearchDescription",
-      revision: 1,
+      revision: 2,
       builtin: true,
       color: "teal",
-      w: 756,
-      h: 492,
+      w: 712,
+      h: 476,
       nodes: parallelNodes,
       edges: parallelEdges,
       ports: [
@@ -168,7 +676,7 @@ export function builtinTemplates(): WorkflowTemplate[] {
           id: "in-res",
           kind: "reference",
           direction: "in",
-          name: "调查上下文",
+          name: pick(locale, "侦察资料输入", "Recon context"),
           nodes: ["slot-res1", "slot-res2"],
           hidden: false,
         },
@@ -176,8 +684,114 @@ export function builtinTemplates(): WorkflowTemplate[] {
           id: "out-synth",
           kind: "continuation",
           direction: "out",
-          name: "汇总结论",
+          name: pick(locale, "全景综述出口", "Synthesis output"),
           nodes: ["slot-synth"],
+          hidden: false,
+        },
+      ],
+    },
+    {
+      id: "builtin-tdd-loop",
+      title: "tddLoopWorkflow",
+      description: "tddLoopWorkflowDescription",
+      revision: 1,
+      builtin: true,
+      color: "amber",
+      w: 1060,
+      h: 644,
+      nodes: tddNodes,
+      edges: tddEdges,
+      ports: [
+        {
+          id: "in-tdd-context",
+          kind: "reference",
+          direction: "in",
+          name: pick(locale, "需求与测试上下文", "TDD spec input"),
+          nodes: ["slot-tdd-author"],
+          hidden: false,
+        },
+        {
+          id: "in-tdd-start",
+          kind: "continuation",
+          direction: "in",
+          name: pick(locale, "启动 TDD 闭环", "Run TDD loop"),
+          nodes: ["slot-tdd-author"],
+          hidden: false,
+        },
+        {
+          id: "out-tdd-summary",
+          kind: "continuation",
+          direction: "out",
+          name: pick(locale, "已验证摘要", "Verified summary"),
+          nodes: ["slot-tdd-summary"],
+          hidden: false,
+        },
+      ],
+    },
+    {
+      id: "builtin-ab-fork",
+      title: "abForkWorkflow",
+      description: "abForkWorkflowDescription",
+      revision: 1,
+      builtin: true,
+      color: "violet",
+      w: 1064,
+      h: 476,
+      nodes: abForkNodes,
+      edges: abForkEdges,
+      ports: [
+        {
+          id: "in-fork-ref",
+          kind: "reference",
+          direction: "in",
+          name: pick(locale, "背景约束", "Problem context"),
+          nodes: ["slot-fork-root"],
+          hidden: false,
+        },
+        {
+          id: "in-fork-start",
+          kind: "continuation",
+          direction: "in",
+          name: pick(locale, "探索并分叉", "Explore & fork"),
+          nodes: ["slot-fork-root"],
+          hidden: false,
+        },
+        {
+          id: "out-fork-judge",
+          kind: "continuation",
+          direction: "out",
+          name: pick(locale, "胜出方案", "Winning design"),
+          nodes: ["slot-fork-judge"],
+          hidden: false,
+        },
+      ],
+    },
+    {
+      id: "builtin-bug-hunt",
+      title: "bugHuntWorkflow",
+      description: "bugHuntWorkflowDescription",
+      revision: 1,
+      builtin: true,
+      color: "teal",
+      w: 1384,
+      h: 476,
+      nodes: bugHuntNodes,
+      edges: bugHuntEdges,
+      ports: [
+        {
+          id: "in-bug-ref",
+          kind: "reference",
+          direction: "in",
+          name: pick(locale, "报错补充上下文", "Extra repro context"),
+          nodes: ["slot-bug-locator"],
+          hidden: false,
+        },
+        {
+          id: "out-bug-fix",
+          kind: "continuation",
+          direction: "out",
+          name: pick(locale, "修复完成出口", "Verified fix"),
+          nodes: ["slot-bug-fixer"],
           hidden: false,
         },
       ],
@@ -186,11 +800,11 @@ export function builtinTemplates(): WorkflowTemplate[] {
       id: "builtin-release",
       title: "releaseWorkflow",
       description: "releaseWorkflowDescription",
-      revision: 1,
+      revision: 2,
       builtin: true,
       color: "blue",
-      w: 780,
-      h: 492,
+      w: 1016,
+      h: 476,
       nodes: releaseNodes,
       edges: releaseEdges,
       ports: [
@@ -198,15 +812,15 @@ export function builtinTemplates(): WorkflowTemplate[] {
           id: "in-writer",
           kind: "reference",
           direction: "in",
-          name: "变更输入",
-          nodes: ["slot-writer"],
+          name: pick(locale, "补充发布背景", "Release context"),
+          nodes: ["slot-rel-correctness", "slot-rel-dx"],
           hidden: false,
         },
         {
           id: "out-proof",
           kind: "continuation",
           direction: "out",
-          name: "发布说明",
+          name: pick(locale, "发布说明", "Release notes"),
           nodes: ["slot-proof"],
           hidden: false,
         },
@@ -215,8 +829,164 @@ export function builtinTemplates(): WorkflowTemplate[] {
   ];
 }
 
-export function allTemplates(doc: FlowspaceDocument): WorkflowTemplate[] {
-  return [...builtinTemplates(), ...(doc.templates ?? [])];
+/**
+ * Compact, 100%-localized starter document (~740x468 bounds) that fits comfortably
+ * at ~85%-100% zoom on standard screens without triggering LOD card collapse,
+ * and without hardcoding non-existent workspace file paths like "README.md".
+ */
+export function localizedStarterDocument(
+  locale: Locale = getLanguage(),
+  workspaceCwd?: string,
+  workspaceId?: string,
+  baseDoc?: FlowspaceDocument,
+): FlowspaceDocument {
+  const copy = baseDoc ? structuredClone(baseDoc) : emptyDocument();
+  const baseX = copy.nodes.length
+    ? Math.max(...copy.nodes.map((n) => n.x + n.width)) + 96
+    : 56;
+  const baseY = 76;
+  const placement = {
+    ...(workspaceId ? { workspaceId } : {}),
+    ...(workspaceCwd ? { cwd: workspaceCwd } : {}),
+  };
+
+  const group: FlowNode = {
+    ...newNode(
+      "group",
+      baseX,
+      baseY,
+      pick(locale, "分析 → 审查 → 汇总交付", "Analyze → Review → Deliver"),
+    ),
+    color: "blue",
+    width: 736,
+    height: 468,
+    templateId: "builtin-review",
+    templateRevision: 2,
+    titleKey: "implementationReview",
+  };
+  delete group.window;
+
+  const specNote: FlowNode = {
+    ...tplNote(
+      uid(),
+      pick(locale, "验收标准", "Guardrails"),
+      baseX + 24,
+      baseY + 48,
+      pick(
+        locale,
+        "先只读核对真实源码证据，保持结论精炼可验证；确认无误后再放行生成行动清单。",
+        "Verify real code facts read-only first; keep findings concrete and pause for review before final checklist.",
+      ),
+      false,
+    ),
+    parentId: group.id,
+    templateSlotId: "slot-spec-note",
+  };
+
+  const analyzeAgent: FlowNode = {
+    ...tplAgent(
+      uid(),
+      pick(locale, "分析项目架构", "Analyze Architecture"),
+      baseX + 24,
+      baseY + 170,
+      pick(
+        locale,
+        "阅读当前工作区，简要说明项目定位、核心模块分层以及最值得优先改进的一点。先不要修改文件。",
+        "Inspect the current workspace, summarize project purpose, core module layers and top improvement opportunity. Do not edit files.",
+      ),
+      { roleLabel: "implementation", expanded: false, pinned: true },
+    ),
+    ...placement,
+    parentId: group.id,
+    templateSlotId: "slot-analyze",
+  };
+
+  const reviewAgent: FlowNode = {
+    ...tplAgent(
+      uid(),
+      pick(locale, "独立风险审查", "Adversarial Review"),
+      baseX + 24,
+      baseY + 312,
+      pick(
+        locale,
+        "审查上游分析建议的可行性，核对代码事实、潜在回归风险与边界条件。不要修改文件。",
+        "Audit upstream findings against code evidence, checking feasibility, edge cases and regression risks. Do not edit files.",
+      ),
+      { roleLabel: "review", downstream: true, expanded: false, pinned: true },
+    ),
+    ...placement,
+    parentId: group.id,
+    templateSlotId: "slot-review",
+  };
+
+  const deliverAgent: FlowNode = {
+    ...tplAgent(
+      uid(),
+      pick(locale, "可执行行动清单", "Actionable Checklist"),
+      baseX + 392,
+      baseY + 52,
+      pick(
+        locale,
+        "结合上游分析与审查结论，整理出一份结构清晰、可直接执行的行动清单与验证命令。",
+        "Combine upstream analysis and review into a concise, directly executable checklist and verification plan.",
+      ),
+      { roleLabel: "delivery", downstream: true, expanded: true, pinned: true },
+    ),
+    ...placement,
+    parentId: group.id,
+    templateSlotId: "slot-deliver",
+  };
+
+  const edges: FlowEdge[] = [
+    {
+      ...newEdge(specNote.id, reviewAgent.id, "reference"),
+      always: true,
+    },
+    {
+      ...newEdge(specNote.id, deliverAgent.id, "reference"),
+      always: true,
+    },
+    {
+      ...newEdge(analyzeAgent.id, reviewAgent.id, "continuation"),
+      mode: "session",
+      trigger: "auto",
+    },
+    {
+      ...newEdge(reviewAgent.id, deliverAgent.id, "continuation"),
+      mode: "conclusion",
+      trigger: "confirm",
+    },
+  ];
+
+  group.ports = [
+    {
+      id: uid(),
+      kind: "continuation",
+      direction: "in",
+      name: pick(locale, "启动分析", "Start analysis"),
+      nodes: [analyzeAgent.id],
+      hidden: false,
+    },
+    {
+      id: uid(),
+      kind: "continuation",
+      direction: "out",
+      name: pick(locale, "行动清单", "Action checklist"),
+      nodes: [deliverAgent.id],
+      hidden: false,
+    },
+  ];
+
+  copy.nodes.push(group, specNote, analyzeAgent, reviewAgent, deliverAgent);
+  copy.edges.push(...edges);
+  return copy;
+}
+
+export function allTemplates(
+  doc: FlowspaceDocument,
+  locale: Locale = getLanguage(),
+): WorkflowTemplate[] {
+  return [...builtinTemplates(locale), ...(doc.templates ?? [])];
 }
 
 export function captureTemplate(
@@ -226,18 +996,34 @@ export function captureTemplate(
   description: string,
 ): WorkflowTemplate {
   const group = doc.nodes.find((n) => n.id === groupId && n.kind === "group");
-  if (!group) throw new Error("工作流分组不存在");
+  if (!group) throw new Error(t("groupNotFound"));
   const descendantIds = groupDescendants(doc, group.id);
   const inside = new Set(descendantIds);
+  const slotOf = new Map<string, string>(
+    doc.nodes
+      .filter((n) => inside.has(n.id))
+      .map((n) => [n.id, n.templateSlotId ?? n.id]),
+  );
+
   const nodes = doc.nodes
     .filter((n) => inside.has(n.id))
     .map((n) => {
-      const slot = n.templateSlotId ?? n.id;
+      const slot = slotOf.get(n.id)!;
       const clone = structuredClone(n);
+      /* Strip all machine/session-bound state so exported templates stay portable */
       delete clone.sessionId;
       delete clone.lastSubmittedTask;
       delete clone.window;
       delete clone.nudge;
+      delete clone.workspaceId;
+      delete clone.cwd;
+      delete clone.branch;
+      delete clone.worktreePath;
+      delete clone.changesSessionId;
+      delete clone.changesSeq;
+      delete clone.changesTurn;
+      delete clone.terminalSessionId;
+      delete clone.terminalId;
       return {
         ...clone,
         id: slot,
@@ -245,23 +1031,25 @@ export function captureTemplate(
         parentId:
           n.parentId === group.id
             ? undefined
-            : doc.nodes.find((p) => p.id === n.parentId)?.templateSlotId ??
-              n.parentId,
+            : n.parentId
+              ? slotOf.get(n.parentId)
+              : undefined,
+        sourceNodeId:
+          n.sourceNodeId && inside.has(n.sourceNodeId)
+            ? slotOf.get(n.sourceNodeId)
+            : undefined,
         x: n.x - group.x,
         y: n.y - group.y,
         draft: n.task || n.draft,
       };
     });
-  const slotOf = new Map<string, string>(
-    doc.nodes
-      .filter((n) => inside.has(n.id))
-      .map((n) => [n.id, n.templateSlotId ?? n.id]),
-  );
+
   const edges = doc.edges
     .filter((e) => inside.has(e.source) && inside.has(e.target))
     .map((e) => {
       const clone = structuredClone(e);
       delete clone.sentVersion;
+      delete clone.currentVersion;
       delete clone.originMode;
       return {
         ...clone,
@@ -274,10 +1062,21 @@ export function captureTemplate(
         })),
       };
     });
-  const ports = inferGroupPorts(doc, group).map((p) => ({
-    ...structuredClone(p),
-    nodes: p.nodes.map((id) => slotOf.get(id) ?? id),
-  }));
+
+  /* Preserve customized group.ports (order, custom labels, hidden, merged targets) */
+  const ports: GroupPort[] = inferGroupPorts(doc, group)
+    .map((p) => {
+      const mappedTargets = p.nodes
+        .filter((id) => inside.has(id))
+        .map((id) => slotOf.get(id)!);
+      return {
+        ...structuredClone(p),
+        id: p.id,
+        nodes: mappedTargets,
+      };
+    })
+    .filter((p) => p.nodes.length > 0);
+
   return {
     id: uid(),
     title,
@@ -309,41 +1108,64 @@ export function instantiateTemplate(
     templateRevision: template.revision,
     ...(template.builtin ? { titleKey: template.title } : {}),
   };
+  delete group.window;
+
   const idMap = new Map<string, string>();
-  for (const n of template.nodes) idMap.set(n.id, uid());
+  for (const n of template.nodes) {
+    idMap.set(n.templateSlotId ?? n.id, uid());
+    idMap.set(n.id, idMap.get(n.templateSlotId ?? n.id)!);
+  }
+
   const createdNodes: FlowNode[] = template.nodes.map((n) => {
     const clone = structuredClone(n);
     delete clone.sessionId;
     delete clone.lastSubmittedTask;
     delete clone.window;
+    delete clone.nudge;
+    const slotKey = n.templateSlotId ?? n.id;
     return {
       ...clone,
-      id: idMap.get(n.id)!,
-      templateSlotId: n.templateSlotId ?? n.id,
-      parentId: n.parentId ? idMap.get(n.parentId) ?? group.id : group.id,
+      id: idMap.get(slotKey)!,
+      templateSlotId: slotKey,
+      parentId: n.parentId ? (idMap.get(n.parentId) ?? group.id) : group.id,
+      sourceNodeId: n.sourceNodeId
+        ? (idMap.get(n.sourceNodeId) ?? n.sourceNodeId)
+        : undefined,
       x: x + n.x,
       y: y + n.y,
       ...(n.kind === "agent"
         ? {
-            workspaceId: placement?.workspaceId,
-            cwd: placement?.cwd,
+            ...(placement?.workspaceId
+              ? { workspaceId: placement.workspaceId }
+              : {}),
+            ...(placement?.cwd ? { cwd: placement.cwd } : {}),
             draft: n.task || n.draft,
+            continuationPrompt: n.continuationPrompt ?? n.task,
           }
-        : {}),
+        : (n.kind === "git" || n.kind === "file") && placement?.cwd
+          ? { cwd: placement.cwd }
+          : {}),
     };
   });
-  const createdEdges: FlowEdge[] = template.edges.map((e) => ({
-    ...structuredClone(e),
-    id: uid(),
-    source: idMap.get(e.source)!,
-    target: idMap.get(e.target)!,
-    waypoints: e.waypoints?.map((p) => ({ x: x + p.x, y: y + p.y })),
-  }));
-  group.ports = template.ports.map((p) => ({
-    ...structuredClone(p),
-    id: uid(),
-    nodes: p.nodes.map((s) => idMap.get(s)).filter(Boolean) as string[],
-  }));
+
+  const createdEdges: FlowEdge[] = template.edges
+    .filter((e) => idMap.has(e.source) && idMap.has(e.target))
+    .map((e) => ({
+      ...structuredClone(e),
+      id: uid(),
+      source: idMap.get(e.source)!,
+      target: idMap.get(e.target)!,
+      waypoints: e.waypoints?.map((p) => ({ x: x + p.x, y: y + p.y })),
+    }));
+
+  group.ports = template.ports
+    .map((p) => ({
+      ...structuredClone(p),
+      id: uid(),
+      nodes: p.nodes.map((s) => idMap.get(s)).filter(Boolean) as string[],
+    }))
+    .filter((p) => p.nodes.length > 0);
+
   doc.nodes.push(group, ...createdNodes);
   doc.edges.push(...createdEdges);
   return group;
@@ -369,20 +1191,13 @@ export function computeSyncPlan(
   const outside = doc.edges.filter(
     (e) => inside.has(e.source) !== inside.has(e.target),
   ).length;
-  const slots = new Set(
-    template.nodes.map((n) => n.templateSlotId ?? n.id),
-  );
-  const memberSlots = new Set(
-    members.map((n) => n.templateSlotId ?? ""),
-  );
+  const slots = new Set(template.nodes.map((n) => n.templateSlotId ?? n.id));
+  const memberSlots = new Set(members.map((n) => n.templateSlotId ?? ""));
   const added = template.nodes.filter(
     (n) => !memberSlots.has(n.templateSlotId ?? n.id),
   );
   const removed = members.filter(
-    (n) =>
-      n.templateSlotId &&
-      !slots.has(n.templateSlotId) &&
-      !n.sessionId,
+    (n) => n.templateSlotId && !slots.has(n.templateSlotId) && !n.sessionId,
   );
   const locked = members.filter((n) => !!n.sessionId);
   const edited = members.filter((n) => {
@@ -411,46 +1226,78 @@ export function synchronizeTemplate(
       existingBySlot.set(n.templateSlotId, n);
     }
   }
+
+  /* Pass 1: Pre-allocate stable slot -> nodeId map so nested subgroups resolve in any order */
   const slotToNodeId = new Map<string, string>();
+  for (const src of template.nodes) {
+    const slot = src.templateSlotId ?? src.id;
+    const existing = existingBySlot.get(slot);
+    const assignedId = existing ? existing.id : uid();
+    slotToNodeId.set(slot, assignedId);
+    slotToNodeId.set(src.id, assignedId);
+  }
+
   group.width = template.w;
   group.height = template.h;
   group.templateRevision = template.revision;
 
+  /* Pass 2: Update existing slots in-place and insert newly added template slots */
   for (const src of template.nodes) {
     const slot = src.templateSlotId ?? src.id;
     const existing = existingBySlot.get(slot);
+    const resolvedParentId = src.parentId
+      ? (slotToNodeId.get(src.parentId) ?? group.id)
+      : group.id;
+    const resolvedSourceNodeId = src.sourceNodeId
+      ? (slotToNodeId.get(src.sourceNodeId) ?? src.sourceNodeId)
+      : undefined;
+
     if (existing) {
-      slotToNodeId.set(slot, existing.id);
+      existing.parentId = resolvedParentId;
       existing.x = group.x + src.x;
       existing.y = group.y + src.y;
       existing.width = src.width;
       existing.height = src.height;
+      if (resolvedSourceNodeId) existing.sourceNodeId = resolvedSourceNodeId;
       if (!keepTasks && !existing.sessionId) {
         existing.title = src.title;
         existing.task = src.task;
         existing.draft = src.task;
+        existing.continuationPrompt = src.continuationPrompt;
         existing.text = src.text;
+        existing.planMode = src.planMode;
+        existing.roleLabel = src.roleLabel;
+        existing.participation = src.participation;
+        existing.rerun = src.rerun;
+        existing.expanded = src.expanded;
+        if (src.columns) existing.columns = structuredClone(src.columns);
       }
     } else {
-      const freshId = uid();
-      slotToNodeId.set(slot, freshId);
+      const freshId = slotToNodeId.get(slot)!;
       const clone = structuredClone(src);
       delete clone.sessionId;
       delete clone.lastSubmittedTask;
+      delete clone.window;
+      delete clone.nudge;
       doc.nodes.push({
         ...clone,
         id: freshId,
         templateSlotId: slot,
-        parentId: group.id,
+        parentId: resolvedParentId,
+        sourceNodeId: resolvedSourceNodeId,
         x: group.x + src.x,
         y: group.y + src.y,
         ...(src.kind === "agent"
           ? {
-              workspaceId: placement?.workspaceId,
-              cwd: placement?.cwd,
+              ...(placement?.workspaceId
+                ? { workspaceId: placement.workspaceId }
+                : {}),
+              ...(placement?.cwd ? { cwd: placement.cwd } : {}),
               draft: src.task || src.draft,
             }
-          : {}),
+          : (src.kind === "git" || src.kind === "file") && placement?.cwd
+            ? { cwd: placement.cwd }
+            : {}),
       });
     }
   }
@@ -504,11 +1351,28 @@ export function synchronizeTemplate(
     });
   }
 
-  group.ports = template.ports.map((p) => ({
-    ...structuredClone(p),
-    id: uid(),
-    nodes: p.nodes.map((s) => slotToNodeId.get(s)).filter(Boolean) as string[],
-  }));
+  const prevPorts = group.ports ?? [];
+  group.ports = template.ports
+    .map((p) => {
+      const mappedTargets = p.nodes
+        .map((s) => slotToNodeId.get(s))
+        .filter(Boolean) as string[];
+      const prevMatch = prevPorts.find(
+        (old) =>
+          old.kind === p.kind &&
+          old.direction === p.direction &&
+          old.nodes.length === mappedTargets.length &&
+          mappedTargets.every((id) => old.nodes.includes(id)),
+      );
+      return {
+        ...structuredClone(p),
+        id: prevMatch?.id ?? uid(),
+        name: keepTasks && prevMatch ? prevMatch.name : p.name,
+        hidden: prevMatch ? prevMatch.hidden : p.hidden,
+        nodes: mappedTargets,
+      };
+    })
+    .filter((p) => p.nodes.length > 0);
 }
 
 export function buildSnapshot(
@@ -520,8 +1384,7 @@ export function buildSnapshot(
   const drafts = agents.filter(
     (n) => !n.sessionId && (n.draft.trim() || n.task.trim()),
   ).length;
-  const stopping =
-    hostSnapshot?.live.filter((l) => l.running).length ?? 0;
+  const stopping = hostSnapshot?.live.filter((l) => l.running).length ?? 0;
   const awaiting =
     (hostSnapshot?.runs
       .filter((r) => ["running", "waiting", "paused"].includes(r.state))
@@ -551,7 +1414,7 @@ export function buildSnapshot(
         })),
     )
     .slice(-3)
-    .reverse();
+    .toReversed();
 
   return {
     id: uid(),

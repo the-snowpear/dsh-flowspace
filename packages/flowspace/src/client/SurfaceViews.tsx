@@ -9,13 +9,59 @@ import type {
   FlowspaceSnapshot,
   GroupColor,
   GroupPort,
+  RunStep,
+  StartRequest,
   WorkflowTemplate,
   WorkspaceBrief,
 } from "../types.ts";
-import { Icon, kindIconName } from "./icons.tsx";
-import { getLanguage, t } from "./i18n.ts";
+import type { CanvasBridge } from "./bridge.ts";
 import { capsuleStateOf, inferGroupPorts, nodeBox } from "./geometry.ts";
-import { allTemplates } from "./templates.ts";
+import { getLanguage, t } from "./i18n.ts";
+import { BrandMark, Icon, kindIconName } from "./icons.tsx";
+import { PayloadPeekCard } from "./PayloadPeekPopover.tsx";
+import { allTemplates, builtinTemplates } from "./templates.ts";
+
+export type AlignMode =
+  | "left"
+  | "center"
+  | "right"
+  | "top"
+  | "middle"
+  | "bottom";
+export type DistributeAxis = "horizontal" | "vertical";
+
+export interface StructureInspectorItem {
+  id: string;
+  kind: string;
+  title: string;
+  subtitle?: string;
+  branch?: string;
+  worktreePath?: string;
+  cwd?: string;
+  sessionId?: string;
+}
+
+type StepWithTelemetry = RunStep & {
+  telemetry?: {
+    stepCount: number;
+    inputTokens: number;
+    outputTokens: number;
+    durationMs?: number;
+  };
+};
+
+type TokenWithLoopGate = FlowToken & {
+  loopCapReached?: boolean;
+};
+
+type ExtendedBridge = CanvasBridge & {
+  extendLoop?: (req: {
+    runId: string;
+    edgeId?: string;
+    nodeId?: string;
+    extraRounds?: number;
+  }) => Promise<void>;
+};
 
 export function formatTime(at: number): string {
   return new Date(at).toLocaleTimeString(
@@ -29,6 +75,42 @@ export function formatDate(at: number): string {
     getLanguage() === "en" ? "en-GB" : "zh-CN",
     { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" },
   );
+}
+
+export function formatStepDuration(step: StepWithTelemetry): string | null {
+  const ms =
+    step.telemetry?.durationMs ??
+    (step.endedAt && step.endedAt >= step.createdAt
+      ? step.endedAt - step.createdAt
+      : undefined);
+  if (ms === undefined || ms < 0) return null;
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const sec = ms / 1000;
+  if (sec < 60) return `${sec < 10 ? sec.toFixed(1) : Math.round(sec)}s`;
+  const mins = Math.floor(sec / 60);
+  const rem = Math.round(sec % 60);
+  return `${mins}m ${rem}s`;
+}
+
+export function formatStepTelemetrySummary(step: StepWithTelemetry): string {
+  const parts: string[] = [];
+  if (step.telemetry) {
+    if (step.telemetry.stepCount > 0) {
+      parts.push(`${step.telemetry.stepCount} st`);
+    }
+    const totalTokens =
+      (step.telemetry.inputTokens || 0) + (step.telemetry.outputTokens || 0);
+    if (totalTokens > 0) {
+      parts.push(
+        totalTokens >= 1000
+          ? `${(totalTokens / 1000).toFixed(1)}k tok`
+          : `${totalTokens} tok`,
+      );
+    }
+  }
+  const dur = formatStepDuration(step);
+  if (dur) parts.push(dur);
+  return parts.join(" · ");
 }
 
 export function nodeStatusOf(
@@ -53,15 +135,60 @@ export function nodeStatusOf(
   const live = snapshot?.live.find((l) => l.nodeId === nodeId);
   if (live?.pendingInput.length) return "input";
   if (live?.running) return "running";
+  const node = snapshot?.document.nodes.find((n) => n.id === nodeId);
+  if ((node?.participation as string | undefined) === "bypassed") {
+    return "bypassed";
+  }
   const lastStep = snapshot?.runs
     .flatMap((r) => r.steps)
     .filter((s) => s.nodeId === nodeId)
     .at(-1);
   if (lastStep) return lastStep.state;
-  const node = snapshot?.document.nodes.find((n) => n.id === nodeId);
   const hasSessionHistory =
     (live?.seq ?? -1) >= 0 || Boolean(live?.output?.trim());
   return node?.sessionId && hasSessionHistory ? "completed" : "draft";
+}
+
+function templateCapabilityBadges(tpl: WorkflowTemplate): {
+  label: string;
+  warn?: boolean;
+}[] {
+  const badges: { label: string; warn?: boolean }[] = [];
+  if (tpl.nodes.some((n) => n.planMode)) {
+    badges.push({ label: t("badgePlan") });
+  }
+  if (tpl.edges.some((e) => e.mode === "fork")) {
+    badges.push({ label: t("badgeFork") });
+  }
+  const contEdges = tpl.edges.filter((e) => e.kind === "continuation");
+  const loopEdge = contEdges.find((e) =>
+    contEdges.some(
+      (back) => back.source === e.target && back.target === e.source,
+    ),
+  );
+  if (loopEdge) {
+    badges.push({
+      label: t("badgeLoop", { count: loopEdge.maxRounds || 3 }),
+      warn: true,
+    });
+  }
+  const joinTarget = tpl.nodes.some(
+    (n) => contEdges.filter((e) => e.target === n.id).length >= 2,
+  );
+  if (joinTarget) {
+    badges.push({ label: t("badgeJoin") });
+  }
+  if (
+    tpl.nodes.some((n) =>
+      ["git", "changes", "terminal", "board"].includes(n.kind),
+    )
+  ) {
+    badges.push({ label: t("badgeTools") });
+  }
+  if (tpl.edges.some((e) => e.trigger === "confirm")) {
+    badges.push({ label: t("confirm"), warn: true });
+  }
+  return badges;
 }
 
 export function MiniGraph({
@@ -76,28 +203,55 @@ export function MiniGraph({
   const shown = nodes.filter((n) => n.kind !== "group");
   if (!shown.length) return null;
   const boxes = new Map(
-    shown.map((n) => [n.id, nodeBox({ ...n, window: null }, false)]),
+    shown.map((n) => [n.id, nodeBox({ ...n, window: undefined }, false)]),
   );
   const all = [...boxes.values()];
+  const wpPoints = edges.flatMap((e) => e.waypoints ?? []);
   const pad = 44;
-  const left = Math.min(...all.map((b) => b.x)) - pad;
-  const top = Math.min(...all.map((b) => b.y)) - pad;
-  const width = Math.max(...all.map((b) => b.x + b.w)) + pad - left;
-  const height = Math.max(...all.map((b) => b.y + b.h)) + pad - top;
+  const left =
+    Math.min(...all.map((b) => b.x), ...wpPoints.map((p) => p.x)) - pad;
+  const top =
+    Math.min(...all.map((b) => b.y), ...wpPoints.map((p) => p.y)) - pad;
+  const width =
+    Math.max(...all.map((b) => b.x + b.w), ...wpPoints.map((p) => p.x)) +
+    pad -
+    left;
+  const height =
+    Math.max(...all.map((b) => b.y + b.h), ...wpPoints.map((p) => p.y)) +
+    pad -
+    top;
 
   const renderWire = (edge: FlowEdge) => {
     const a = boxes.get(edge.source),
       b = boxes.get(edge.target);
     if (!a || !b) return null;
     const ax = a.x + a.w - left,
-      ay = a.y - top + Math.min(28, a.h / 2),
+      ay = a.y - top + (edge.kind === "reference" ? Math.min(72, a.h * 0.58) : Math.min(28, a.h / 2)),
       bx = b.x - left,
-      by = b.y - top + Math.min(28, b.h / 2),
-      reach = Math.max(40, Math.abs(bx - ax) * 0.45);
+      by = b.y - top + (edge.kind === "reference" ? Math.min(72, b.h * 0.58) : Math.min(28, b.h / 2));
     const cls =
       edge.kind === "reference"
         ? "mg-ref"
         : `mg-flow ${edge.trigger === "confirm" ? "mg-confirm" : ""}`;
+
+    /* Smooth backward-loop arc when cyclic feedback wire routes right-to-left */
+    if (bx < ax - 20) {
+      const loopY =
+        edge.waypoints?.length
+          ? Math.max(...edge.waypoints.map((p) => p.y - top))
+          : Math.max(a.y + a.h, b.y + b.h) - top + 36;
+      const d = `M${ax} ${ay} C${ax + 54} ${ay}, ${ax + 54} ${loopY}, ${(ax + bx) / 2} ${loopY} C${bx - 54} ${loopY}, ${bx - 54} ${by}, ${bx} ${by}`;
+      return (
+        <path
+          key={edge.id}
+          className={cls}
+          vectorEffect="non-scaling-stroke"
+          d={d}
+        />
+      );
+    }
+
+    const reach = Math.max(40, Math.abs(bx - ax) * 0.45);
     return (
       <path
         key={edge.id}
@@ -125,13 +279,15 @@ export function MiniGraph({
         const mgState =
           n.kind !== "agent"
             ? "other"
-            : st === "completed" || st === "done"
-              ? "done"
-              : st === "running"
-                ? "running"
-                : st === "waiting" || st === "input" || st === "paused"
-                  ? "waiting"
-                  : "agent";
+            : (n.participation as string) === "bypassed" || st === "bypassed"
+              ? "bypassed"
+              : st === "completed" || st === "done"
+                ? "done"
+                : st === "running"
+                  ? "running"
+                  : st === "waiting" || st === "input" || st === "paused"
+                    ? "waiting"
+                    : "agent";
         return (
           <g key={n.id}>
             <rect
@@ -184,19 +340,208 @@ export function MiniGraph({
   );
 }
 
+/* ============================================================
+   WelcomeStudio: Visual Empty-Canvas Blueprint Gallery & Wire Legend
+   ============================================================ */
+export interface WelcomeStudioProps {
+  doc?: FlowspaceDocument;
+  onSelectTemplate: (template: WorkflowTemplate) => void;
+  onCreateBlankAgent: () => void;
+  onBrowseLibrary: () => void;
+  onImportSession?: () => void;
+}
+
+export function WelcomeStudio({
+  doc,
+  onSelectTemplate,
+  onCreateBlankAgent,
+  onBrowseLibrary,
+  onImportSession,
+}: WelcomeStudioProps) {
+  const builtins = builtinTemplates(getLanguage());
+  const featured = builtins.slice(0, 4);
+  const totalCount = doc
+    ? allTemplates(doc, getLanguage()).length
+    : builtins.length;
+
+  return (
+    <div className="fs-welcome-overlay">
+      <div
+        className="fs-welcome-card fs-welcome-studio"
+        style={{
+          maxWidth: 784,
+          padding: "24px 26px 22px",
+          textAlign: "left",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 14,
+            marginBottom: 16,
+          }}
+        >
+          <div className="fs-welcome-mark" style={{ margin: 0, flexShrink: 0 }}>
+            <BrandMark />
+          </div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <span className="eyebrow">{t("welcomeEyebrow")}</span>
+            <h1 style={{ margin: "3px 0 4px", fontSize: 20 }}>
+              {t("welcomeTitle")}
+            </h1>
+            <p style={{ margin: 0, fontSize: 12.5 }}>
+              {t("welcomeStudioSubtitle")}
+            </p>
+          </div>
+        </div>
+
+        <div
+          className="fs-welcome-grid"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: 10,
+            marginBottom: 16,
+          }}
+        >
+          {featured.map((tpl) => {
+            const badges = templateCapabilityBadges(tpl).slice(0, 2);
+            return (
+              <button
+                key={tpl.id}
+                type="button"
+                className="template-card fs-blueprint-pick"
+                onClick={() => onSelectTemplate(tpl)}
+                style={{
+                  textAlign: "left",
+                  padding: 0,
+                  cursor: "pointer",
+                }}
+              >
+                <div className="template-graph" style={{ height: 88 }}>
+                  <MiniGraph nodes={tpl.nodes} edges={tpl.edges} />
+                </div>
+                <div style={{ padding: "10px 12px 12px" }}>
+                  <b
+                    style={{
+                      display: "block",
+                      fontSize: 13,
+                      lineHeight: 1.35,
+                      marginBottom: 4,
+                    }}
+                  >
+                    {t(tpl.title)}
+                  </b>
+                  <small
+                    style={{
+                      display: "-webkit-box",
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden",
+                      color: "var(--text-3)",
+                      fontSize: 11.5,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {t(tpl.description)}
+                  </small>
+                  <div className="template-meta" style={{ marginTop: 8 }}>
+                    <span>{t("nodesCount", { count: tpl.nodes.length })}</span>
+                    {badges.map((b, bi) => (
+                      <span key={bi} className={b.warn ? "warn" : ""}>
+                        {b.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div
+          className="fs-welcome-actions"
+          style={{ justifyContent: "space-between", marginBottom: 14 }}
+        >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={onCreateBlankAgent}
+            >
+              <Icon name="plus" />
+              <span>{t("newAgent")}</span>
+            </button>
+            {onImportSession && (
+              <button
+                type="button"
+                className="button"
+                onClick={onImportSession}
+              >
+                <Icon name="chat" />
+                <span>{t("existingSession")}</span>
+              </button>
+            )}
+          </div>
+          <button type="button" className="button" onClick={onBrowseLibrary}>
+            <Icon name="box" />
+            <span>{t("browseAllBlueprints", { count: totalCount })}</span>
+          </button>
+        </div>
+
+        <div
+          className="fs-welcome-legend"
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 6,
+            paddingTop: 12,
+            borderTop: "1px solid var(--border)",
+          }}
+        >
+          {(["legendPillRef", "legendPillCont", "legendPillMsg"] as const).map(
+            (key) => (
+              <span
+                key={key}
+                style={{
+                  fontSize: 11,
+                  color: "var(--text-3)",
+                  padding: "3px 9px",
+                  borderRadius: 999,
+                  background: "var(--surface-2)",
+                }}
+              >
+                {t(key)}
+              </span>
+            ),
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   InspectorPanel: Single Node, Multi-Select, Structure & X-Ray Wire Inspector
+   ============================================================ */
 export interface InspectorProps {
   open: boolean;
   doc: FlowspaceDocument;
   snapshot: FlowspaceSnapshot | null;
   workspaces: WorkspaceBrief[];
+  bridge?: CanvasBridge;
   selectedNode?: FlowNode;
+  selectedNodes?: FlowNode[];
   selectedEdge?: FlowEdge;
+  selectedStructureCard?: StructureInspectorItem | null;
   onClose: () => void;
   onEditNode: (id: string, changes: Partial<FlowNode>) => void;
   onEditEdge: (id: string, changes: Partial<FlowEdge>) => void;
   onDeleteSelection: () => void;
   onUngroup: (groupId: string) => void;
   onReleaseToken: (runId: string, tokenId: string, accept: boolean) => void;
+  onExtendLoop?: (runId: string, edgeId: string, nodeId?: string) => void;
   onOpenNativeChat: (sessionId: string) => void;
   onOpenDetail: (nodeId: string) => void;
   onOpenWindow: (nodeId: string) => void;
@@ -205,6 +550,19 @@ export interface InspectorProps {
   onSaveTemplate: (groupId: string) => void;
   onSyncTemplate: (groupId: string) => void;
   onDetachTemplate: (groupId: string) => void;
+  /* Optional Wave 2 ComfyUI callbacks */
+  onAlign?: (mode: AlignMode) => void;
+  onDistribute?: (axis: DistributeAxis) => void;
+  onGroupSelected?: () => void;
+  onDuplicateSelected?: () => void;
+  onBatchParticipation?: (
+    participation: "global" | "manual" | "paused" | "bypassed",
+  ) => void;
+  onRunSelection?: () => void;
+  onRunFromHere?: (nodeId: string) => void;
+  onRunToHere?: (nodeId: string) => void;
+  onForkHypothesis?: (nodeId: string) => void;
+  onStopNode?: (nodeId: string) => void;
 }
 
 export function InspectorPanel({
@@ -212,14 +570,18 @@ export function InspectorPanel({
   doc,
   snapshot,
   workspaces,
+  bridge,
   selectedNode,
+  selectedNodes,
   selectedEdge,
+  selectedStructureCard,
   onClose,
   onEditNode,
   onEditEdge,
   onDeleteSelection,
   onUngroup,
   onReleaseToken,
+  onExtendLoop,
   onOpenNativeChat,
   onOpenDetail,
   onOpenWindow,
@@ -228,14 +590,202 @@ export function InspectorPanel({
   onSaveTemplate,
   onSyncTemplate,
   onDetachTemplate,
+  onAlign,
+  onDistribute,
+  onGroupSelected,
+  onDuplicateSelected,
+  onBatchParticipation,
+  onRunSelection,
+  onRunFromHere,
+  onRunToHere,
+  onForkHypothesis,
+  onStopNode,
 }: InspectorProps) {
   const titleOf = (id: string) =>
     doc.nodes.find((n) => n.id === id)?.title ?? id;
 
+  const triggerExtendLoop = (
+    runId: string,
+    edgeId: string,
+    nodeId?: string,
+  ) => {
+    if (onExtendLoop) {
+      onExtendLoop(runId, edgeId, nodeId);
+      return;
+    }
+    const ext = (bridge as ExtendedBridge | undefined)?.extendLoop;
+    if (ext) {
+      void ext.call(bridge, { runId, edgeId, nodeId, extraRounds: 1 });
+    }
+  };
+
   const renderBody = () => {
+    /* 1. Multi-Select ComfyUI Inspector (2+ nodes selected) */
+    if (selectedNodes && selectedNodes.length >= 2) {
+      const selectedAgents = selectedNodes.filter((n) => n.kind === "agent");
+      const kindCounts = new Map<string, number>();
+      for (const n of selectedNodes) {
+        kindCounts.set(n.kind, (kindCounts.get(n.kind) ?? 0) + 1);
+      }
+
+      const applyBatchParticipation = (
+        val: "global" | "manual" | "paused" | "bypassed",
+      ) => {
+        if (onBatchParticipation) {
+          onBatchParticipation(val);
+          return;
+        }
+        for (const ag of selectedAgents) {
+          onEditNode(ag.id, {
+            participation: val as FlowNode["participation"],
+          });
+        }
+      };
+
+      return (
+        <div className="inspector-content">
+          <span className="eyebrow">{t("rangeSelection")}</span>
+          <h2>
+            {t("multiSelectionTitle", { count: selectedNodes.length })}
+          </h2>
+
+          <div className="template-meta" style={{ marginTop: 0 }}>
+            {[...kindCounts.entries()].map(([kind, cnt]) => (
+              <span key={kind}>
+                {cnt} × {t(kind)}
+              </span>
+            ))}
+          </div>
+
+          {onAlign && (
+            <>
+              <label className="field-label">{t("alignNodesLabel")}</label>
+              <div
+                className="fs-align-grid"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(6, 1fr)",
+                  gap: 4,
+                }}
+              >
+                {(
+                  [
+                    ["left", "alignLeft"],
+                    ["center", "alignCenter"],
+                    ["right", "alignRight"],
+                    ["top", "alignTop"],
+                    ["middle", "alignMiddle"],
+                    ["bottom", "alignBottom"],
+                  ] as const
+                ).map(([mode, iconKey]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className="button"
+                    style={{ padding: 0, justifyContent: "center" }}
+                    title={t(iconKey)}
+                    aria-label={t(iconKey)}
+                    onClick={() => onAlign(mode)}
+                  >
+                    <Icon name={iconKey} />
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {onDistribute && selectedNodes.length >= 3 && (
+            <>
+              <label className="field-label">{t("distributeNodesLabel")}</label>
+              <div className="choice-buttons">
+                <button
+                  type="button"
+                  onClick={() => onDistribute("horizontal")}
+                >
+                  <Icon name="distributeH" />{" "}
+                  <span>{t("distributeH")}</span>
+                </button>
+                <button type="button" onClick={() => onDistribute("vertical")}>
+                  <Icon name="distributeV" />{" "}
+                  <span>{t("distributeV")}</span>
+                </button>
+              </div>
+            </>
+          )}
+
+          {selectedAgents.length > 0 && (
+            <>
+              <label className="field-label">{t("batchParticipation")}</label>
+              <div className="choice-buttons vertical">
+                {(
+                  [
+                    ["global", "global"],
+                    ["manual", "manual"],
+                    ["paused", "pausedParticipation"],
+                    ["bypassed", "bypassParticipation"],
+                  ] as const
+                ).map(([val, labelKey]) => {
+                  const allMatch = selectedAgents.every(
+                    (ag) => (ag.participation as string) === val,
+                  );
+                  return (
+                    <button
+                      key={val}
+                      type="button"
+                      className={allMatch ? "selected" : ""}
+                      onClick={() => applyBatchParticipation(val)}
+                    >
+                      {t(labelKey)}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          <div className="inspector-divider" />
+          {onRunSelection && selectedAgents.length > 0 && (
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={onRunSelection}
+            >
+              <Icon name="play" />
+              <span>{t("runSelection")}</span>
+            </button>
+          )}
+          {onGroupSelected && (
+            <button type="button" className="button" onClick={onGroupSelected}>
+              <Icon name="group" />
+              <span>{t("groupSelection")}</span>
+            </button>
+          )}
+          {onDuplicateSelected && (
+            <button
+              type="button"
+              className="text-button"
+              onClick={onDuplicateSelected}
+            >
+              <Icon name="duplicate" />
+              <span>{t("duplicateSelection")}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            className="text-button danger"
+            onClick={onDeleteSelection}
+          >
+            <Icon name="trash" />
+            <span>{t("deleteSelected")}</span>
+          </button>
+        </div>
+      );
+    }
+
+    /* 2. Single Edge Inspector + Embedded Payload X-Ray */
     if (selectedEdge) {
       const targetNode = doc.nodes.find((n) => n.id === selectedEdge.target);
-      const waitingTokens: { run: FlowspaceRun; token: FlowToken }[] =
+      const waitingTokens: { run: FlowspaceRun; token: TokenWithLoopGate }[] =
         snapshot?.runs
           .filter((r) => ["running", "waiting", "paused"].includes(r.state))
           .flatMap((run) =>
@@ -247,7 +797,7 @@ export function InspectorPanel({
                   !tk.consumed &&
                   !tk.dismissed,
               )
-              .map((token) => ({ run, token })),
+              .map((token) => ({ run, token: token as TokenWithLoopGate })),
           ) ?? [];
 
       return (
@@ -265,9 +815,9 @@ export function InspectorPanel({
               <div className="mode-options">
                 {(
                   [
-                    ["conclusion", "at"],
+                    ["conclusion", "turn"],
                     ["session", "clock"],
-                    ["fork", "branch"],
+                    ["fork", "fork"],
                   ] as const
                 ).map(([mode, glyph]) => {
                   const disabled =
@@ -395,26 +945,57 @@ export function InspectorPanel({
             </>
           )}
 
+          {/* Glass-Box Wire Payload X-Ray Card */}
+          <PayloadPeekCard
+            edge={selectedEdge}
+            doc={doc}
+            snapshot={snapshot}
+            bridge={bridge}
+          />
+
           {waitingTokens.map(({ run, token }) => (
             <div className="approval-box" key={token.id}>
               <span className="approval-heading">
-                <Icon name="pause" />
+                <Icon name={token.loopCapReached ? "loopPlus" : "pause"} />
                 <b>
-                  {t(token.boundary ? "scopeBoundary" : "waitingConfirmation")}
+                  {t(
+                    token.loopCapReached
+                      ? "loopCapGate"
+                      : token.boundary
+                        ? "scopeBoundary"
+                        : "waitingConfirmation",
+                  )}
                 </b>
               </span>
               <div className="approval-snippet user-content">
                 {token.source.text.slice(0, 320) || token.source.title}
               </div>
               <div className="button-row">
-                <button
-                  type="button"
-                  className="button button-amber"
-                  onClick={() => onReleaseToken(run.id, token.id, true)}
-                >
-                  <Icon name="play" />
-                  <span>{t("release")}</span>
-                </button>
+                {token.loopCapReached ? (
+                  <button
+                    type="button"
+                    className="button button-amber"
+                    onClick={() =>
+                      triggerExtendLoop(
+                        run.id,
+                        selectedEdge.id,
+                        selectedEdge.target,
+                      )
+                    }
+                  >
+                    <Icon name="loopPlus" />
+                    <span>{t("extendLoopOne")}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="button button-amber"
+                    onClick={() => onReleaseToken(run.id, token.id, true)}
+                  >
+                    <Icon name="play" />
+                    <span>{t("release")}</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   className="button button-quiet"
@@ -450,6 +1031,7 @@ export function InspectorPanel({
       );
     }
 
+    /* 3. Group / Composite Workflow Inspector */
     if (selectedNode?.kind === "group") {
       const ports = inferGroupPorts(doc, selectedNode);
       return (
@@ -595,8 +1177,13 @@ export function InspectorPanel({
       );
     }
 
+    /* 4. Single Node Inspector */
     if (selectedNode) {
       const state = nodeStatusOf(snapshot, selectedNode.id);
+      const canRunPartial = Boolean(
+        onRunFromHere || onRunToHere || bridge,
+      );
+
       return (
         <div className="inspector-content">
           <span className="eyebrow">{selectedNode.kind}</span>
@@ -655,22 +1242,20 @@ export function InspectorPanel({
                 </p>
               )}
 
-              {!selectedNode.sessionId && (
-                <div className="switch-row">
-                  <span>{t("planMode")}</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={!!selectedNode.planMode}
-                    className="switch"
-                    onClick={() =>
-                      onEditNode(selectedNode.id, {
-                        planMode: !selectedNode.planMode,
-                      })
-                    }
-                  />
-                </div>
-              )}
+              <div className="switch-row">
+                <span>{t("planMode")}</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={!!selectedNode.planMode}
+                  className="switch"
+                  onClick={() =>
+                    onEditNode(selectedNode.id, {
+                      planMode: !selectedNode.planMode,
+                    })
+                  }
+                />
+              </div>
 
               <label className="field-label">{t("savedTask")}</label>
               <textarea
@@ -736,16 +1321,21 @@ export function InspectorPanel({
                     ["global", "global"],
                     ["manual", "manual"],
                     ["paused", "pausedParticipation"],
+                    ["bypassed", "bypassParticipation"],
                   ] as const
                 ).map(([val, labelKey]) => (
                   <button
                     key={val}
                     type="button"
                     className={
-                      selectedNode.participation === val ? "selected" : ""
+                      (selectedNode.participation as string) === val
+                        ? "selected"
+                        : ""
                     }
                     onClick={() =>
-                      onEditNode(selectedNode.id, { participation: val })
+                      onEditNode(selectedNode.id, {
+                        participation: val as FlowNode["participation"],
+                      })
                     }
                   >
                     {t(labelKey)}
@@ -769,6 +1359,74 @@ export function InspectorPanel({
               </select>
 
               <div className="inspector-divider" />
+              {state === "running" && (onStopNode || bridge) && (
+                <button
+                  type="button"
+                  className="button danger"
+                  onClick={() => {
+                    if (onStopNode) {
+                      onStopNode(selectedNode.id);
+                    } else {
+                      void bridge?.stopNode(selectedNode.id);
+                    }
+                  }}
+                >
+                  <Icon name="stop" />
+                  <span>{t("stopAgent")}</span>
+                </button>
+              )}
+
+              {canRunPartial && (
+                <>
+                  <button
+                    type="button"
+                    className="button"
+                    onClick={() => {
+                      if (onRunFromHere) {
+                        onRunFromHere(selectedNode.id);
+                      } else {
+                        void bridge?.start({
+                          kind: "from-node" as StartRequest["kind"],
+                          nodeIds: [selectedNode.id],
+                        });
+                      }
+                    }}
+                  >
+                    <Icon name="runFrom" />
+                    <span>{t("runFromHere")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => {
+                      if (onRunToHere) {
+                        onRunToHere(selectedNode.id);
+                      } else {
+                        void bridge?.start({
+                          kind: "to-node" as StartRequest["kind"],
+                          nodeIds: [selectedNode.id],
+                        });
+                      }
+                    }}
+                  >
+                    <Icon name="runTo" />
+                    <span>{t("runToHere")}</span>
+                  </button>
+                </>
+              )}
+
+              {onForkHypothesis && selectedNode.sessionId && (
+                <button
+                  type="button"
+                  className="text-button"
+                  title={t("forkHypothesisTip")}
+                  onClick={() => onForkHypothesis(selectedNode.id)}
+                >
+                  <Icon name="fork" />
+                  <span>{t("forkHypothesis")}</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 className="button"
@@ -827,6 +1485,51 @@ export function InspectorPanel({
       );
     }
 
+    /* 5. Derived Structure Card Inspector (Project / Branch / Worktree / Subagent) */
+    if (selectedStructureCard) {
+      return (
+        <div className="inspector-content">
+          <span className="eyebrow">{t("structureInspectorEyebrow")}</span>
+          <h2 className="user-content">{selectedStructureCard.title}</h2>
+          <p className="inspector-description">{t("structureInspectorDesc")}</p>
+          <div className="reference-list">
+            <div>
+              <Icon name={kindIconName(selectedStructureCard.kind)} />
+              <span className="user-content">
+                {t(selectedStructureCard.kind)}
+              </span>
+              {selectedStructureCard.branch && (
+                <small className="user-content">
+                  {selectedStructureCard.branch}
+                </small>
+              )}
+            </div>
+          </div>
+          {(selectedStructureCard.worktreePath ||
+            selectedStructureCard.cwd ||
+            selectedStructureCard.subtitle) && (
+            <p className="muted user-content">
+              {selectedStructureCard.worktreePath ||
+                selectedStructureCard.cwd ||
+                selectedStructureCard.subtitle}
+            </p>
+          )}
+          {selectedStructureCard.sessionId && (
+            <button
+              type="button"
+              className="button"
+              onClick={() =>
+                onOpenNativeChat(selectedStructureCard.sessionId!)
+              }
+            >
+              <Icon name="chat" />
+              <span>{t("openNativeChat")}</span>
+            </button>
+          )}
+        </div>
+      );
+    }
+
     return (
       <div className="inspector-empty">
         <Icon name="card" />
@@ -854,6 +1557,9 @@ export function InspectorPanel({
   );
 }
 
+/* ============================================================
+   WorkflowsSurface: 6 Built-In Blueprints, Custom Templates & Snapshots
+   ============================================================ */
 export function WorkflowsSurface({
   tab,
   onTabChange,
@@ -877,7 +1583,7 @@ export function WorkflowsSurface({
   onDeleteSnapshot: (snapId: string) => void;
   onReturnCanvas: () => void;
 }) {
-  const templates = allTemplates(doc);
+  const templates = allTemplates(doc, getLanguage());
   const shownTemplates = templates.filter((tpl) =>
     tab === "patterns" ? tpl.builtin : !tpl.builtin,
   );
@@ -901,6 +1607,7 @@ export function WorkflowsSurface({
             onClick={() => onTabChange("patterns")}
           >
             {t("builtIn")}
+            <span>{templates.filter((x) => x.builtin).length}</span>
           </button>
           <button
             type="button"
@@ -931,9 +1638,7 @@ export function WorkflowsSurface({
                 const contCount = tpl.edges.filter(
                   (e) => e.kind === "continuation",
                 ).length;
-                const hasConfirm = tpl.edges.some(
-                  (e) => e.trigger === "confirm",
-                );
+                const badges = templateCapabilityBadges(tpl);
                 return (
                   <article
                     key={tpl.id}
@@ -959,9 +1664,11 @@ export function WorkflowsSurface({
                         <span>
                           {t("continuation")} {contCount}
                         </span>
-                        {hasConfirm && (
-                          <span className="warn">{t("confirm")}</span>
-                        )}
+                        {badges.map((b, bi) => (
+                          <span key={bi} className={b.warn ? "warn" : ""}>
+                            {b.label}
+                          </span>
+                        ))}
                         <span>v{tpl.revision}</span>
                       </div>
                     </div>
@@ -1012,7 +1719,7 @@ export function WorkflowsSurface({
               </div>
             )
           ) : snapshots.length ? (
-            snapshots.map((snap, idx) => (
+            snapshots.toReversed().map((snap, idx) => (
               <article
                 key={snap.id}
                 className="snapshot-card"
@@ -1106,15 +1813,450 @@ export function WorkflowsSurface({
   );
 }
 
+/* ============================================================
+   Shared Run Summary Builder (used by both ActivitySurface & RunOverviewDock)
+   ============================================================ */
+function summarizeRunSteps(
+  run: FlowspaceRun,
+  snapshot: FlowspaceSnapshot | null,
+) {
+  const participantIds = [
+    ...new Set([
+      ...run.roots,
+      ...run.participants,
+      ...run.steps.map((s) => s.nodeId),
+    ]),
+  ].filter((id) => run.graph.nodes.find((n) => n.id === id)?.kind === "agent");
+
+  const stepItems = participantIds.map((nodeId) => {
+    const node = run.graph.nodes.find((n) => n.id === nodeId)!;
+    const nodeSteps = run.steps.filter(
+      (s) => s.nodeId === nodeId,
+    ) as StepWithTelemetry[];
+    const latest = nodeSteps.at(-1);
+    const gate = run.tokens.find(
+      (tk) =>
+        !tk.ready &&
+        !tk.consumed &&
+        !tk.dismissed &&
+        run.graph.edges.find((e) => e.id === tk.edgeId)?.target === nodeId,
+    ) as TokenWithLoopGate | undefined;
+    const gateEdge = gate
+      ? run.graph.edges.find((e) => e.id === gate.edgeId)
+      : undefined;
+    const live = snapshot?.live.find((l) => l.nodeId === nodeId);
+
+    let state = (node.participation as string) === "bypassed" ? "bypassed" : "pending";
+    let reason = "";
+    if (gate && ["running", "waiting", "paused"].includes(run.state)) {
+      state = "waiting";
+      reason = gate.loopCapReached
+        ? "loopCapGate"
+        : gate.boundary
+          ? "scopeBoundary"
+          : "waitingConfirmation";
+    } else if (live?.pendingInput.length && latest && !latest.endedAt) {
+      state = "waiting";
+      reason = "approvalNeeded";
+    } else if (latest) {
+      state = latest.state;
+    }
+    const telemetryLabel = latest ? formatStepTelemetrySummary(latest) : "";
+    return { node, state, reason, gate, gateEdge, latest, telemetryLabel };
+  });
+
+  const total = Math.max(1, stepItems.length);
+  const done = stepItems.filter(
+    (s) => s.state === "completed" || s.state === "bypassed",
+  ).length;
+  const blocker = stepItems.find((s) => s.state === "waiting");
+  const active = stepItems.find((s) => ["running", "queued"].includes(s.state));
+  return { stepItems, total, done, blocker, active };
+}
+
+/* ============================================================
+   RunOverviewDock: High-Density R5 Single-Launch Overview for Bottom Canvas Dock
+   ============================================================ */
+export interface RunOverviewDockProps {
+  doc: FlowspaceDocument;
+  snapshot: FlowspaceSnapshot | null;
+  bridge?: CanvasBridge;
+  tab?: "runs" | "outputs" | "waiting";
+  onRevealNode: (nodeId: string) => void;
+  onRunCommand: (runId: string, action: "pause" | "resume" | "cancel") => void;
+  onRerunFailed: (runId: string) => void;
+  onReleaseToken: (runId: string, tokenId: string, accept: boolean) => void;
+  onExtendLoop?: (runId: string, edgeId: string, nodeId?: string) => void;
+  onExtractStep: (nodeId: string, text: string, seq?: number) => void;
+  onPinDeliverable: (path: string, nodeId: string) => void;
+}
+
+export function RunOverviewDock({
+  doc,
+  snapshot,
+  bridge,
+  tab = "runs",
+  onRevealNode,
+  onRunCommand,
+  onRerunFailed,
+  onReleaseToken,
+  onExtendLoop,
+  onExtractStep,
+  onPinDeliverable,
+}: RunOverviewDockProps) {
+  const runs = (snapshot?.runs ?? []).toReversed();
+
+  const handleLoopExtend = (runId: string, edgeId: string, nodeId?: string) => {
+    if (onExtendLoop) {
+      onExtendLoop(runId, edgeId, nodeId);
+      return;
+    }
+    const ext = (bridge as ExtendedBridge | undefined)?.extendLoop;
+    if (ext) {
+      void ext.call(bridge, { runId, edgeId, nodeId, extraRounds: 1 });
+    }
+  };
+
+  if (tab === "outputs") {
+    const completedOutputs = runs.flatMap((run) =>
+      run.steps
+        .filter((s) => s.state === "completed" && Boolean(s.output?.trim()))
+        .map((step) => ({
+          step: step as StepWithTelemetry,
+          nodeTitle:
+            run.graph.nodes.find((n) => n.id === step.nodeId)?.title ??
+            step.nodeId,
+        })),
+    );
+    if (!completedOutputs.length) {
+      return <p className="muted">{t("noOutputs")}</p>;
+    }
+    return (
+      <div className="activity-list fs-run-dock">
+        {completedOutputs.map(({ step, nodeTitle }) => (
+          <article
+            key={step.id}
+            className="artifact-row"
+            style={{ padding: "8px 12px" }}
+          >
+            <Icon name="quote" />
+            <div>
+              <b className="user-content">
+                {nodeTitle} · {t("roundBadge", { round: step.iteration })}
+              </b>
+              <small className="user-content">
+                {step.output!.slice(0, 160)}
+                {step.output!.length > 160 ? "…" : ""}
+              </small>
+            </div>
+            <button
+              type="button"
+              className="button"
+              onClick={() => onRevealNode(step.nodeId)}
+            >
+              <Icon name="chev" />
+              <span>{t("locate")}</span>
+            </button>
+            {doc.nodes.some((n) => n.id === step.nodeId) && (
+              <button
+                type="button"
+                className="button"
+                onClick={() =>
+                  onExtractStep(step.nodeId, step.output!, step.endSeq)
+                }
+              >
+                <Icon name="quote" />
+                <span>{t("quoteMessage")}</span>
+              </button>
+            )}
+          </article>
+        ))}
+      </div>
+    );
+  }
+
+  if (tab === "waiting") {
+    const waitingTokens = (snapshot?.runs ?? [])
+      .filter((r) => ["running", "waiting", "paused"].includes(r.state))
+      .flatMap((run) =>
+        run.tokens
+          .filter((tk) => !tk.ready && !tk.consumed && !tk.dismissed)
+          .map((token) => {
+            const edge = run.graph.edges.find((e) => e.id === token.edgeId);
+            return {
+              run,
+              token: token as TokenWithLoopGate,
+              edge,
+              targetNode: run.graph.nodes.find((n) => n.id === edge?.target),
+            };
+          }),
+      );
+    const pendingApprovals = (snapshot?.live ?? []).filter(
+      (l) => l.pendingInput.length > 0,
+    );
+    if (!waitingTokens.length && !pendingApprovals.length) {
+      return <p className="muted">{t("noWaiting")}</p>;
+    }
+    return (
+      <div className="activity-list fs-run-dock">
+        {pendingApprovals.map((live) => {
+          const node = doc.nodes.find((n) => n.id === live.nodeId);
+          if (!node) return null;
+          return (
+            <article
+              key={live.nodeId}
+              className="queue-row"
+              style={{ padding: "8px 12px" }}
+            >
+              <Icon name="pause" />
+              <div>
+                <b className="user-content">{node.title}</b>
+                <p>{t("approvalDescription")}</p>
+              </div>
+              <button
+                type="button"
+                className="button button-amber"
+                onClick={() => onRevealNode(node.id)}
+              >
+                <Icon name="chat" />
+                <span>{t("openApprovalTab")}</span>
+              </button>
+            </article>
+          );
+        })}
+        {waitingTokens.map(({ run, token, edge, targetNode }) => (
+          <article
+            key={token.id}
+            className="queue-row"
+            style={{ padding: "8px 12px" }}
+          >
+            <Icon name={token.loopCapReached ? "loopPlus" : "pause"} />
+            <div>
+              <b className="user-content">
+                {token.source.title} → {targetNode?.title ?? ""}
+              </b>
+              <p className="user-content">{token.source.text.slice(0, 140)}</p>
+            </div>
+            {token.loopCapReached && edge ? (
+              <button
+                type="button"
+                className="button button-amber"
+                onClick={() =>
+                  handleLoopExtend(run.id, edge.id, targetNode?.id)
+                }
+              >
+                <Icon name="loopPlus" />
+                <span>{t("extendLoopOne")}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="button button-amber"
+                onClick={() => onReleaseToken(run.id, token.id, true)}
+              >
+                <Icon name="play" />
+                <span>{t("release")}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => onReleaseToken(run.id, token.id, false)}
+            >
+              <span>{t("dismiss")}</span>
+            </button>
+          </article>
+        ))}
+      </div>
+    );
+  }
+
+  if (!runs.length) {
+    return <p className="muted">{t("noActivityDescription")}</p>;
+  }
+
+  return (
+    <div className="activity-list fs-run-dock" style={{ gap: 8 }}>
+      {runs.map((run) => {
+        const { stepItems, done, blocker } = summarizeRunSteps(run, snapshot);
+        return (
+          <article
+            key={run.id}
+            className={`run-card run-${run.state}`}
+            style={{ padding: 0 }}
+          >
+            <header
+              className="run-head"
+              style={{ padding: "8px 12px", gap: 10 }}
+            >
+              <span className={`status status-${run.state}`}>
+                <i />
+                {done}/{stepItems.length}
+              </span>
+              <div className="run-head-title">
+                <h3 className="user-content" style={{ fontSize: 13 }}>
+                  {run.title}
+                </h3>
+              </div>
+              {blocker && (
+                <div
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                >
+                  {blocker.gate ? (
+                    blocker.gate.loopCapReached && blocker.gateEdge ? (
+                      <button
+                        type="button"
+                        className="button button-amber"
+                        onClick={() =>
+                          handleLoopExtend(
+                            run.id,
+                            blocker.gateEdge!.id,
+                            blocker.node.id,
+                          )
+                        }
+                      >
+                        <Icon name="loopPlus" />
+                        <span>{t("extendLoopOne")}</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="button button-amber"
+                        onClick={() =>
+                          onReleaseToken(run.id, blocker.gate!.id, true)
+                        }
+                      >
+                        <Icon name="play" />
+                        <span>{t("release")}</span>
+                      </button>
+                    )
+                  ) : (
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={() => onRevealNode(blocker.node.id)}
+                    >
+                      <Icon name="chev" />
+                      <span>{t("locate")}</span>
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="run-head-actions">
+                {["running", "waiting"].includes(run.state) && (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    title={t("pause")}
+                    onClick={() => onRunCommand(run.id, "pause")}
+                  >
+                    <Icon name="pause" />
+                  </button>
+                )}
+                {["paused", "interrupted"].includes(run.state) && (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    title={t("resume")}
+                    onClick={() => onRunCommand(run.id, "resume")}
+                  >
+                    <Icon name="play" />
+                  </button>
+                )}
+                {run.steps.some((s) =>
+                  ["error", "aborted", "interrupted"].includes(s.state),
+                ) && (
+                  <button
+                    type="button"
+                    className="button"
+                    onClick={() => onRerunFailed(run.id)}
+                  >
+                    <Icon name="refresh" />
+                    <span>{t("rerunFailed")}</span>
+                  </button>
+                )}
+                {!["completed", "cancelled"].includes(run.state) && (
+                  <button
+                    type="button"
+                    className="icon-button danger"
+                    title={t("cancelRun")}
+                    onClick={() => onRunCommand(run.id, "cancel")}
+                  >
+                    <Icon name="stop" />
+                  </button>
+                )}
+              </div>
+              <time>{formatTime(run.createdAt)}</time>
+            </header>
+
+            <div className="run-steps" style={{ padding: "0 12px 8px" }}>
+              {stepItems.map((item) => (
+                <button
+                  key={item.node.id}
+                  type="button"
+                  className={`run-step step-${item.state}`}
+                  style={{ minWidth: 108, padding: "6px 10px 4px 0" }}
+                  onClick={() => onRevealNode(item.node.id)}
+                >
+                  <i />
+                  <b className="user-content">{item.node.title}</b>
+                  <small>
+                    {t(
+                      item.reason ||
+                        (item.state === "pending" ? "stepPending" : item.state),
+                    )}
+                    {item.telemetryLabel ? ` · ${item.telemetryLabel}` : ""}
+                  </small>
+                </button>
+              ))}
+            </div>
+
+            {!!run.deliverables?.length && (
+              <div
+                className="fs-run-deliverables"
+                style={{ padding: "6px 12px 8px", borderTop: "1px solid var(--border)" }}
+              >
+                <div className="fs-deliverable-chips">
+                  {run.deliverables.map((deliv) => (
+                    <button
+                      key={deliv.id}
+                      type="button"
+                      className="capsule capsule-pending"
+                      title={deliv.description || deliv.path}
+                      onClick={() =>
+                        onPinDeliverable(deliv.path, deliv.nodeId)
+                      }
+                    >
+                      <Icon name="file" />
+                      <span className="user-content">
+                        {deliv.path.split(/[\\/]/).pop() ?? deliv.path}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ============================================================
+   ActivitySurface: Full-Page R5 Run Cards, Telemetry, Gates & Deliverables
+   ============================================================ */
 export function ActivitySurface({
   tab,
   onTabChange,
   doc,
   snapshot,
+  bridge,
   onRevealNode,
   onRunCommand,
   onRerunFailed,
   onReleaseToken,
+  onExtendLoop,
   onExtractStep,
   onPinDeliverable,
   onReturnCanvas,
@@ -1123,31 +2265,44 @@ export function ActivitySurface({
   onTabChange: (next: "runs" | "outputs" | "waiting") => void;
   doc: FlowspaceDocument;
   snapshot: FlowspaceSnapshot | null;
+  bridge?: CanvasBridge;
   onRevealNode: (nodeId: string) => void;
   onRunCommand: (runId: string, action: "pause" | "resume" | "cancel") => void;
   onRerunFailed: (runId: string) => void;
   onReleaseToken: (runId: string, tokenId: string, accept: boolean) => void;
+  onExtendLoop?: (runId: string, edgeId: string, nodeId?: string) => void;
   onExtractStep: (nodeId: string, text: string, seq?: number) => void;
   onPinDeliverable: (path: string, nodeId: string) => void;
   onReturnCanvas: () => void;
 }) {
-  const runs = [...(snapshot?.runs ?? [])].reverse();
+  const runs = (snapshot?.runs ?? []).toReversed();
   const circumference = 2 * Math.PI * 17;
+
+  const handleLoopExtend = (runId: string, edgeId: string, nodeId?: string) => {
+    if (onExtendLoop) {
+      onExtendLoop(runId, edgeId, nodeId);
+      return;
+    }
+    const ext = (bridge as ExtendedBridge | undefined)?.extendLoop;
+    if (ext) {
+      void ext.call(bridge, { runId, edgeId, nodeId, extraRounds: 1 });
+    }
+  };
 
   const waitingTokens = (snapshot?.runs ?? [])
     .filter((r) => ["running", "waiting", "paused"].includes(r.state))
     .flatMap((run) =>
       run.tokens
         .filter((tk) => !tk.ready && !tk.consumed && !tk.dismissed)
-        .map((token) => ({
-          run,
-          token,
-          targetNode: run.graph.nodes.find(
-            (n) =>
-              n.id ===
-              run.graph.edges.find((e) => e.id === token.edgeId)?.target,
-          ),
-        })),
+        .map((token) => {
+          const edge = run.graph.edges.find((e) => e.id === token.edgeId);
+          return {
+            run,
+            token: token as TokenWithLoopGate,
+            edge,
+            targetNode: run.graph.nodes.find((n) => n.id === edge?.target),
+          };
+        }),
     );
   const pendingApprovals = (snapshot?.live ?? []).filter(
     (l) => l.pendingInput.length > 0,
@@ -1157,7 +2312,7 @@ export function ActivitySurface({
       .filter((s) => s.state === "completed" && s.output?.trim())
       .map((step) => ({
         run,
-        step,
+        step: step as StepWithTelemetry,
         nodeTitle:
           run.graph.nodes.find((n) => n.id === step.nodeId)?.title ??
           step.nodeId,
@@ -1204,55 +2359,8 @@ export function ActivitySurface({
           {tab === "runs" ? (
             runs.length ? (
               runs.map((run, idx) => {
-                const participantIds = [
-                  ...new Set([
-                    ...run.roots,
-                    ...run.participants,
-                    ...run.steps.map((s) => s.nodeId),
-                  ]),
-                ].filter(
-                  (id) =>
-                    run.graph.nodes.find((n) => n.id === id)?.kind === "agent",
-                );
-                const stepItems = participantIds.map((nodeId) => {
-                  const node = run.graph.nodes.find((n) => n.id === nodeId)!;
-                  const nodeSteps = run.steps.filter(
-                    (s) => s.nodeId === nodeId,
-                  );
-                  const latest = nodeSteps.at(-1);
-                  const gate = run.tokens.find(
-                    (tk) =>
-                      !tk.ready &&
-                      !tk.consumed &&
-                      !tk.dismissed &&
-                      run.graph.edges.find((e) => e.id === tk.edgeId)
-                        ?.target === nodeId,
-                  );
-                  const live = snapshot?.live.find((l) => l.nodeId === nodeId);
-                  let state = "pending";
-                  let reason = "";
-                  if (gate && ["running", "waiting", "paused"].includes(run.state)) {
-                    state = "waiting";
-                    reason = gate.boundary
-                      ? "scopeBoundary"
-                      : "waitingConfirmation";
-                  } else if (live?.pendingInput.length && latest && !latest.endedAt) {
-                    state = "waiting";
-                    reason = "approvalNeeded";
-                  } else if (latest) {
-                    state = latest.state;
-                  }
-                  return { node, state, reason, gate };
-                });
-
-                const total = Math.max(1, stepItems.length);
-                const done = stepItems.filter(
-                  (s) => s.state === "completed",
-                ).length;
-                const blocker = stepItems.find((s) => s.state === "waiting");
-                const active = stepItems.find((s) =>
-                  ["running", "queued"].includes(s.state),
-                );
+                const { stepItems, total, done, blocker, active } =
+                  summarizeRunSteps(run, snapshot);
                 const originLabel =
                   run.origin === "chat"
                     ? t("runTypeChat")
@@ -1365,6 +2473,9 @@ export function ActivitySurface({
                                   ? "stepPending"
                                   : item.state),
                             )}
+                            {item.telemetryLabel
+                              ? ` · ${item.telemetryLabel}`
+                              : ""}
                           </small>
                         </button>
                       ))}
@@ -1373,7 +2484,13 @@ export function ActivitySurface({
                     <div className="run-foot">
                       {blocker ? (
                         <div className="run-blocker">
-                          <Icon name="pause" />
+                          <Icon
+                            name={
+                              blocker.gate?.loopCapReached
+                                ? "loopPlus"
+                                : "pause"
+                            }
+                          />
                           <span>
                             {t("runBlockedBy", {
                               name: blocker.node.title,
@@ -1381,16 +2498,33 @@ export function ActivitySurface({
                             })}
                           </span>
                           {blocker.gate ? (
-                            <button
-                              type="button"
-                              className="button button-amber"
-                              onClick={() =>
-                                onReleaseToken(run.id, blocker.gate!.id, true)
-                              }
-                            >
-                              <Icon name="play" />
-                              <span>{t("release")}</span>
-                            </button>
+                            blocker.gate.loopCapReached && blocker.gateEdge ? (
+                              <button
+                                type="button"
+                                className="button button-amber"
+                                onClick={() =>
+                                  handleLoopExtend(
+                                    run.id,
+                                    blocker.gateEdge!.id,
+                                    blocker.node.id,
+                                  )
+                                }
+                              >
+                                <Icon name="loopPlus" />
+                                <span>{t("extendLoopOne")}</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="button button-amber"
+                                onClick={() =>
+                                  onReleaseToken(run.id, blocker.gate!.id, true)
+                                }
+                              >
+                                <Icon name="play" />
+                                <span>{t("release")}</span>
+                              </button>
+                            )
                           ) : (
                             <button
                               type="button"
@@ -1450,66 +2584,72 @@ export function ActivitySurface({
                         {t("runTimeline", { count: run.steps.length })}
                       </summary>
                       <div>
-                        {[...run.steps].reverse().map((step) => {
-                          const stepTitle =
-                            run.graph.nodes.find((n) => n.id === step.nodeId)
-                              ?.title ?? step.nodeId;
-                          return (
-                            <div
-                              key={step.id}
-                              className={`event-row event-${step.state}`}
-                            >
-                              <i className="event-dot">
-                                <Icon
-                                  name={
-                                    step.state === "completed"
-                                      ? "check"
-                                      : step.state === "queued"
-                                        ? "clock"
-                                        : "bolt"
-                                  }
-                                />
-                              </i>
-                              <div>
-                                <b>{t(step.state)}</b>
-                                <button
-                                  type="button"
-                                  className="event-agent user-content"
-                                  onClick={() => onRevealNode(step.nodeId)}
-                                >
-                                  {stepTitle} ·{" "}
-                                  {t("roundBadge", { round: step.iteration })}
-                                </button>
-                                {step.error && (
-                                  <p className="danger">{step.error}</p>
-                                )}
-                                {step.output && (
-                                  <p className="user-content">
-                                    {step.output.slice(0, 220)}
-                                    {step.output.length > 220 ? "…" : ""}
-                                  </p>
-                                )}
-                              </div>
-                              {step.output &&
-                                doc.nodes.some((n) => n.id === step.nodeId) && (
+                        {(run.steps as StepWithTelemetry[])
+                          .toReversed()
+                          .map((step) => {
+                            const stepTitle =
+                              run.graph.nodes.find((n) => n.id === step.nodeId)
+                                ?.title ?? step.nodeId;
+                            const telem = formatStepTelemetrySummary(step);
+                            return (
+                              <div
+                                key={step.id}
+                                className={`event-row event-${step.state}`}
+                              >
+                                <i className="event-dot">
+                                  <Icon
+                                    name={
+                                      step.state === "completed"
+                                        ? "check"
+                                        : step.state === "queued"
+                                          ? "clock"
+                                          : "bolt"
+                                    }
+                                  />
+                                </i>
+                                <div>
+                                  <b>{t(step.state)}</b>
                                   <button
                                     type="button"
-                                    className="text-button"
-                                    onClick={() =>
-                                      onExtractStep(
-                                        step.nodeId,
-                                        step.output!,
-                                        step.endSeq,
-                                      )
-                                    }
+                                    className="event-agent user-content"
+                                    onClick={() => onRevealNode(step.nodeId)}
                                   >
-                                    <Icon name="quote" />
+                                    {stepTitle} ·{" "}
+                                    {t("roundBadge", { round: step.iteration })}
+                                    {telem ? ` · ${telem}` : ""}
                                   </button>
-                                )}
-                              <time>{formatTime(step.createdAt)}</time>
-                            </div>
-                          );
-                        })}
+                                  {step.error && (
+                                    <p className="danger">{step.error}</p>
+                                  )}
+                                  {step.output && (
+                                    <p className="user-content">
+                                      {step.output.slice(0, 220)}
+                                      {step.output.length > 220 ? "…" : ""}
+                                    </p>
+                                  )}
+                                </div>
+                                {step.output &&
+                                  doc.nodes.some(
+                                    (n) => n.id === step.nodeId,
+                                  ) && (
+                                    <button
+                                      type="button"
+                                      className="text-button"
+                                      onClick={() =>
+                                        onExtractStep(
+                                          step.nodeId,
+                                          step.output!,
+                                          step.endSeq,
+                                        )
+                                      }
+                                    >
+                                      <Icon name="quote" />
+                                    </button>
+                                  )}
+                                <time>{formatTime(step.createdAt)}</time>
+                              </div>
+                            );
+                          })}
                         {run.notes.map((note, i) => (
                           <p key={i} className="muted">
                             {note}
@@ -1601,9 +2741,9 @@ export function ActivitySurface({
                   </article>
                 );
               })}
-              {waitingTokens.map(({ run, token, targetNode }) => (
+              {waitingTokens.map(({ run, token, edge, targetNode }) => (
                 <article key={token.id} className="queue-row">
-                  <Icon name="pause" />
+                  <Icon name={token.loopCapReached ? "loopPlus" : "pause"} />
                   <div>
                     <b className="user-content">
                       {token.source.title} → {targetNode?.title ?? ""}
@@ -1612,14 +2752,27 @@ export function ActivitySurface({
                       {token.source.text.slice(0, 160)}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    className="button button-amber"
-                    onClick={() => onReleaseToken(run.id, token.id, true)}
-                  >
-                    <Icon name="play" />
-                    <span>{t("release")}</span>
-                  </button>
+                  {token.loopCapReached && edge ? (
+                    <button
+                      type="button"
+                      className="button button-amber"
+                      onClick={() =>
+                        handleLoopExtend(run.id, edge.id, targetNode?.id)
+                      }
+                    >
+                      <Icon name="loopPlus" />
+                      <span>{t("extendLoopOne")}</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="button button-amber"
+                      onClick={() => onReleaseToken(run.id, token.id, true)}
+                    >
+                      <Icon name="play" />
+                      <span>{t("release")}</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="text-button"
@@ -1643,6 +2796,9 @@ export function ActivitySurface({
   );
 }
 
+/* ============================================================
+   SettingsSurface: Preferences, Orchestration & Data Portability
+   ============================================================ */
 export function SettingsSurface({
   doc,
   prefs,
@@ -1655,13 +2811,9 @@ export function SettingsSurface({
   onLoadStarter,
 }: {
   doc: FlowspaceDocument;
-  prefs: Required<
-    Pick<CanvasPrefs, "theme" | "wheel" | "snap" | "filter">
-  >;
+  prefs: Required<Pick<CanvasPrefs, "theme" | "wheel" | "snap" | "filter">>;
   onUpdatePrefs: (changes: Partial<CanvasPrefs>) => void;
-  onUpdateSettings: (
-    changes: Partial<FlowspaceDocument["settings"]>,
-  ) => void;
+  onUpdateSettings: (changes: Partial<FlowspaceDocument["settings"]>) => void;
   onToggleLanguage: (lang: "zh" | "en") => void;
   onExportJson: () => void;
   onTriggerImport: () => void;
