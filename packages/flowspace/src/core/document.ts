@@ -6,6 +6,36 @@ import type {
 } from "../types.ts";
 
 export const uid = (): string => crypto.randomUUID();
+
+export const DEFAULT_AGENT_TITLES = new Set(["新 Agent", "New Agent", ""]);
+
+function stripNullFields<T>(value: T): T {
+  if (value === null || value === undefined || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item !== null && item !== undefined)
+      .map((item) => stripNullFields(item)) as unknown as T;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v === null || v === undefined) continue;
+    out[k] = stripNullFields(v);
+  }
+  return out as T;
+}
+
+/**
+ * Strip `null` on optional document fields (`window: null`, `window.snap: null`, etc.)
+ * before crossing the Typert wire boundary or storage validation.
+ */
+export function sanitizeDocumentForWire(
+  doc: FlowspaceDocument,
+): FlowspaceDocument {
+  return stripNullFields(structuredClone(doc));
+}
+
 export function emptyDocument(): FlowspaceDocument {
   return {
     version: 1,
@@ -61,6 +91,31 @@ export function deriveDraftTitle(
   return first.length > 36 ? `${first.slice(0, 36)}…` : first;
 }
 
+/** Automatically derive a descriptive title for untitled Agent drafts once prompt text exists. */
+export function syncUntitledAgentNode(node: FlowNode): boolean {
+  if (node.kind !== "agent" || node.customTitle) return false;
+  if (!DEFAULT_AGENT_TITLES.has(node.title.trim())) return false;
+  const seed =
+    node.draft.trim() ||
+    node.task.trim() ||
+    (node.continuationPrompt ?? "").trim();
+  if (!seed) return false;
+  const derived = deriveDraftTitle(seed, node.title || "新 Agent");
+  if (derived && derived !== node.title) {
+    node.title = derived;
+    return true;
+  }
+  return false;
+}
+
+export function syncUntitledAgentTitles(doc: FlowspaceDocument): boolean {
+  let changed = false;
+  for (const node of doc.nodes) {
+    if (syncUntitledAgentNode(node)) changed = true;
+  }
+  return changed;
+}
+
 export function newNode(
   kind: FlowNode["kind"],
   x: number,
@@ -80,6 +135,9 @@ export function newNode(
           { id: uid(), name: "完成", cards: [] },
         ]
       : undefined;
+  const isCustomTitle =
+    Boolean(title) &&
+    !(kind === "agent" && DEFAULT_AGENT_TITLES.has((title ?? "").trim()));
   return {
     id: uid(),
     kind,
@@ -103,6 +161,8 @@ export function newNode(
     height,
     expanded:
       kind === "agent" ||
+      kind === "note" ||
+      kind === "display" ||
       kind === "board" ||
       kind === "detail" ||
       kind === "git",
@@ -113,10 +173,11 @@ export function newNode(
     text: columns ? boardSummaryText(columns) : "",
     fixed: kind !== "detail",
     collapsed: false,
-    ...(title ? { customTitle: true } : {}),
+    ...(isCustomTitle ? { customTitle: true } : {}),
     ...(kind === "agent"
       ? { tab: "task" as const, rerun: "change" as const }
       : {}),
+    ...(kind === "file" ? { items: [], selectedItems: [] } : {}),
     ...(kind === "git" ? { gitTab: "changes" as const } : {}),
     ...(kind === "group" ? { color: "blue" as const, ports: [] } : {}),
     ...(columns ? { columns, selectedItems: [] } : {}),
@@ -240,10 +301,7 @@ export function sample(
     draft: task as string,
     continuationPrompt: i > 0 ? (task as string) : undefined,
   }));
-  const fileItems =
-    availableFiles !== undefined
-      ? availableFiles.slice(0, 4)
-      : ["README.md", "package.json"];
+  const fileItems = availableFiles ? availableFiles.slice(0, 4) : [];
   const firstFile = fileItems[0] ?? "";
   const fileCard = {
     ...newNode("file", baseX, baseY - 146, "工作区文件"),

@@ -1,7 +1,14 @@
 import { execFile as execFileCb } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from "node:path";
 import { promisify } from "node:util";
 import type {
   DiffHunkView,
@@ -16,6 +23,28 @@ import type {
 } from "../types.ts";
 
 const execFile = promisify(execFileCb);
+
+const SENSITIVE_ENV_KEY_RE =
+  /(?:^dsh_|api[_-]?key|secret|token|password|passwd|credential|private[_-]?key|auth[_-]?header)/i;
+
+/**
+ * Scrub credential-shaped and DSH_* variables before spawning git (and repository git hooks),
+ * matching @deepseek-ai/dsh-subprocess's case-insensitive scrub policy.
+ */
+export function sanitizedGitEnv(
+  write = false,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const clean: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(baseEnv)) {
+    if (v === undefined) continue;
+    if (SENSITIVE_ENV_KEY_RE.test(k)) continue;
+    clean[k] = v;
+  }
+  clean.GIT_TERMINAL_PROMPT = "0";
+  if (!write) clean.GIT_OPTIONAL_LOCKS = "0";
+  return clean;
+}
 
 function normPath(p: string): string {
   const resolved = resolve(p).replaceAll("\\", "/").replace(/\/+$/, "");
@@ -73,7 +102,7 @@ interface GitExecOptions {
 
 /**
  * Host Git service migrated from OMP Studio's git-service architecture:
- * - Sanitized argv execution (GIT_TERMINAL_PROMPT=0, GIT_OPTIONAL_LOCKS=0 for reads)
+ * - Scrubbed child environment (no leaked API keys / DSH_* vars to git hooks)
  * - Per-repository commonDir write serialization queue + expectedRevision check
  * - Supplies both 4-tier Project -> Branch -> Worktree structure & Git node workbench
  */
@@ -84,11 +113,7 @@ export class HostGitService {
     args: string[],
     opts: GitExecOptions,
   ): Promise<{ stdout: string; stderr: string; code: number }> {
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      GIT_TERMINAL_PROMPT: "0",
-      ...(opts.write ? {} : { GIT_OPTIONAL_LOCKS: "0" }),
-    };
+    const env = sanitizedGitEnv(Boolean(opts.write));
     try {
       const { stdout, stderr } = await execFile("git", args, {
         cwd: opts.cwd,
@@ -418,19 +443,43 @@ export class HostGitService {
   }
 
   async act(cwd: string, req: GitActionRequest): Promise<GitRepoStatus> {
-    const initial = await this.inspect(cwd);
+    const targetCwd = resolve(cwd);
+    const initial = await this.inspect(targetCwd);
+
+    if (req.action === "init") {
+      if (initial.isGitRepo && initial.topLevel) {
+        return initial;
+      }
+      return this.enqueueWrite(normPath(targetCwd), async () => {
+        await mkdir(targetCwd, { recursive: true });
+        const initBranch = req.branch?.trim()
+          ? sanitizeBranchName(req.branch)
+          : "main";
+        const res = await this.runGit(["init", "-b", initBranch], {
+          cwd: targetCwd,
+          write: true,
+          allowNonZero: true,
+        });
+        if (res.code !== 0) {
+          await this.runGit(["init"], { cwd: targetCwd, write: true });
+        }
+        return this.inspect(targetCwd);
+      });
+    }
+
     if (!initial.isGitRepo || !initial.topLevel || !initial.commonDir) {
       throw new Error("当前目录不是 Git 仓库");
     }
-    const repoTop = initial.topLevel;
+    // `worktreeRoot` is the exact worktree containing `cwd`; `commonDir` serializes shared repo writes.
+    const worktreeRoot = initial.topLevel;
+    const mainWorktreeRoot =
+      initial.worktrees.find((w) => w.isMain)?.path ?? worktreeRoot;
     const repoKey = normPath(initial.commonDir);
 
     return this.enqueueWrite(repoKey, async () => {
-      if (req.expectedRevision) {
-        const fresh = await this.inspect(repoTop);
-        if (fresh.revision !== req.expectedRevision) {
-          throw new Error("Git 仓库状态已变化，请刷新后再执行操作");
-        }
+      const fresh = await this.inspect(worktreeRoot);
+      if (req.expectedRevision && fresh.revision !== req.expectedRevision) {
+        throw new Error("Git 仓库状态已变化，请刷新后再执行操作");
       }
 
       const cleanPaths = (req.paths ?? [])
@@ -441,7 +490,7 @@ export class HostGitService {
         case "stage": {
           if (!cleanPaths.length) throw new Error("未指定要暂存的文件");
           await this.runGit(["add", "--", ...cleanPaths], {
-            cwd: repoTop,
+            cwd: worktreeRoot,
             write: true,
           });
           break;
@@ -449,19 +498,19 @@ export class HostGitService {
         case "unstage": {
           if (!cleanPaths.length) throw new Error("未指定要取消暂存的文件");
           await this.runGit(["reset", "HEAD", "--", ...cleanPaths], {
-            cwd: repoTop,
+            cwd: worktreeRoot,
             write: true,
             allowNonZero: true,
           });
           break;
         }
         case "stageAll": {
-          await this.runGit(["add", "-A"], { cwd: repoTop, write: true });
+          await this.runGit(["add", "-A"], { cwd: worktreeRoot, write: true });
           break;
         }
         case "unstageAll": {
           await this.runGit(["reset"], {
-            cwd: repoTop,
+            cwd: worktreeRoot,
             write: true,
             allowNonZero: true,
           });
@@ -469,17 +518,32 @@ export class HostGitService {
         }
         case "discard": {
           if (!cleanPaths.length) throw new Error("未指定要放弃修改的文件");
-          await this.runGit(["checkout", "--", ...cleanPaths], {
-            cwd: repoTop,
-            write: true,
-          });
+          const untrackedSet = new Set(
+            fresh.unstaged
+              .filter((f) => f.status === "?")
+              .map((f) => f.path),
+          );
+          const untrackedPaths = cleanPaths.filter((p) => untrackedSet.has(p));
+          const trackedPaths = cleanPaths.filter((p) => !untrackedSet.has(p));
+          if (trackedPaths.length) {
+            await this.runGit(["checkout", "--", ...trackedPaths], {
+              cwd: worktreeRoot,
+              write: true,
+            });
+          }
+          if (untrackedPaths.length) {
+            await this.runGit(["clean", "-fd", "--", ...untrackedPaths], {
+              cwd: worktreeRoot,
+              write: true,
+            });
+          }
           break;
         }
         case "commit": {
           const msg = (req.message ?? "").trim();
           if (!msg) throw new Error("提交说明不能为空");
           await this.runGit(["commit", "-m", msg], {
-            cwd: repoTop,
+            cwd: worktreeRoot,
             write: true,
           });
           break;
@@ -488,17 +552,20 @@ export class HostGitService {
           const name = sanitizeBranchName(req.branch);
           const args = ["branch", name];
           if (req.baseRef?.trim()) args.push(req.baseRef.trim());
-          await this.runGit(args, { cwd: repoTop, write: true });
+          await this.runGit(args, { cwd: worktreeRoot, write: true });
           break;
         }
         case "checkoutBranch": {
           const name = sanitizeBranchName(req.branch);
-          await this.runGit(["checkout", name], { cwd: repoTop, write: true });
+          await this.runGit(["checkout", name], {
+            cwd: worktreeRoot,
+            write: true,
+          });
           break;
         }
         case "fetch": {
           await this.runGit(["fetch", "--all", "--prune"], {
-            cwd: repoTop,
+            cwd: worktreeRoot,
             write: true,
             timeoutMs: 45_000,
           });
@@ -506,7 +573,7 @@ export class HostGitService {
         }
         case "pull": {
           await this.runGit(["pull", "--ff-only"], {
-            cwd: repoTop,
+            cwd: worktreeRoot,
             write: true,
             timeoutMs: 45_000,
           });
@@ -514,7 +581,7 @@ export class HostGitService {
         }
         case "push": {
           await this.runGit(["push"], {
-            cwd: repoTop,
+            cwd: worktreeRoot,
             write: true,
             timeoutMs: 45_000,
           });
@@ -524,14 +591,14 @@ export class HostGitService {
           const branch = sanitizeBranchName(req.branch);
           const slug = branch.replace(/[^a-zA-Z0-9._-]+/g, "-");
           const defaultWtRoot = join(
-            dirname(repoTop),
-            `${basename(repoTop)}-worktrees`,
+            dirname(mainWorktreeRoot),
+            `${basename(mainWorktreeRoot)}-worktrees`,
           );
           const wtPath = req.worktreePath?.trim()
-            ? resolve(repoTop, req.worktreePath.trim())
+            ? resolve(worktreeRoot, req.worktreePath.trim())
             : join(defaultWtRoot, slug);
           await mkdir(dirname(wtPath), { recursive: true });
-          const existsBranch = initial.branches.some((b) => b.name === branch);
+          const existsBranch = fresh.branches.some((b) => b.name === branch);
           const args = existsBranch
             ? ["worktree", "add", wtPath, branch]
             : [
@@ -542,32 +609,36 @@ export class HostGitService {
                 wtPath,
                 ...(req.baseRef?.trim() ? [req.baseRef.trim()] : []),
               ];
-          await this.runGit(args, { cwd: repoTop, write: true });
+          await this.runGit(args, { cwd: worktreeRoot, write: true });
           break;
         }
         case "removeWorktree": {
           const target = req.worktreePath?.trim();
           if (!target) throw new Error("未指定要移除的 worktree 路径");
-          const resolvedWt = resolve(repoTop, target);
-          if (sameFsPath(resolvedWt, repoTop)) {
+          const resolvedWt = resolve(worktreeRoot, target);
+          if (sameFsPath(resolvedWt, mainWorktreeRoot)) {
             throw new Error("不能移除主工作树目录");
           }
           await this.runGit(["worktree", "remove", resolvedWt], {
-            cwd: repoTop,
+            cwd: mainWorktreeRoot,
             write: true,
           });
           break;
         }
       }
 
-      return this.inspect(repoTop);
+      return this.inspect(worktreeRoot);
     });
   }
 }
 
 function sanitizeBranchName(raw?: string): string {
   const trimmed = (raw ?? "").trim();
-  if (!trimmed || trimmed.startsWith("-") || /\s|~|\^|:|\?|\*|\[|\\/.test(trimmed)) {
+  if (
+    !trimmed ||
+    trimmed.startsWith("-") ||
+    /\s|~|\^|:|\?|\*|\[|\\/.test(trimmed)
+  ) {
     throw new Error("无效的分支名称");
   }
   return trimmed;

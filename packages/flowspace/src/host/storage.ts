@@ -1,11 +1,14 @@
 import { z } from "zod";
 import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
+import { sanitizeDocumentForWire } from "../core/document.ts";
 import type {
   CanvasSnapshot,
   FlowspaceDocument,
   FlowspaceRun,
   WorkflowTemplate,
 } from "../types.ts";
+
+export { sanitizeDocumentForWire };
 
 const groupPort = z.object({
   id: z.string(),
@@ -71,7 +74,7 @@ const node = z.object({
   continuationPrompt: z.string().optional(),
   continuationCollapsed: z.boolean().optional(),
   nativeTrigger: z.enum(["inherit", "enabled", "disabled"]),
-  participation: z.enum(["global", "manual", "paused"]),
+  participation: z.enum(["global", "manual", "paused", "bypassed"]),
   text: z.string(),
   sourceNodeId: z.string().optional(),
   sourceSeq: z.number().optional(),
@@ -219,7 +222,21 @@ export const flowspaceDomain = defineDomain({
   },
 });
 
+function scrubNodeNullsInPlace(nodes: FlowspaceDocument["nodes"]): void {
+  for (const n of nodes) {
+    if (n.window === null) {
+      delete n.window;
+    } else if (n.window && n.window.snap === null) {
+      delete n.window.snap;
+    }
+  }
+}
+
 export function checkDocument(doc: FlowspaceDocument): void {
+  scrubNodeNullsInPlace(doc.nodes);
+  for (const tpl of doc.templates ?? []) scrubNodeNullsInPlace(tpl.nodes);
+  for (const snap of doc.snapshots ?? []) scrubNodeNullsInPlace(snap.nodes);
+
   const ids = new Set(doc.nodes.map((n) => n.id));
   if (ids.size !== doc.nodes.length) throw new Error("节点身份重复");
   const sessions = doc.nodes.flatMap((n) => (n.sessionId ? [n.sessionId] : []));

@@ -13,6 +13,7 @@ export type NodeKind =
 export type ContextMode = "conclusion" | "session" | "fork";
 export type Trigger = "off" | "auto" | "confirm";
 export type NativeTrigger = "inherit" | "enabled" | "disabled";
+export type ParticipationMode = "global" | "manual" | "paused" | "bypassed";
 export type GroupColor = "violet" | "teal" | "blue" | "amber";
 export type AgentTab = "task" | "conversation" | "execution";
 export type RerunRule = "change" | "update" | "always";
@@ -79,7 +80,7 @@ export interface FlowNode {
   continuationPrompt?: string;
   continuationCollapsed?: boolean;
   nativeTrigger: NativeTrigger;
-  participation: "global" | "manual" | "paused";
+  participation: ParticipationMode;
   text: string;
   sourceNodeId?: string;
   sourceSeq?: number;
@@ -192,6 +193,15 @@ export interface FlowspaceDocument {
 export interface ContextSnapshot {
   id: string;
   kind: "conclusion" | "session" | "fork" | "text" | "file";
+  referenceKind?:
+    | "file"
+    | "changes"
+    | "git"
+    | "terminal"
+    | "display"
+    | "note"
+    | "board";
+  missing?: boolean;
   sourceNodeId: string;
   sourceSessionId?: string;
   seq?: number;
@@ -199,6 +209,13 @@ export interface ContextSnapshot {
   text: string;
   capturedAt: number;
   version?: string;
+}
+
+export interface StepTelemetry {
+  stepCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  durationMs?: number;
 }
 
 export type StepState =
@@ -223,6 +240,7 @@ export interface RunStep {
   endSeq?: number;
   output?: string;
   error?: string;
+  telemetry?: StepTelemetry;
 }
 
 export interface FlowToken {
@@ -234,6 +252,8 @@ export interface FlowToken {
   consumed: boolean;
   boundary: boolean;
   dismissed: boolean;
+  loopCapReached?: boolean;
+  planGate?: boolean;
 }
 
 export interface PresentedDeliverable {
@@ -288,7 +308,7 @@ export interface NativeAgentMessage {
   id: string;
   fromSessionId: string;
   toSessionId: string;
-  kind: "agent-message" | "subagent-settled";
+  kind: "agent-message" | "subagent-settled" | "team-message";
   text: string;
   summary?: string;
   seq: number;
@@ -446,7 +466,13 @@ export interface FlowspaceSnapshot {
 }
 export interface StartRequest {
   nodeIds: string[];
-  kind: "single" | "selection" | "group" | "global";
+  kind:
+    | "single"
+    | "selection"
+    | "group"
+    | "global"
+    | "from-node"
+    | "to-node";
   excludeRootIds?: string[];
 }
 export interface LaunchPlan {
@@ -505,6 +531,7 @@ export interface GitActionRequest {
   cwd?: string;
   expectedRevision?: string;
   action:
+    | "init"
     | "stage"
     | "unstage"
     | "stageAll"
@@ -523,6 +550,33 @@ export interface GitActionRequest {
   branch?: string;
   baseRef?: string;
   worktreePath?: string;
+}
+export interface ExtendLoopRequest {
+  runId: string;
+  edgeId?: string;
+  nodeId?: string;
+  extraRounds?: number;
+}
+export interface InspectEdgeRequest {
+  edgeId: string;
+  runId?: string;
+}
+export interface EdgePayloadPreview {
+  edgeId: string;
+  kind: "reference" | "continuation";
+  mode: string;
+  sourceTitle: string;
+  targetTitle: string;
+  sessionId?: string;
+  seq?: number;
+  byteLength: number;
+  willSpill: boolean;
+  freshness: "pending" | "sent" | "updated" | "always" | "live";
+  summary: string;
+  content: string;
+}
+export interface RestoreSnapshotRequest {
+  snapshotId: string;
 }
 export interface SessionChangesRequest {
   sessionId: string;

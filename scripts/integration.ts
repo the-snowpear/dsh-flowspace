@@ -286,6 +286,137 @@ try {
     passed: true,
   });
 
+  // Verify Wave 2A: floating window `snap: null` wire safety, missing-file resilience, X-Ray `inspectEdgePayload`, Bypass pass-through, Telemetry, cumulative >64KiB spill & R10 `restoreSnapshot`
+  const wave2Doc = service.snapshot().document;
+  wave2Doc.nodes[0].window = { x: 24, y: 24, w: 460, h: 500, snap: null };
+  wave2Doc.nodes[1].participation = "bypassed";
+  wave2Doc.nodes[2].continuationPrompt = "FINAL_BYPASS_RECEIVER_TASK";
+  const missingFileNode = {
+    ...newNode("file", -260, 720, "Missing Spec"),
+    cwd: workspace,
+    selectedItems: ["DOES_NOT_EXIST_YET.md"],
+    text: "DOES_NOT_EXIST_YET.md",
+  };
+  const spillNoteA = {
+    ...newNode("note", -260, 920, "Spill Part A"),
+    text: "CUMULATIVE_A_".repeat(3200), // ~41.6 KiB (< 64 KiB individually)
+  };
+  const spillNoteB = {
+    ...newNode("note", -260, 1120, "Spill Part B"),
+    text: "CUMULATIVE_B_".repeat(3200), // ~41.6 KiB (A + B > 64 KiB cumulatively!)
+  };
+  wave2Doc.nodes.push(missingFileNode, spillNoteA, spillNoteB);
+  const missingFileEdge = newEdge(
+    missingFileNode.id,
+    wave2Doc.nodes[0].id,
+    "reference",
+  );
+  wave2Doc.edges = [
+    newEdge(wave2Doc.nodes[0].id, wave2Doc.nodes[1].id, "continuation"),
+    newEdge(wave2Doc.nodes[1].id, wave2Doc.nodes[2].id, "continuation"),
+    missingFileEdge,
+    newEdge(spillNoteA.id, wave2Doc.nodes[0].id, "reference"),
+    newEdge(spillNoteB.id, wave2Doc.nodes[0].id, "reference"),
+  ];
+  const savedWave2 = await service.save(wave2Doc);
+  assert.equal("snap" in (savedWave2.nodes[0].window ?? {}), false);
+
+  // X-Ray inspectEdgePayload reads payload without mutating sentVersion
+  const xrayBefore = await service.inspectEdgePayload({
+    edgeId: missingFileEdge.id,
+  });
+  assert.equal(xrayBefore.freshness, "pending");
+  assert.equal(
+    service.snapshot().document.edges.find((e) => e.id === missingFileEdge.id)
+      ?.sentVersion,
+    undefined,
+  );
+
+  // Run 0 -> 1 (bypassed) -> 2 with missing file + cumulative >64KiB notes
+  const wave2DocReady = service.snapshot().document;
+  wave2DocReady.nodes[0].draft = "Run upstream across bypassed middle node";
+  await service.save(wave2DocReady);
+  const bypassRun = await service.start({
+    kind: "single",
+    nodeIds: [wave2DocReady.nodes[0].id],
+  });
+  await until(
+    () =>
+      service.snapshot().runs.find((r) => r.id === bypassRun.id)?.state ===
+      "completed",
+    "bypass chain with missing file and cumulative spill completes",
+  );
+  const finishedBypassRun = service
+    .snapshot()
+    .runs.find((r) => r.id === bypassRun.id)!;
+  // Only nodes[0] and nodes[2] ran; bypassed nodes[1] was skipped!
+  assert.deepEqual(
+    finishedBypassRun.steps.map((s) => s.nodeId),
+    [wave2DocReady.nodes[0].id, wave2DocReady.nodes[2].id],
+  );
+  assert.ok((finishedBypassRun.steps[0].telemetry?.stepCount ?? 0) >= 1);
+  assert.ok((finishedBypassRun.steps[0].telemetry?.durationMs ?? -1) >= 0);
+
+  // Check semantic `<canvas-reference kind="file" ... status="missing">` and cumulative `spillStore` in session log
+  const step0Log = await ctx.sessionQuery.observeSession(
+    finishedBypassRun.steps[0].sessionId!,
+  );
+  const step0Msg = step0Log.events.find(
+    (e) =>
+      e.type === "user/message" &&
+      "rpcId" in e.data.source &&
+      e.data.source.rpcId === finishedBypassRun.steps[0].requestId,
+  );
+  const step0Raw = JSON.stringify(step0Msg);
+  assert.match(step0Raw, /status=\\"missing\\"/);
+  assert.match(step0Raw, /完整内容：/);
+  step0Log[Symbol.dispose]();
+
+  // Creating the missing file flips X-Ray freshness from `sent` -> `updated`!
+  const xraySent = await service.inspectEdgePayload({
+    edgeId: missingFileEdge.id,
+  });
+  assert.equal(xraySent.freshness, "sent");
+  await writeFile(join(workspace, "DOES_NOT_EXIST_YET.md"), "# Fresh Spec\nHello");
+  const xrayUpdated = await service.inspectEdgePayload({
+    edgeId: missingFileEdge.id,
+  });
+  assert.equal(xrayUpdated.freshness, "updated");
+
+  // Sibling path outside registered workspace & managed worktrees is rejected/confined back to default root
+  const outsideSibling = join(workspace, "..", "unrelated-secret-sibling");
+  assert.notEqual(
+    service.resolveWorkspaceRoot(outsideSibling),
+    outsideSibling,
+  );
+  assert.equal(
+    service.resolveWorkspaceRoot(outsideSibling),
+    service.resolveWorkspaceRoot(),
+  );
+
+  // R10 atomic `restoreSnapshot` interrupts waiting/active runs safely
+  const preRestoreSnapDoc = service.snapshot().document;
+  preRestoreSnapDoc.snapshots = [
+    {
+      id: "snap-1",
+      title: "Checkpoint 1",
+      createdAt: Date.now(),
+      nodes: structuredClone(preRestoreSnapDoc.nodes),
+      edges: structuredClone(preRestoreSnapDoc.edges),
+      viewport: { x: 0, y: 0, zoom: 1 },
+    },
+  ];
+  await service.save(preRestoreSnapDoc);
+  await service.restoreSnapshot({ snapshotId: "snap-1" });
+  assert.ok(
+    service.snapshot().runs.some((r) => r.state === "interrupted"),
+    "restoreSnapshot safely interrupts previously waiting runs",
+  );
+  report.push({
+    name: "Wave 2A Bypass, missing-file safety, cumulative spillStore, X-Ray inspectEdgePayload, Telemetry & R10 restoreSnapshot",
+    passed: true,
+  });
+
   const countBeforeRestart = service.snapshot().runs.length;
   const finalDocBeforeRestart = service.snapshot().document;
   finalDocBeforeRestart.nodes[0].draft = "Persisted draft";

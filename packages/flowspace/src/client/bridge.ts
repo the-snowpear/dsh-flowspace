@@ -3,8 +3,11 @@ import type { SessionId } from "@deepseek-ai/dsh-session/types";
 import type { SessionReference } from "@deepseek-ai/dsh-api-session-controller/client";
 import type { MainPanelId } from "@deepseek-ai/dsh-client-ui-layout/client";
 import { useSyncExternalStore } from "react";
+import { sanitizeDocumentForWire } from "../core/document.ts";
 import type {
   BindRequest,
+  EdgePayloadPreview,
+  ExtendLoopRequest,
   FlowNode,
   FlowspaceDocument,
   FlowspaceSnapshot,
@@ -12,6 +15,7 @@ import type {
   GitDiffRequest,
   GitDiffResult,
   GitRepoStatus,
+  InspectEdgeRequest,
   LaunchPlan,
   SessionBrief,
   SessionChangeTurn,
@@ -29,6 +33,8 @@ import type {} from "../../lib/typert.remote-client.js";
 import type {} from "@deepseek-ai/dsh-client-locale/client";
 import { setLanguage } from "./i18n.ts";
 
+export { sanitizeDocumentForWire };
+
 export interface CanvasBridge {
   useSnapshot(): FlowspaceSnapshot | null;
   connect(): () => void;
@@ -36,8 +42,11 @@ export interface CanvasBridge {
   plan(req: StartRequest): Promise<LaunchPlan>;
   start(req: StartRequest): Promise<void>;
   rerunFailed(runId: string): Promise<void>;
+  extendLoop(req: ExtendLoopRequest): Promise<void>;
   command(runId: string, action: "pause" | "resume" | "cancel"): Promise<void>;
   release(runId: string, tokenId: string, accept: boolean): Promise<void>;
+  restoreSnapshot(snapshotId: string): Promise<FlowspaceDocument>;
+  inspectEdgePayload(req: InspectEdgeRequest): Promise<EdgePayloadPreview>;
   bind(req: BindRequest): Promise<FlowNode>;
   display(req: SourceRequest): Promise<FlowNode>;
   sessions(): Promise<SessionBrief[]>;
@@ -68,6 +77,9 @@ export interface CanvasBridge {
   stopNode(nodeId: string): Promise<void>;
   takeFocus(): string | undefined;
 }
+
+export type FlowspaceBridge = CanvasBridge;
+
 function value<T>(result: RemoteResult<T>): T {
   if (!result.ok) throw result.error;
   return result.value;
@@ -172,7 +184,8 @@ export class FlowClient implements CanvasBridge {
     })();
   }
   async save(doc: FlowspaceDocument): Promise<FlowspaceDocument> {
-    return value(await this.ctx.remote.flowspace.save(doc));
+    const clean = sanitizeDocumentForWire(doc);
+    return value(await this.ctx.remote.flowspace.save(clean));
   }
   async plan(req: StartRequest): Promise<LaunchPlan> {
     await Promise.all([...this.draftSavers.values()].map((save) => save()));
@@ -193,6 +206,9 @@ export class FlowClient implements CanvasBridge {
   async rerunFailed(runId: string): Promise<void> {
     value(await this.ctx.remote.flowspace.rerunFailed({ runId }));
   }
+  async extendLoop(req: ExtendLoopRequest): Promise<void> {
+    value(await this.ctx.remote.flowspace.extendLoop(req));
+  }
   async command(
     runId: string,
     action: "pause" | "resume" | "cancel",
@@ -205,6 +221,16 @@ export class FlowClient implements CanvasBridge {
     accept: boolean,
   ): Promise<void> {
     value(await this.ctx.remote.flowspace.release({ runId, tokenId, accept }));
+  }
+  async restoreSnapshot(snapshotId: string): Promise<FlowspaceDocument> {
+    return value(
+      await this.ctx.remote.flowspace.restoreSnapshot({ snapshotId }),
+    );
+  }
+  async inspectEdgePayload(
+    req: InspectEdgeRequest,
+  ): Promise<EdgePayloadPreview> {
+    return value(await this.ctx.remote.flowspace.inspectEdgePayload(req));
   }
   async bind(req: BindRequest): Promise<FlowNode> {
     return value(await this.ctx.remote.flowspace.bind(req));

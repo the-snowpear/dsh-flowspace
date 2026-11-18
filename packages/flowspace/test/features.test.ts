@@ -12,8 +12,10 @@ import {
   newEdge,
   newNode,
   sample,
+  sanitizeDocumentForWire,
+  syncUntitledAgentTitles,
 } from "../src/core/document.ts";
-import { launchPlan } from "../src/core/graph.ts";
+import { computeAutoLayout, launchPlan } from "../src/core/graph.ts";
 import {
   capsuleStateOf,
   computeInputHubLayout,
@@ -25,7 +27,13 @@ import {
   buildDerivedStructure,
   resolveDraftAffiliation,
 } from "../src/client/structure.ts";
-import { HostGitService, parseUnifiedDiff } from "../src/host/git.ts";
+import {
+  HostGitService,
+  parseUnifiedDiff,
+  sanitizedGitEnv,
+} from "../src/host/git.ts";
+import { computeFileNodeFingerprint } from "../src/host/runtime.ts";
+import { checkDocument, documentSchema } from "../src/host/storage.ts";
 import type { RunStep } from "../src/types.ts";
 
 const execFile = promisify(execFileCb);
@@ -196,6 +204,13 @@ test("D38 & M05 & M06: draft auto-title, 3-tier affiliation priority, and 4-tier
     "排查登录重定向死循环",
   );
 
+  const doc = emptyDocument();
+  const untitled = newNode("agent", 0, 0);
+  untitled.draft = "## Review auth middleware\nCheck JWT expiry";
+  doc.nodes.push(untitled);
+  assert.equal(syncUntitledAgentTitles(doc), true);
+  assert.equal(untitled.title, "Review auth middleware");
+
   const projects = [
     {
       id: "ws-1",
@@ -329,11 +344,30 @@ test("D38 & M05 & M06: draft auto-title, 3-tier affiliation priority, and 4-tier
   assert.equal(nearWt.branch, "feat/git");
 });
 
-test("M08: HostGitService inspects, stages, commits, diffs, creates worktrees, and guards expectedRevision", async () => {
+test("M08: HostGitService init, env scrubbing, untracked discard, staging/commit, diff, worktree, and expectedRevision", async () => {
+  // Verify secret scrubbing never forwards API keys or DSH_* vars to git hooks
+  const scrubbed = sanitizedGitEnv(true, {
+    PATH: "/usr/bin",
+    DEEPSEEK_API_KEY: "sk-secret",
+    dsh_internal_flag: "1",
+    GITHUB_TOKEN: "ghp_secret",
+    HOME: "/home/dev",
+  });
+  assert.equal(scrubbed.DEEPSEEK_API_KEY, undefined);
+  assert.equal(scrubbed.dsh_internal_flag, undefined);
+  assert.equal(scrubbed.GITHUB_TOKEN, undefined);
+  assert.equal(scrubbed.PATH, "/usr/bin");
+  assert.equal(scrubbed.GIT_TERMINAL_PROMPT, "0");
+
   const dir = await mkdtemp(join(tmpdir(), "flowspace-git-test-"));
   const gitSvc = new HostGitService();
   try {
-    await execFile("git", ["init", "-b", "main"], { cwd: dir });
+    // Initialize non-repo via `action: "init"`
+    const beforeInit = await gitSvc.inspect(dir);
+    assert.equal(beforeInit.isGitRepo, false);
+    const inited = await gitSvc.act(dir, { action: "init", branch: "main" });
+    assert.equal(inited.isGitRepo, true);
+
     await execFile("git", ["config", "user.email", "test@example.com"], {
       cwd: dir,
     });
@@ -351,8 +385,19 @@ test("M08: HostGitService inspects, stages, commits, diffs, creates worktrees, a
     assert.equal(afterCommit.commits.length, 1);
 
     await writeFile(join(dir, "hello.txt"), "line 1\nline 2 modified\nline 3\n");
+    await writeFile(join(dir, "untracked.txt"), "scratch");
     const status = await gitSvc.inspect(dir);
-    assert.equal(status.unstaged.length, 1);
+    assert.equal(status.unstaged.length, 2);
+
+    // Discard handles untracked (`?`) files cleanly via `git clean -fd`
+    const afterDiscardUntracked = await gitSvc.act(dir, {
+      action: "discard",
+      paths: ["untracked.txt"],
+    });
+    assert.equal(
+      afterDiscardUntracked.unstaged.some((u) => u.path === "untracked.txt"),
+      false,
+    );
 
     const diff = await gitSvc.diff(dir, {
       target: "working",
@@ -445,15 +490,28 @@ test("Multi-input ComfyUI fan-out layout uncrosses upstream wires and interpolat
   );
 });
 
-test("Agent Overview defaults, DeepSeek Blue group defaults, and blank bound session status", () => {
+test("Agent Overview defaults, expanded Note/Display defaults, empty File node safety, and blank bound session status", () => {
   const grp = newNode("group", 0, 0, "Blue Group");
   assert.equal(grp.color, "blue");
   const ag = newNode("agent", 0, 0, "Overview First");
   assert.equal(ag.tab, "task");
+  const note = newNode("note", 0, 0);
+  assert.equal(note.expanded, true);
+  const disp = newNode("display", 0, 0);
+  assert.equal(disp.expanded, true);
+  const file = newNode("file", 0, 0);
+  assert.equal(file.text, "");
+  assert.deepEqual(file.items, []);
+
   const seeded = sample(emptyDocument(), "review");
   assert.equal(
     seeded.nodes.find((n) => n.kind === "group")?.color,
     "blue",
+  );
+  assert.equal(
+    seeded.nodes.find((n) => n.kind === "file")?.text,
+    "",
+    "sample without availableFiles must not prefill non-existent README.md",
   );
 
   // Pre-bound blank session (seq = -1, no steps) stays "draft" instead of falsely showing Done
@@ -502,3 +560,67 @@ test("Agent Overview defaults, DeepSeek Blue group defaults, and blank bound ses
   );
 });
 
+test("Wire sanitization (`sanitizeDocumentForWire`), File `mtimeMs:size` versioning, and `computeAutoLayout`", async () => {
+  // 1. Floating window `snap: null` and `window: null` strip cleanly for Typert validation
+  const doc = emptyDocument();
+  const a1 = {
+    ...newNode("agent", 900, 500, "Step 1"),
+    window: { x: 40, y: 40, w: 480, h: 520, snap: null },
+  };
+  const a2 = {
+    ...newNode("agent", 100, 500, "Step 2"),
+    window: null,
+  };
+  const a3 = newNode("agent", 500, 100, "Step 3");
+  const pinnedCard = {
+    ...newNode("note", 80, 80, "Pinned Anchor"),
+    pinned: true,
+  };
+  const refFile = newNode("file", 700, 700, "Spec File");
+  const outDisplay = {
+    ...newNode("display", 50, 50, "Final Report"),
+    sourceNodeId: a3.id,
+  };
+  doc.nodes.push(a1, a2, a3, pinnedCard, refFile, outDisplay);
+  doc.edges.push(
+    newEdge(a1.id, a2.id, "continuation"),
+    newEdge(a2.id, a3.id, "continuation"),
+    newEdge(refFile.id, a1.id, "reference"),
+  );
+
+  const sanitized = sanitizeDocumentForWire(doc);
+  assert.equal(sanitized.nodes[0].window?.snap, undefined);
+  assert.equal("snap" in (sanitized.nodes[0].window ?? {}), false);
+  assert.equal(sanitized.nodes[1].window, undefined);
+  assert.equal("window" in sanitized.nodes[1], false);
+  documentSchema.parse(sanitized);
+  checkDocument(sanitized);
+
+  // 2. `computeAutoLayout` orders DAG left-to-right, places satellites cleanly, and never moves pinned nodes
+  const positions = computeAutoLayout(sanitized.nodes, sanitized.edges);
+  assert.equal(positions.has(pinnedCard.id), false, "pinned node must not move");
+  const pos1 = positions.get(a1.id)!;
+  const pos2 = positions.get(a2.id)!;
+  const pos3 = positions.get(a3.id)!;
+  const posRef = positions.get(refFile.id)!;
+  const posOut = positions.get(outDisplay.id)!;
+  assert.ok(pos1.x < pos2.x && pos2.x < pos3.x, "DAG ranks flow left-to-right");
+  assert.ok(posRef.x < pos1.x, "layer-0 reference satellite sits to the left of consumer");
+  assert.ok(posOut.x > pos3.x, "terminal display satellite sits to the right of producer");
+
+  // 3. `computeFileNodeFingerprint` detects file creation and edits
+  const tmp = await mkdtemp(join(tmpdir(), "flowspace-fp-"));
+  try {
+    refFile.cwd = tmp;
+    refFile.selectedItems = ["spec.md"];
+    const vMissing = computeFileNodeFingerprint(refFile, tmp);
+    await writeFile(join(tmp, "spec.md"), "v1");
+    const vCreated = computeFileNodeFingerprint(refFile, tmp);
+    assert.notEqual(vMissing, vCreated);
+    await writeFile(join(tmp, "spec.md"), "v2-with-more-bytes");
+    const vUpdated = computeFileNodeFingerprint(refFile, tmp);
+    assert.notEqual(vCreated, vUpdated);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
