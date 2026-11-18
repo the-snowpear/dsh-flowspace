@@ -48,12 +48,14 @@ import {
   capsuleStateOf,
   clamp,
   collapsedAncestor,
+  computeInputHubLayout,
   easeView,
   endpoint,
   exchangeRoute,
   fit,
   giveRoomBack,
   groupBox,
+  hubFilamentPath,
   inferGroupPorts,
   isCompactNode,
   makeRoom,
@@ -63,6 +65,7 @@ import {
   toWorld,
   zoomAt,
   type Box,
+  type HubSatelliteItem,
 } from "./geometry.ts";
 import {
   allTemplates,
@@ -224,7 +227,7 @@ export function CanvasApp({
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileSidebar, setMobileSidebar] = useState(false);
-  const [minimapOpen, setMinimapOpen] = useState(false);
+  const [minimapOpen, setMinimapOpen] = useState(true);
   const [tool, setTool] = useState<"pointer" | "hand">("pointer");
   const [spacePressed, setSpacePressed] = useState(false);
 
@@ -266,7 +269,27 @@ export function CanvasApp({
     fromIds: string[];
     fromPoint: { x: number; y: number; box?: Box };
     current: { x: number; y: number };
+    reconnectingEdge?: FlowEdge;
+    snappedTarget?: {
+      nodeIds: string[];
+      point: { x: number; y: number; box?: Box };
+      label: string;
+      isOriginalTarget?: boolean;
+    } | null;
   } | null>(null);
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
+  const [hubTarget, setHubTarget] = useState<{
+    nodeId: string;
+    kind: "reference" | "continuation";
+  } | null>(null);
+  const [hubState, setHubState] = useState<{
+    nodeId: string;
+    kind: "reference" | "continuation";
+    progress: number;
+    closing: boolean;
+  } | null>(null);
+  const hubCloseTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const hubProgressRef = useRef(0);
   const [marquee, setMarquee] = useState<{
     x: number;
     y: number;
@@ -1375,7 +1398,7 @@ export function CanvasApp({
       ...newNode("group", b.x - 24, b.y - 54, t("workflows")),
       width: b.w + 48,
       height: b.h + 82,
-      color: "violet",
+      color: "blue",
     };
     edit((d) => {
       d.nodes.push(grp);
@@ -2542,6 +2565,277 @@ export function CanvasApp({
     [trackPointer, edit, flush, reportError],
   );
 
+  const openInputHub = useCallback(
+    (nodeId: string, kind: "reference" | "continuation") => {
+      clearTimeout(hubCloseTimerRef.current);
+      setHubTarget((prev) =>
+        prev?.nodeId === nodeId && prev.kind === kind ? prev : { nodeId, kind },
+      );
+    },
+    [],
+  );
+
+  const scheduleCloseInputHub = useCallback((delay = 175) => {
+    clearTimeout(hubCloseTimerRef.current);
+    hubCloseTimerRef.current = setTimeout(() => {
+      setHubTarget(null);
+      setHoveredEdgeId(null);
+    }, delay);
+  }, []);
+
+  const closeInputHubImmediate = useCallback(() => {
+    clearTimeout(hubCloseTimerRef.current);
+    hubProgressRef.current = 0;
+    setHubTarget(null);
+    setHubState(null);
+    setHoveredEdgeId(null);
+  }, []);
+
+  useEffect(
+    () => () => clearTimeout(hubCloseTimerRef.current),
+    [],
+  );
+
+  /* Smooth 60fps spring/tween driver for multi-input fan-out satellites (with fallback tick when vsync is throttled) */
+  useEffect(() => {
+    let raf = 0;
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+    let cancelled = false;
+    let last = performance.now();
+
+    const scheduleFrame = (cb: (now: number) => void) => {
+      let fired = false;
+      const invoke = (ts: number) => {
+        if (fired || cancelled) return;
+        fired = true;
+        clearTimeout(fallbackTimer);
+        cancelAnimationFrame(raf);
+        cb(ts);
+      };
+      raf = requestAnimationFrame(invoke);
+      fallbackTimer = setTimeout(() => invoke(performance.now()), 22);
+    };
+
+    const cleanup = () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      clearTimeout(fallbackTimer);
+    };
+
+    if (hubTarget) {
+      const switching =
+        !hubState ||
+        hubState.nodeId !== hubTarget.nodeId ||
+        hubState.kind !== hubTarget.kind;
+      if (switching) {
+        hubProgressRef.current = reducedMotion ? 1 : 0.08;
+      }
+      if (reducedMotion || hubProgressRef.current >= 1) {
+        hubProgressRef.current = 1;
+        setHubState({
+          nodeId: hubTarget.nodeId,
+          kind: hubTarget.kind,
+          progress: 1,
+          closing: false,
+        });
+        return cleanup;
+      }
+      setHubState({
+        nodeId: hubTarget.nodeId,
+        kind: hubTarget.kind,
+        progress: hubProgressRef.current,
+        closing: false,
+      });
+      const stepOpen = (now: number) => {
+        const dt = Math.min(48, Math.max(8, now - last));
+        last = now;
+        const nextP = Math.min(1, hubProgressRef.current + dt / 245);
+        hubProgressRef.current = nextP;
+        setHubState({
+          nodeId: hubTarget.nodeId,
+          kind: hubTarget.kind,
+          progress: nextP,
+          closing: false,
+        });
+        if (nextP < 1) {
+          scheduleFrame(stepOpen);
+        }
+      };
+      scheduleFrame(stepOpen);
+      return cleanup;
+    }
+
+    if (!hubState) return cleanup;
+    if (reducedMotion || hubProgressRef.current <= 0.01) {
+      hubProgressRef.current = 0;
+      setHubState(null);
+      return cleanup;
+    }
+    const closingNodeId = hubState.nodeId;
+    const closingKind = hubState.kind;
+    const stepClose = (now: number) => {
+      const dt = Math.min(48, Math.max(8, now - last));
+      last = now;
+      const nextP = Math.max(0, hubProgressRef.current - dt / 180);
+      hubProgressRef.current = nextP;
+      if (nextP <= 0.01) {
+        hubProgressRef.current = 0;
+        setHubState(null);
+      } else {
+        setHubState({
+          nodeId: closingNodeId,
+          kind: closingKind,
+          progress: nextP,
+          closing: true,
+        });
+        scheduleFrame(stepClose);
+      }
+    };
+    scheduleFrame(stepClose);
+    return cleanup;
+  }, [hubTarget, reducedMotion, hubState?.nodeId, hubState?.kind]);
+
+  const resolveSnapTarget = useCallback(
+    (
+      clientX: number,
+      clientY: number,
+      vpRect: DOMRect,
+      kind: "reference" | "continuation",
+      excludeSourceIds: string[],
+      originalTargetId?: string,
+    ) => {
+      const curDoc = docRef.current;
+      const rawWorld = toWorld(curDoc.viewport, vpRect, clientX, clientY);
+      const snapRadius = clamp(28 / curDoc.viewport.zoom, 18, 42);
+      let best: {
+        dist: number;
+        nodeIds: string[];
+        point: { x: number; y: number; box?: Box };
+        label: string;
+      } | null = null;
+
+      for (const n of curDoc.nodes) {
+        if (n.kind === "agent" && isNodeVisible(n)) {
+          if (excludeSourceIds.includes(n.id)) continue;
+          const pt = endpoint(curDoc, n.id, kind, "in", lod, keepExpandedIds);
+          const d = Math.hypot(rawWorld.x - pt.x, rawWorld.y - pt.y);
+          if (d <= snapRadius && (!best || d < best.dist)) {
+            best = { dist: d, nodeIds: [n.id], point: pt, label: n.title };
+          }
+        } else if (n.kind === "group" && n.collapsed && isNodeVisible(n)) {
+          const gPorts = inferGroupPorts(curDoc, n).filter(
+            (p) => !p.hidden && p.direction === "in" && p.kind === kind,
+          );
+          for (const gp of gPorts) {
+            const targetIds = gp.nodes.filter(
+              (id) => !excludeSourceIds.includes(id),
+            );
+            if (!targetIds.length) continue;
+            const pt = endpoint(
+              curDoc,
+              targetIds[0],
+              kind,
+              "in",
+              lod,
+              keepExpandedIds,
+            );
+            const d = Math.hypot(rawWorld.x - pt.x, rawWorld.y - pt.y);
+            if (d <= snapRadius && (!best || d < best.dist)) {
+              best = { dist: d, nodeIds: targetIds, point: pt, label: gp.name };
+            }
+          }
+        }
+      }
+
+      if (best) {
+        return {
+          current: { x: best.point.x, y: best.point.y },
+          snappedTarget: {
+            nodeIds: best.nodeIds,
+            point: best.point,
+            label: best.label,
+            isOriginalTarget:
+              Boolean(originalTargetId) &&
+              best.nodeIds.length === 1 &&
+              best.nodeIds[0] === originalTargetId,
+          },
+        };
+      }
+
+      const hitEl = document.elementFromPoint(
+        clientX,
+        clientY,
+      ) as HTMLElement | null;
+      const inPort = hitEl?.closest<HTMLElement>('[data-port-direction="in"]');
+      if (inPort && inPort.dataset.portKind === kind) {
+        const proxyIds = inPort.dataset.proxyNodes
+          ?.split(",")
+          .filter((id) => Boolean(id) && !excludeSourceIds.includes(id));
+        const targetIds = proxyIds?.length
+          ? proxyIds
+          : inPort.dataset.nodeId &&
+              !excludeSourceIds.includes(inPort.dataset.nodeId)
+            ? [inPort.dataset.nodeId]
+            : [];
+        if (targetIds.length) {
+          const pt = endpoint(
+            curDoc,
+            targetIds[0],
+            kind,
+            "in",
+            lod,
+            keepExpandedIds,
+          );
+          const tNode = curDoc.nodes.find((n) => n.id === targetIds[0]);
+          return {
+            current: { x: pt.x, y: pt.y },
+            snappedTarget: {
+              nodeIds: targetIds,
+              point: pt,
+              label: tNode?.title ?? "",
+              isOriginalTarget:
+                Boolean(originalTargetId) &&
+                targetIds.length === 1 &&
+                targetIds[0] === originalTargetId,
+            },
+          };
+        }
+      }
+
+      const hitCard = hitEl?.closest<HTMLElement>("[data-node-card]");
+      if (hitCard?.dataset.nodeCard) {
+        const targetNode = curDoc.nodes.find(
+          (n) => n.id === hitCard.dataset.nodeCard,
+        );
+        if (
+          targetNode?.kind === "agent" &&
+          !excludeSourceIds.includes(targetNode.id)
+        ) {
+          const pt = endpoint(
+            curDoc,
+            targetNode.id,
+            kind,
+            "in",
+            lod,
+            keepExpandedIds,
+          );
+          return {
+            current: rawWorld,
+            snappedTarget: {
+              nodeIds: [targetNode.id],
+              point: pt,
+              label: targetNode.title,
+              isOriginalTarget: targetNode.id === originalTargetId,
+            },
+          };
+        }
+      }
+
+      return { current: rawWorld, snappedTarget: null };
+    },
+    [isNodeVisible, lod, keepExpandedIds],
+  );
+
   const startPortDrag = useCallback(
     (
       ev: React.PointerEvent,
@@ -2551,6 +2845,7 @@ export function CanvasApp({
       ev.stopPropagation();
       const vpRect = viewportRef.current?.getBoundingClientRect();
       if (!vpRect || !fromIds.length) return;
+      closeInputHubImmediate();
       const fromPt = endpoint(
         docRef.current,
         fromIds[0],
@@ -2564,57 +2859,54 @@ export function CanvasApp({
         fromIds,
         fromPoint: fromPt,
         current: { x: fromPt.x, y: fromPt.y },
+        snappedTarget: null,
       });
       setIsDragging(true);
       trackPointer(
         ev,
         (next) => {
-          const cur = toWorld(
-            docRef.current.viewport,
-            vpRect,
+          const snap = resolveSnapTarget(
             next.clientX,
             next.clientY,
+            vpRect,
+            kind,
+            fromIds,
           );
-          setConnecting((prev) => (prev ? { ...prev, current: cur } : null));
+          setConnecting((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  current: snap.current,
+                  snappedTarget: snap.snappedTarget,
+                }
+              : null,
+          );
         },
         (endEv, canceled) => {
           setIsDragging(false);
           setConnecting(null);
           if (canceled || !("clientX" in endEv)) return;
+          const snap = resolveSnapTarget(
+            endEv.clientX,
+            endEv.clientY,
+            vpRect,
+            kind,
+            fromIds,
+          );
+          if (snap.snappedTarget?.nodeIds.length) {
+            connectNodes(fromIds, snap.snappedTarget.nodeIds, kind);
+            return;
+          }
           const hitEl = document.elementFromPoint(
             endEv.clientX,
             endEv.clientY,
           ) as HTMLElement | null;
-          const inPort = hitEl?.closest<HTMLElement>(
-            '[data-port-direction="in"]',
-          );
-          const hitCard = hitEl?.closest<HTMLElement>("[data-node-card]");
           const dropWorld = toWorld(
             docRef.current.viewport,
             vpRect,
             endEv.clientX,
             endEv.clientY,
           );
-
-          if (inPort && inPort.dataset.portKind === kind) {
-            const proxyIds = inPort.dataset.proxyNodes?.split(",").filter(Boolean);
-            const targetIds = proxyIds?.length
-              ? proxyIds
-              : inPort.dataset.nodeId
-                ? [inPort.dataset.nodeId]
-                : [];
-            if (targetIds.length) connectNodes(fromIds, targetIds, kind);
-            return;
-          }
-          if (hitCard?.dataset.nodeCard) {
-            const targetNode = docRef.current.nodes.find(
-              (n) => n.id === hitCard.dataset.nodeCard,
-            );
-            if (targetNode?.kind === "agent") {
-              connectNodes(fromIds, [targetNode.id], kind);
-              return;
-            }
-          }
           /* Dragged to empty canvas: create downstream Agent (continuation) or extracted Display card (reference)! */
           if (
             hitEl?.closest(".fs-viewport") &&
@@ -2662,12 +2954,163 @@ export function CanvasApp({
     [
       lod,
       keepExpandedIds,
+      closeInputHubImmediate,
+      resolveSnapTarget,
       trackPointer,
       connectNodes,
       createCanvasNode,
       edit,
       snapshot,
       selectNode,
+    ],
+  );
+
+  /**
+   * ComfyUI-style Input Wire Unplug / Reroute / Disconnect:
+   * Clicking (<4px) selects the edge; dragging (>=4px) unplugs the wire from its input socket
+   * so the user can plug it into another compatible node or drop on empty canvas to disconnect.
+   */
+  const startInputEdgeDrag = useCallback(
+    (ev: React.PointerEvent, edge: FlowEdge) => {
+      if (ev.button !== 0) return;
+      ev.stopPropagation();
+      const vpRect = viewportRef.current?.getBoundingClientRect();
+      if (!vpRect) return;
+      const startX = ev.clientX;
+      const startY = ev.clientY;
+      let unplugged = false;
+
+      trackPointer(
+        ev,
+        (next) => {
+          if (
+            !unplugged &&
+            Math.hypot(next.clientX - startX, next.clientY - startY) < 4
+          ) {
+            return;
+          }
+          const fromPt = endpoint(
+            docRef.current,
+            edge.source,
+            edge.kind,
+            "out",
+            lod,
+            keepExpandedIds,
+          );
+          if (!unplugged) {
+            unplugged = true;
+            closeInputHubImmediate();
+            setIsDragging(true);
+          }
+          const snap = resolveSnapTarget(
+            next.clientX,
+            next.clientY,
+            vpRect,
+            edge.kind,
+            [edge.source],
+            edge.target,
+          );
+          setConnecting({
+            kind: edge.kind,
+            fromIds: [edge.source],
+            fromPoint: fromPt,
+            current: snap.current,
+            reconnectingEdge: edge,
+            snappedTarget: snap.snappedTarget,
+          });
+        },
+        (endEv, canceled) => {
+          if (!unplugged) {
+            setSelection({ nodes: [], groups: [], edge: edge.id });
+            setInspectorOpen(true);
+            return;
+          }
+          setIsDragging(false);
+          setConnecting(null);
+          if (canceled || !("clientX" in endEv)) return;
+
+          const snap = resolveSnapTarget(
+            endEv.clientX,
+            endEv.clientY,
+            vpRect,
+            edge.kind,
+            [edge.source],
+            edge.target,
+          );
+
+          if (snap.snappedTarget?.isOriginalTarget) {
+            return;
+          }
+
+          if (snap.snappedTarget?.nodeIds.length) {
+            const targetLabel = snap.snappedTarget.label;
+            const targetIds = snap.snappedTarget.nodeIds;
+            let primaryEdgeId = edge.id;
+            edit((d) => {
+              const existing = d.edges.find((x) => x.id === edge.id);
+              if (!existing) return;
+              const validTargets = targetIds.filter((tid) => {
+                const tn = d.nodes.find((n) => n.id === tid);
+                return tn?.kind === "agent" && tid !== existing.source;
+              });
+              if (!validTargets.length) return;
+              const [firstTarget, ...restTargets] = validTargets;
+              const dup = d.edges.find(
+                (x) =>
+                  x.id !== existing.id &&
+                  x.source === existing.source &&
+                  x.target === firstTarget &&
+                  x.kind === existing.kind,
+              );
+              if (dup) {
+                primaryEdgeId = dup.id;
+                d.edges = d.edges.filter((x) => x.id !== existing.id);
+              } else {
+                existing.target = firstTarget;
+                existing.waypoints = [];
+              }
+              for (const extraId of restTargets) {
+                if (
+                  !d.edges.some(
+                    (x) =>
+                      x.source === existing.source &&
+                      x.target === extraId &&
+                      x.kind === existing.kind,
+                  )
+                ) {
+                  d.edges.push({
+                    ...structuredClone(existing),
+                    id: uid(),
+                    target: extraId,
+                    waypoints: [],
+                  });
+                }
+              }
+            });
+            setSelection({ nodes: [], groups: [], edge: primaryEdgeId });
+            showToast(t("wireReconnected", { name: targetLabel }));
+            return;
+          }
+
+          /* Dropped onto empty canvas: disconnect (delete) the wire cleanly with Undo support */
+          edit((d) => {
+            d.edges = d.edges.filter((x) => x.id !== edge.id);
+          });
+          setSelection((prev) =>
+            prev.edge === edge.id ? { ...prev, edge: null } : prev,
+          );
+          showToast(t("wireDisconnected"));
+        },
+      );
+    },
+    [
+      lod,
+      keepExpandedIds,
+      closeInputHubImmediate,
+      resolveSnapTarget,
+      trackPointer,
+      edit,
+      showToast,
     ],
   );
 
@@ -2786,9 +3229,9 @@ export function CanvasApp({
   /* Global Keyboard Shortcuts & Dialog Focus Trap */
   useEffect(() => {
     const onKeyDown = (ev: KeyboardEvent) => {
-      const target = ev.target as HTMLElement | null;
+      const target = ev.target instanceof HTMLElement ? ev.target : null;
       const inOurRoot =
-        rootRef.current?.contains(target) ||
+        Boolean(target && rootRef.current?.contains(target)) ||
         document.activeElement === document.body;
       if (!inOurRoot && !paletteDialog && !launchDialog && !helpModal) return;
 
@@ -3069,6 +3512,44 @@ export function CanvasApp({
     );
   }, [snapshot?.nativeMessages, snapshot?.subagents, doc.nodes, isNodeVisible]);
 
+  /* Multi-input hover fan-out layout (one satellite mini-node per incoming wire) */
+  const activeHubLayout = useMemo(
+    () =>
+      hubState
+        ? computeInputHubLayout({
+            doc,
+            nodeId: hubState.nodeId,
+            kind: hubState.kind,
+            progress: hubState.progress,
+            closing: hubState.closing,
+            reducedMotion,
+            excludeEdgeId: connecting?.reconnectingEdge?.id,
+            lod,
+            keepExpandedIds,
+            isNodeVisible,
+          })
+        : null,
+    [
+      hubState,
+      doc,
+      reducedMotion,
+      connecting?.reconnectingEdge?.id,
+      lod,
+      keepExpandedIds,
+      isNodeVisible,
+    ],
+  );
+
+  const hubSatByEdgeId = useMemo(() => {
+    const m = new Map<string, HubSatelliteItem>();
+    if (activeHubLayout) {
+      for (const sat of activeHubLayout.satellites) {
+        m.set(sat.edge.id, sat);
+      }
+    }
+    return m;
+  }, [activeHubLayout]);
+
   /* Computed SVG Wire Geometry */
   const svgBounds = useMemo(() => {
     const visBoxes = [
@@ -3077,6 +3558,10 @@ export function CanvasApp({
         .map((n) => nodeBox(n, lod, keepExpandedIds.has(n.id))),
       ...visibleGroups.map((g) => groupBox(g)),
       ...derivedStructure.cards.map((c) => c.box),
+      ...(activeHubLayout ? [activeHubLayout.corridorBox] : []),
+      ...(connecting
+        ? [{ x: connecting.current.x - 40, y: connecting.current.y - 40, w: 80, h: 80 }]
+        : []),
       {
         x: -view.x / view.zoom,
         y: -view.y / view.zoom,
@@ -3098,6 +3583,8 @@ export function CanvasApp({
     keepExpandedIds,
     visibleGroups,
     derivedStructure.cards,
+    activeHubLayout,
+    connecting,
     view,
     vpSize,
   ]);
@@ -3794,6 +4281,15 @@ export function CanvasApp({
           </>
         );
 
+        const effectiveTab: AgentTab =
+          placement === "conversation"
+            ? "conversation"
+            : !node.sessionId && activeTab === "conversation"
+              ? "task"
+              : activeTab;
+        const usesContinuationPreset =
+          Boolean(node.sessionId) && hasActiveInboundContinuation;
+
         return (
           <div className="agent-body">
             <div className="agent-status-row">
@@ -3848,10 +4344,26 @@ export function CanvasApp({
                       <span>{nodeSteps.length}</span>
                     </button>
                   )}
+                  {effectiveTab === "conversation" && (
+                    <button
+                      type="button"
+                      className="fs-plan-chip fs-back-overview-chip"
+                      style={{ marginLeft: "auto" }}
+                      onClick={() => editNode(node.id, { tab: "task" })}
+                      title={t("backToOverview")}
+                    >
+                      <Icon name="card" />
+                      <span>{t("overviewTab")}</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="icon-button"
-                    style={{ marginLeft: "auto" }}
+                    style={
+                      effectiveTab === "conversation"
+                        ? undefined
+                        : { marginLeft: "auto" }
+                    }
                     title={t("openNativeChat")}
                     onClick={() => bridge.openChat(node.sessionId!)}
                   >
@@ -3860,6 +4372,43 @@ export function CanvasApp({
                 </>
               )}
             </div>
+
+            {placement !== "conversation" && (
+              <div
+                className="node-tabs"
+                role="tablist"
+                aria-label={node.title}
+              >
+                {(["task", "conversation", "execution"] as AgentTab[]).map(
+                  (tb) => (
+                    <button
+                      key={tb}
+                      type="button"
+                      role="tab"
+                      aria-selected={effectiveTab === tb}
+                      onClick={() => {
+                        if (tb === "conversation" && !node.sessionId) {
+                          bindAgentSession(node);
+                          return;
+                        }
+                        editNode(node.id, { tab: tb });
+                      }}
+                    >
+                      {t(
+                        tb === "task"
+                          ? "overviewTab"
+                          : tb === "conversation"
+                            ? "conversationTab"
+                            : "execution",
+                      )}
+                      {tb === "execution" && nodeSteps.length > 0 && (
+                        <span>{nodeSteps.length}</span>
+                      )}
+                    </button>
+                  ),
+                )}
+              </div>
+            )}
 
             {waitingGates.map(({ run, token }) => (
               <div className="approval-box fs-card-top-gate" key={token.id}>
@@ -3905,8 +4454,7 @@ export function CanvasApp({
               </div>
             ))}
 
-            {/* M02: Single Main View for Live Bound Sessions + Independent Collapsible Continuation Bar */}
-            {node.sessionId ? (
+            {effectiveTab === "conversation" && node.sessionId ? (
               <>
                 {hasActiveInboundContinuation && (
                   <div className="fs-continuation-bar">
@@ -3987,27 +4535,132 @@ export function CanvasApp({
                   />
                 </div>
               </>
+            ) : effectiveTab === "execution" ? (
+              <div className="node-scroll">
+                {nodeSteps.length ? (
+                  [...nodeSteps].reverse().map((step) => (
+                    <div
+                      key={step.id}
+                      className={`event-row event-${step.state}`}
+                    >
+                      <i className="event-dot">
+                        <Icon
+                          name={
+                            step.state === "completed"
+                              ? "check"
+                              : step.state === "queued"
+                                ? "clock"
+                                : "bolt"
+                          }
+                        />
+                      </i>
+                      <div>
+                        <b>
+                          {t(step.state)} ·{" "}
+                          {t("roundBadge", { round: step.iteration })}
+                        </b>
+                        {step.error && <p className="danger">{step.error}</p>}
+                        {step.output && (
+                          <p className="user-content">
+                            {step.output.slice(0, 180)}
+                            {step.output.length > 180 ? "…" : ""}
+                          </p>
+                        )}
+                      </div>
+                      {step.output && (
+                        <button
+                          type="button"
+                          className="icon-button"
+                          title={t("quoteMessage")}
+                          onClick={() =>
+                            extractDisplayFrom(
+                              node.id,
+                              step.output,
+                              step.endSeq,
+                              true,
+                            )
+                          }
+                        >
+                          <Icon name="quote" />
+                        </button>
+                      )}
+                      <time>{formatTime(step.createdAt)}</time>
+                    </div>
+                  ))
+                ) : (
+                  <div className="node-empty">
+                    <Icon name="bolt" />
+                    <p>{t("noEvents")}</p>
+                  </div>
+                )}
+              </div>
             ) : (
-              /* M02: Unbound Draft Stage */
+              /* Agent Overview Page (概览页: works both for Draft & Bound Sessions while preserving M02) */
               <>
                 <div className="node-scroll task-content">
-                  {hasForkInbound && (
+                  {hasForkInbound && !node.sessionId && (
                     <p className="muted">{t("forkDraftHint")}</p>
                   )}
-                  <div className="task-label">{t("task")}</div>
+                  {latestOutput && (
+                    <div className="fs-overview-output">
+                      <div className="fs-overview-output-head">
+                        <span>{t("latestConclusion")}</span>
+                        <button
+                          type="button"
+                          className="icon-button"
+                          title={t("quoteMessage")}
+                          onClick={() =>
+                            extractDisplayFrom(
+                              node.id,
+                              latestOutput,
+                              live?.seq,
+                              true,
+                            )
+                          }
+                        >
+                          <Icon name="quote" />
+                        </button>
+                      </div>
+                      <div className="latest-output-preview user-content">
+                        {latestOutput.slice(0, 260)}
+                        {latestOutput.length > 260 ? "…" : ""}
+                      </div>
+                    </div>
+                  )}
+                  <div className="task-label">
+                    {t(
+                      usesContinuationPreset
+                        ? "continuationInstruction"
+                        : node.sessionId
+                          ? "savedTask"
+                          : "task",
+                    )}
+                  </div>
                   <textarea
                     className="task-editor"
                     aria-label={`${node.title} · ${t("task")}`}
-                    placeholder={t("taskPlaceholder")}
+                    placeholder={t(
+                      usesContinuationPreset
+                        ? "continuationPlaceholder"
+                        : "taskPlaceholder",
+                    )}
                     spellCheck={false}
-                    value={node.draft || node.task}
+                    value={
+                      usesContinuationPreset
+                        ? (node.continuationPrompt ?? node.task)
+                        : node.draft || node.task
+                    }
                     onFocus={() => setEditingNodeId(node.id)}
                     onBlur={() => setEditingNodeId(null)}
                     onChange={(e) =>
-                      editNode(node.id, {
-                        draft: e.target.value,
-                        task: e.target.value,
-                      })
+                      editNode(
+                        node.id,
+                        usesContinuationPreset
+                          ? { continuationPrompt: e.target.value }
+                          : node.sessionId && state !== "draft"
+                            ? { task: e.target.value }
+                            : { draft: e.target.value, task: e.target.value },
+                      )
                     }
                     onKeyDown={(e) => {
                       if (e.key === "@" && !e.nativeEvent.isComposing) {
@@ -4129,12 +4782,18 @@ export function CanvasApp({
                     </span>
                   </button>
                   <div className="agent-controls">
-                    {!hasForkInbound && (
+                    {(node.sessionId || !hasForkInbound) && (
                       <button
                         type="button"
                         className="icon-button"
-                        title={t("bindConversation")}
-                        onClick={() => bindAgentSession(node)}
+                        title={t(
+                          node.sessionId ? "openChatView" : "bindConversation",
+                        )}
+                        onClick={() =>
+                          node.sessionId
+                            ? editNode(node.id, { tab: "conversation" })
+                            : bindAgentSession(node)
+                        }
                       >
                         <Icon name="chat" />
                       </button>
@@ -4143,12 +4802,17 @@ export function CanvasApp({
                       type="button"
                       className="button button-primary"
                       disabled={!(node.draft.trim() || node.task.trim())}
-                      onClick={() =>
-                        launchScope({ kind: "single", nodeIds: [node.id] })
-                      }
+                      onClick={() => {
+                        editNode(node.id, { tab: "conversation" });
+                        launchScope({ kind: "single", nodeIds: [node.id] });
+                      }}
                     >
                       <Icon name="play" />
-                      <span>{t("run")}</span>
+                      <span>
+                        {t(
+                          node.sessionId && state !== "draft" ? "rerun" : "run",
+                        )}
+                      </span>
                     </button>
                   </div>
                 </footer>
@@ -4685,60 +5349,190 @@ export function CanvasApp({
         {/* Ports (Canvas cards only) */}
         {placement === "canvas" && node.kind !== "detail" && (
           <>
-            {node.kind === "agent" && (
-              <>
+            {node.kind === "agent" && (() => {
+              const inContEdges = doc.edges.filter(
+                (e) =>
+                  e.target === node.id &&
+                  e.kind === "continuation" &&
+                  isNodeVisible(
+                    doc.nodes.find((s) => s.id === e.source),
+                    true,
+                  ),
+              );
+              const isContHubOpen =
+                activeHubLayout?.nodeId === node.id &&
+                activeHubLayout.kind === "continuation";
+              const isContSnapLocked =
+                connecting?.kind === "continuation" &&
+                Boolean(connecting.snappedTarget?.nodeIds.includes(node.id));
+              return (
+                <>
+                  <button
+                    type="button"
+                    data-port-kind="continuation"
+                    data-port-direction="in"
+                    data-node-id={node.id}
+                    className={[
+                      "port port-continuation port-in",
+                      linkedPort("continuation", "in") ? "is-linked" : "",
+                      inContEdges.length >= 1 && !connecting
+                        ? "is-draggable-in"
+                        : "",
+                      inContEdges.length >= 2 ? "is-multi" : "",
+                      isContHubOpen ? "is-hub-open" : "",
+                      connecting?.kind === "continuation" ? "port-target" : "",
+                      isContSnapLocked ? "is-snap-locked" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    style={
+                      {
+                        ["--port-y" as string]: `${portY(node, "continuation", compact)}px`,
+                      } as React.CSSProperties
+                    }
+                    title={
+                      inContEdges.length
+                        ? `${t("contInput")} (${inContEdges.length}) · ${t("dragInputTip")}`
+                        : t("contInput")
+                    }
+                    onPointerEnter={() => {
+                      if (connecting || isDragging) return;
+                      if (inContEdges.length >= 2) {
+                        openInputHub(node.id, "continuation");
+                      } else if (inContEdges.length === 1) {
+                        setHoveredEdgeId(inContEdges[0].id);
+                      }
+                    }}
+                    onPointerLeave={() => {
+                      if (inContEdges.length >= 2) {
+                        scheduleCloseInputHub();
+                      } else if (inContEdges.length === 1) {
+                        setHoveredEdgeId((prev) =>
+                          prev === inContEdges[0].id ? null : prev,
+                        );
+                      }
+                    }}
+                    onPointerDown={
+                      inContEdges.length >= 1
+                        ? (ev) =>
+                            startInputEdgeDrag(
+                              ev,
+                              inContEdges[inContEdges.length - 1],
+                            )
+                        : undefined
+                    }
+                  >
+                    <i />
+                    {inContEdges.length >= 2 && (
+                      <em className="port-multi-count">{inContEdges.length}</em>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    data-port-kind="continuation"
+                    data-port-direction="out"
+                    data-node-id={node.id}
+                    className={`port port-continuation port-out ${linkedPort("continuation", "out") ? "is-linked" : ""}`}
+                    style={
+                      {
+                        ["--port-y" as string]: `${portY(node, "continuation", compact)}px`,
+                      } as React.CSSProperties
+                    }
+                    title={t("contOutput")}
+                    onPointerDown={(ev) =>
+                      startPortDrag(ev, [node.id], "continuation")
+                    }
+                  >
+                    <i />
+                  </button>
+                </>
+              );
+            })()}
+            {(node.kind === "agent" || node.kind === "display") && (() => {
+              const inRefEdges =
+                node.kind === "agent"
+                  ? doc.edges.filter(
+                      (e) =>
+                        e.target === node.id &&
+                        e.kind === "reference" &&
+                        isNodeVisible(
+                          doc.nodes.find((s) => s.id === e.source),
+                          true,
+                        ),
+                    )
+                  : [];
+              const isRefHubOpen =
+                activeHubLayout?.nodeId === node.id &&
+                activeHubLayout.kind === "reference";
+              const isRefSnapLocked =
+                connecting?.kind === "reference" &&
+                node.kind === "agent" &&
+                Boolean(connecting.snappedTarget?.nodeIds.includes(node.id));
+              return (
                 <button
                   type="button"
-                  data-port-kind="continuation"
+                  data-port-kind="reference"
                   data-port-direction="in"
                   data-node-id={node.id}
-                  className={`port port-continuation port-in ${linkedPort("continuation", "in") ? "is-linked" : ""} ${connecting?.kind === "continuation" ? "port-target" : ""}`}
+                  className={[
+                    "port port-reference port-in",
+                    linkedPort("reference", "in") ? "is-linked" : "",
+                    inRefEdges.length >= 1 && !connecting
+                      ? "is-draggable-in"
+                      : "",
+                    inRefEdges.length >= 2 ? "is-multi" : "",
+                    isRefHubOpen ? "is-hub-open" : "",
+                    connecting?.kind === "reference" && node.kind === "agent"
+                      ? "port-target"
+                      : "",
+                    isRefSnapLocked ? "is-snap-locked" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
                   style={
                     {
-                      ["--port-y" as string]: `${portY(node, "continuation", compact)}px`,
+                      ["--port-y" as string]: `${portY(node, "reference", compact)}px`,
                     } as React.CSSProperties
                   }
-                  title={t("contInput")}
+                  title={
+                    inRefEdges.length
+                      ? `${t("refInput")} (${inRefEdges.length}) · ${t("dragInputTip")}`
+                      : t("refInput")
+                  }
+                  onPointerEnter={() => {
+                    if (connecting || isDragging) return;
+                    if (inRefEdges.length >= 2) {
+                      openInputHub(node.id, "reference");
+                    } else if (inRefEdges.length === 1) {
+                      setHoveredEdgeId(inRefEdges[0].id);
+                    }
+                  }}
+                  onPointerLeave={() => {
+                    if (inRefEdges.length >= 2) {
+                      scheduleCloseInputHub();
+                    } else if (inRefEdges.length === 1) {
+                      setHoveredEdgeId((prev) =>
+                        prev === inRefEdges[0].id ? null : prev,
+                      );
+                    }
+                  }}
+                  onPointerDown={
+                    inRefEdges.length >= 1
+                      ? (ev) =>
+                          startInputEdgeDrag(
+                            ev,
+                            inRefEdges[inRefEdges.length - 1],
+                          )
+                      : undefined
+                  }
                 >
                   <i />
+                  {inRefEdges.length >= 2 && (
+                    <em className="port-multi-count">{inRefEdges.length}</em>
+                  )}
                 </button>
-                <button
-                  type="button"
-                  data-port-kind="continuation"
-                  data-port-direction="out"
-                  data-node-id={node.id}
-                  className={`port port-continuation port-out ${linkedPort("continuation", "out") ? "is-linked" : ""}`}
-                  style={
-                    {
-                      ["--port-y" as string]: `${portY(node, "continuation", compact)}px`,
-                    } as React.CSSProperties
-                  }
-                  title={t("contOutput")}
-                  onPointerDown={(ev) =>
-                    startPortDrag(ev, [node.id], "continuation")
-                  }
-                >
-                  <i />
-                </button>
-              </>
-            )}
-            {(node.kind === "agent" || node.kind === "display") && (
-              <button
-                type="button"
-                data-port-kind="reference"
-                data-port-direction="in"
-                data-node-id={node.id}
-                className={`port port-reference port-in ${linkedPort("reference", "in") ? "is-linked" : ""} ${connecting?.kind === "reference" && node.kind === "agent" ? "port-target" : ""}`}
-                style={
-                  {
-                    ["--port-y" as string]: `${portY(node, "reference", compact)}px`,
-                  } as React.CSSProperties
-                }
-                title={t("refInput")}
-              >
-                <i />
-              </button>
-            )}
+              );
+            })()}
             <button
               type="button"
               data-port-kind="reference"
@@ -5434,7 +6228,7 @@ export function CanvasApp({
                   if (ev.button === 2) return;
                   if (
                     target.closest(
-                      ".node, .fs-struct-card, .group-header, .composite, .edge-tag, .exchange-tag, .waypoint, .fs-canvas-controls, .fs-minimap, .offscreen-indicator, .fs-welcome-card",
+                      ".node, .fs-struct-card, .group-header, .composite, .edge-tag, .exchange-tag, .waypoint, .fs-input-satellite, .fs-hub-corridor, .fs-canvas-controls, .fs-minimap, .offscreen-indicator, .fs-welcome-card",
                     )
                   ) {
                     return;
@@ -5457,7 +6251,7 @@ export function CanvasApp({
                   const target = ev.target as HTMLElement;
                   if (
                     target.closest(
-                      ".node, .fs-struct-card, .workflow-group, .edge-hit, .edge-tag, .fs-canvas-controls, .fs-minimap, .fs-welcome-card",
+                      ".node, .fs-struct-card, .workflow-group, .edge-hit, .edge-tag, .fs-input-satellite, .fs-hub-corridor, .fs-canvas-controls, .fs-minimap, .fs-welcome-card",
                     )
                   )
                     return;
@@ -5556,7 +6350,7 @@ export function CanvasApp({
                           key={grp.id}
                           className={[
                             "workflow-group",
-                            `color-${grp.color ?? "violet"}`,
+                            `color-${grp.color ?? "blue"}`,
                             grp.collapsed ? "composite" : "",
                             selection.groups.includes(grp.id) ? "selected" : "",
                             grp.parentId ? "nested-group" : "",
@@ -5639,31 +6433,52 @@ export function CanvasApp({
                                   <div key={dir}>
                                     {ports
                                       .filter((p) => p.direction === dir)
-                                      .map((port) => (
-                                        <button
-                                          key={port.id}
-                                          type="button"
-                                          data-port-kind={port.kind}
-                                          data-port-direction={dir}
-                                          data-proxy-nodes={port.nodes.join(",")}
-                                          className={`composite-port-row composite-${dir} ${connecting?.kind === port.kind && dir === "in" ? "port-target" : ""}`}
-                                          onPointerDown={
-                                            dir === "out"
-                                              ? (ev) =>
-                                                  startPortDrag(
-                                                    ev,
-                                                    port.nodes,
-                                                    port.kind,
-                                                  )
-                                              : undefined
-                                          }
-                                        >
-                                          <i
-                                            className={`proxy-pin proxy-${port.kind}`}
-                                          />
-                                          <span>{port.name}</span>
-                                        </button>
-                                      ))}
+                                      .map((port) => {
+                                        const proxyIncoming =
+                                          dir === "in"
+                                            ? doc.edges.filter(
+                                                (e) =>
+                                                  e.kind === port.kind &&
+                                                  port.nodes.includes(e.target) &&
+                                                  !memberNodes.some(
+                                                    (m) => m.id === e.source,
+                                                  ),
+                                              )
+                                            : [];
+                                        return (
+                                          <button
+                                            key={port.id}
+                                            type="button"
+                                            data-port-kind={port.kind}
+                                            data-port-direction={dir}
+                                            data-proxy-nodes={port.nodes.join(",")}
+                                            className={`composite-port-row composite-${dir} ${connecting?.kind === port.kind && dir === "in" ? "port-target" : ""} ${proxyIncoming.length ? "is-draggable-in" : ""}`}
+                                            onPointerDown={
+                                              dir === "out"
+                                                ? (ev) =>
+                                                    startPortDrag(
+                                                      ev,
+                                                      port.nodes,
+                                                      port.kind,
+                                                    )
+                                                : proxyIncoming.length
+                                                  ? (ev) =>
+                                                      startInputEdgeDrag(
+                                                        ev,
+                                                        proxyIncoming[
+                                                          proxyIncoming.length - 1
+                                                        ],
+                                                      )
+                                                  : undefined
+                                            }
+                                          >
+                                            <i
+                                              className={`proxy-pin proxy-${port.kind}`}
+                                            />
+                                            <span>{port.name}</span>
+                                          </button>
+                                        );
+                                      })}
                                   </div>
                                 ))}
                               </div>
@@ -5810,7 +6625,8 @@ export function CanvasApp({
                           lod,
                           keepExpandedIds,
                         );
-                        const b = endpoint(
+                        const sat = hubSatByEdgeId.get(edge.id);
+                        const rawB = endpoint(
                           doc,
                           edge.target,
                           edge.kind,
@@ -5818,7 +6634,8 @@ export function CanvasApp({
                           lod,
                           keepExpandedIds,
                         );
-                        if (a.groupId && a.groupId === b.groupId) return null;
+                        if (a.groupId && a.groupId === rawB.groupId) return null;
+                        const b = sat ? sat.wireIn : rawB;
                         const evState = edgeVisualState(edge);
                         if (
                           lod &&
@@ -5832,11 +6649,18 @@ export function CanvasApp({
                           return null;
                         }
                         const geom = route(a, b, edge.waypoints);
-                        const dimmed = selection.edge
-                          ? selection.edge !== edge.id
-                          : selection.nodes.length > 0 &&
-                            !selection.nodes.includes(edge.source) &&
-                            !selection.nodes.includes(edge.target);
+                        const isReconnecting =
+                          connecting?.reconnectingEdge?.id === edge.id;
+                        const isSpotlight = hoveredEdgeId === edge.id;
+                        const dimmed = isReconnecting
+                          ? false
+                          : hoveredEdgeId
+                            ? !isSpotlight
+                            : selection.edge
+                              ? selection.edge !== edge.id
+                              : selection.nodes.length > 0 &&
+                                !selection.nodes.includes(edge.source) &&
+                                !selection.nodes.includes(edge.target);
                         const cls = [
                           `edge-${edge.kind}`,
                           `edge-state-${evState}`,
@@ -5844,6 +6668,8 @@ export function CanvasApp({
                             ? `trigger-${edge.trigger}`
                             : "",
                           dimmed ? "edge-dim" : "",
+                          isSpotlight ? "edge-spotlight" : "",
+                          isReconnecting ? "edge-reconnecting-ghost" : "",
                           selection.edge === edge.id ? "edge-selected" : "",
                         ]
                           .filter(Boolean)
@@ -5995,15 +6821,48 @@ export function CanvasApp({
                         );
                       })}
 
-                      {/* Live Temporary Drag Wire */}
-                      {connecting && (
-                        <path
-                          className={`edge-path temporary-edge edge-${connecting.kind}`}
-                          d={
-                            route(connecting.fromPoint, connecting.current).path
-                          }
-                        />
-                      )}
+                      {/* Live Temporary Drag Wire & Magnetic ComfyUI Plug Tip */}
+                      {connecting && (() => {
+                        const wirePath = route(
+                          connecting.fromPoint,
+                          connecting.current,
+                        ).path;
+                        const isSnapped = Boolean(connecting.snappedTarget);
+                        const isDisconnectZone =
+                          Boolean(connecting.reconnectingEdge) && !isSnapped;
+                        return (
+                          <g className="fs-temp-wire-group">
+                            <path
+                              className={`edge-path temporary-edge-glow edge-${connecting.kind} ${isDisconnectZone ? "is-disconnecting" : ""}`}
+                              d={wirePath}
+                            />
+                            <path
+                              className={`edge-path temporary-edge edge-${connecting.kind} ${isDisconnectZone ? "is-disconnecting" : ""}`}
+                              d={wirePath}
+                            />
+                            <circle
+                              cx={connecting.fromPoint.x}
+                              cy={connecting.fromPoint.y}
+                              r={4}
+                              className="fs-wire-origin-dot"
+                            />
+                            {isSnapped && (
+                              <circle
+                                cx={connecting.current.x}
+                                cy={connecting.current.y}
+                                r={11}
+                                className="fs-wire-snap-halo"
+                              />
+                            )}
+                            <circle
+                              cx={connecting.current.x}
+                              cy={connecting.current.y}
+                              r={isSnapped ? 5.5 : 4.6}
+                              className={`fs-wire-plug-tip ${isSnapped ? "is-snapped" : isDisconnectZone ? "is-disconnecting" : ""}`}
+                            />
+                          </g>
+                        );
+                      })()}
                     </g>
                   </svg>
 
@@ -6123,6 +6982,9 @@ export function CanvasApp({
                   {/* Edge Pill Tags & Waypoints Layer */}
                   <div className="fs-tags-layer">
                     {doc.edges.map((edge) => {
+                      if (connecting?.reconnectingEdge?.id === edge.id) {
+                        return null;
+                      }
                       const srcNode = doc.nodes.find(
                         (n) => n.id === edge.source,
                       );
@@ -6142,7 +7004,8 @@ export function CanvasApp({
                         lod,
                         keepExpandedIds,
                       );
-                      const b = endpoint(
+                      const sat = hubSatByEdgeId.get(edge.id);
+                      const rawB = endpoint(
                         doc,
                         edge.target,
                         edge.kind,
@@ -6150,7 +7013,8 @@ export function CanvasApp({
                         lod,
                         keepExpandedIds,
                       );
-                      if (a.groupId && a.groupId === b.groupId) return null;
+                      if (a.groupId && a.groupId === rawB.groupId) return null;
+                      const b = sat ? sat.wireIn : rawB;
                       const geom = route(a, b, edge.waypoints);
                       const evState = edgeVisualState(edge);
                       const waitingTok =
@@ -6169,11 +7033,14 @@ export function CanvasApp({
                               )
                               .map((token) => ({ run: r, token })),
                           )[0] ?? null;
-                      const dimmed = selection.edge
-                        ? selection.edge !== edge.id
-                        : selection.nodes.length > 0 &&
-                          !selection.nodes.includes(edge.source) &&
-                          !selection.nodes.includes(edge.target);
+                      const isSpotlight = hoveredEdgeId === edge.id;
+                      const dimmed = hoveredEdgeId
+                        ? !isSpotlight
+                        : selection.edge
+                          ? selection.edge !== edge.id
+                          : selection.nodes.length > 0 &&
+                            !selection.nodes.includes(edge.source) &&
+                            !selection.nodes.includes(edge.target);
 
                       return (
                         <div key={`tags-${edge.id}`}>
@@ -6339,6 +7206,202 @@ export function CanvasApp({
                           </div>
                         );
                       })}
+
+                    {/* Multi-Input Hover Fan-Out Satellites ("一输入一节点" ComfyUI Deck) */}
+                    {activeHubLayout && activeHubLayout.progress > 0.01 && (
+                      <>
+                        <div
+                          className="fs-hub-corridor"
+                          style={{
+                            left: activeHubLayout.corridorBox.x,
+                            top: activeHubLayout.corridorBox.y,
+                            width: Math.max(
+                              24,
+                              activeHubLayout.portPoint.x -
+                                10 -
+                                activeHubLayout.corridorBox.x,
+                            ),
+                            height: activeHubLayout.corridorBox.h,
+                          }}
+                          onPointerEnter={() =>
+                            openInputHub(
+                              activeHubLayout.nodeId,
+                              activeHubLayout.kind,
+                            )
+                          }
+                          onPointerLeave={() => scheduleCloseInputHub()}
+                        />
+                        <svg
+                          className="fs-hub-overlay-svg"
+                          style={{
+                            left: activeHubLayout.corridorBox.x,
+                            top: activeHubLayout.corridorBox.y,
+                            width: activeHubLayout.corridorBox.w,
+                            height: activeHubLayout.corridorBox.h,
+                          }}
+                          viewBox={`${activeHubLayout.corridorBox.x} ${activeHubLayout.corridorBox.y} ${activeHubLayout.corridorBox.w} ${activeHubLayout.corridorBox.h}`}
+                          aria-hidden="true"
+                        >
+                          <circle
+                            cx={activeHubLayout.portPoint.x}
+                            cy={activeHubLayout.portPoint.y}
+                            r={8 + 4 * activeHubLayout.progress}
+                            className={`fs-hub-port-aura kind-${activeHubLayout.kind}`}
+                            style={{ opacity: activeHubLayout.progress * 0.85 }}
+                          />
+                          {activeHubLayout.satellites.map((sat) => {
+                            const fPath = hubFilamentPath(
+                              sat.wireOut,
+                              activeHubLayout.portPoint,
+                            );
+                            const isHot = hoveredEdgeId === sat.edge.id;
+                            const isDim =
+                              Boolean(hoveredEdgeId) && !isHot;
+                            return (
+                              <g
+                                key={`fil-${sat.edge.id}`}
+                                style={{ opacity: sat.opacity }}
+                              >
+                                <path
+                                  d={fPath}
+                                  className={[
+                                    "fs-hub-filament",
+                                    `kind-${activeHubLayout.kind}`,
+                                    isHot ? "is-hot" : "",
+                                    isDim ? "is-dim" : "",
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" ")}
+                                />
+                                <path
+                                  d={fPath}
+                                  className={[
+                                    "fs-hub-filament-pulse",
+                                    `kind-${activeHubLayout.kind}`,
+                                    isHot ? "is-hot" : "",
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" ")}
+                                />
+                              </g>
+                            );
+                          })}
+                        </svg>
+                        {activeHubLayout.satellites.map((sat) => {
+                          const evState = edgeVisualState(sat.edge);
+                          const isHot = hoveredEdgeId === sat.edge.id;
+                          const label =
+                            sat.edge.snapshotTitle || sat.sourceNode.title;
+                          const modeGlyph =
+                            sat.edge.kind === "continuation"
+                              ? sat.edge.mode === "fork"
+                                ? "⑂"
+                                : sat.edge.mode === "session"
+                                  ? "⏱"
+                                  : "→"
+                              : "@";
+                          return (
+                            <button
+                              key={`sat-${sat.edge.id}`}
+                              type="button"
+                              data-edge-id={sat.edge.id}
+                              className={[
+                                "fs-input-satellite",
+                                `kind-${sat.edge.kind}`,
+                                `state-${evState}`,
+                                isHot ? "is-hot" : "",
+                                selection.edge === sat.edge.id
+                                  ? "is-selected"
+                                  : "",
+                              ]
+                                .filter(Boolean)
+                                .join(" ")}
+                              style={{
+                                left: sat.cx,
+                                top: sat.cy,
+                                width: sat.w,
+                                height: sat.h,
+                                opacity: sat.opacity,
+                                transform: `translate(-50%, -50%) scale(${sat.scale})`,
+                              }}
+                              title={`${label} · ${t("dragInputTip")}`}
+                              onPointerEnter={() => {
+                                openInputHub(
+                                  activeHubLayout.nodeId,
+                                  activeHubLayout.kind,
+                                );
+                                setHoveredEdgeId(sat.edge.id);
+                              }}
+                              onPointerLeave={() => {
+                                setHoveredEdgeId((prev) =>
+                                  prev === sat.edge.id ? null : prev,
+                                );
+                                scheduleCloseInputHub();
+                              }}
+                              onPointerDown={(ev) =>
+                                startInputEdgeDrag(ev, sat.edge)
+                              }
+                              onDoubleClick={(ev) => {
+                                ev.stopPropagation();
+                                revealNode(sat.sourceNode.id);
+                              }}
+                            >
+                              <i className="fs-sat-pin fs-sat-pin-in" />
+                              <span className="fs-sat-icon">
+                                <Icon name={kindIconName(sat.sourceNode.kind)} />
+                              </span>
+                              <span className="fs-sat-title user-content">
+                                {label}
+                              </span>
+                              <kbd className="fs-sat-mode">{modeGlyph}</kbd>
+                              <Icon name="grip" className="ic fs-sat-grip" />
+                              <i className="fs-sat-pin fs-sat-pin-out" />
+                            </button>
+                          );
+                        })}
+                      </>
+                    )}
+
+                    {/* Floating ComfyUI Wire Action HUD */}
+                    {connecting &&
+                      (connecting.reconnectingEdge ||
+                        connecting.snappedTarget) && (
+                        <div
+                          className={[
+                            "fs-wire-hud",
+                            connecting.snappedTarget
+                              ? connecting.snappedTarget.isOriginalTarget
+                                ? "hud-neutral"
+                                : "hud-snap"
+                              : "hud-disconnect",
+                          ].join(" ")}
+                          style={{
+                            left: connecting.current.x,
+                            top: connecting.current.y - 24,
+                          }}
+                        >
+                          <Icon
+                            name={
+                              connecting.snappedTarget
+                                ? "bolt"
+                                : "unplug"
+                            }
+                          />
+                          <span>
+                            {connecting.reconnectingEdge
+                              ? connecting.snappedTarget
+                                ? connecting.snappedTarget.isOriginalTarget
+                                  ? t("keepConnected")
+                                  : t("reconnectTo", {
+                                      name: connecting.snappedTarget.label,
+                                    })
+                                : t("dropToDisconnect")
+                              : t("connectTo", {
+                                  name: connecting.snappedTarget?.label ?? "",
+                                })}
+                          </span>
+                        </div>
+                      )}
                   </div>
                 </div>
 
@@ -6544,7 +7607,10 @@ export function CanvasApp({
 
               {/* Bottom Controls Bar */}
               {routeName === "canvas" && (
-                <div className="fs-canvas-controls" role="toolbar">
+                <div
+                  className={`fs-canvas-controls ${minimapOpen ? "minimap-open" : ""}`}
+                  role="toolbar"
+                >
                   <div className="pointer-tools">
                     <button
                       type="button"

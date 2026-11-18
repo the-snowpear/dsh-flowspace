@@ -78,6 +78,8 @@ export class FlowClient implements CanvasBridge {
   private stream?: { dispose(): void };
   private focus?: string;
   private connectCount = 0;
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private disposed = false;
   private draftSavers = new Map<string, () => Promise<void>>();
   constructor(private ctx: Context) {
     setLanguage(ctx.locale.getLocale().active);
@@ -88,8 +90,7 @@ export class FlowClient implements CanvasBridge {
       }),
     );
     ctx.on("connection/reset", () => {
-      if (this.connectCount) {
-        this.stream?.dispose();
+      if (this.connectCount && !this.disposed) {
         this.read();
       }
     });
@@ -136,20 +137,37 @@ export class FlowClient implements CanvasBridge {
     if (!this.connectCount++) this.read();
     return () => {
       if (!--this.connectCount) {
-        this.stream?.dispose();
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = undefined;
+        const active = this.stream;
         this.stream = undefined;
+        active?.dispose();
         this.presence([]);
       }
     };
   }
   private read(): void {
+    if (this.disposed) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+    const prev = this.stream;
+    this.stream = undefined;
+    prev?.dispose();
     const handle = this.ctx.remote.flowspace.follow();
     this.stream = handle;
     void (async () => {
       try {
         for await (const snapshot of handle) this.publish(snapshot);
       } catch (e) {
-        console.error("FlowSpace stream:", e);
+        if (this.stream === handle && this.connectCount > 0 && !this.disposed) {
+          console.warn("FlowSpace stream interrupted, reconnecting:", e);
+        }
+      } finally {
+        if (this.stream === handle && this.connectCount > 0 && !this.disposed) {
+          this.reconnectTimer = setTimeout(() => {
+            if (this.connectCount > 0 && !this.disposed) this.read();
+          }, 250);
+        }
       }
     })();
   }
@@ -327,7 +345,12 @@ export class FlowClient implements CanvasBridge {
       });
   }
   dispose(): void {
-    this.stream?.dispose();
+    this.disposed = true;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+    const active = this.stream;
+    this.stream = undefined;
+    active?.dispose();
     this.listeners.clear();
     this.draftSavers.clear();
   }

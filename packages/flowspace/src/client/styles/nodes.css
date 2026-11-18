@@ -1295,13 +1295,13 @@
 
 /* ---------- Workflow Groups & Collapsed Composite Nodes ---------- */
 .fs-root .color-violet {
-  --group-color: var(--accent);
+  --group-color: var(--accent-2);
 }
 .fs-root .color-teal {
   --group-color: var(--teal);
 }
 .fs-root .color-blue {
-  --group-color: var(--blue);
+  --group-color: var(--accent);
 }
 .fs-root .color-amber {
   --group-color: var(--amber);

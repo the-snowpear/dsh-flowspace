@@ -59,7 +59,9 @@ export function nodeStatusOf(
     .at(-1);
   if (lastStep) return lastStep.state;
   const node = snapshot?.document.nodes.find((n) => n.id === nodeId);
-  return node?.sessionId ? "completed" : "draft";
+  const hasSessionHistory =
+    (live?.seq ?? -1) >= 0 || Boolean(live?.output?.trim());
+  return node?.sessionId && hasSessionHistory ? "completed" : "draft";
 }
 
 export function MiniGraph({
@@ -469,13 +471,13 @@ export function InspectorPanel({
 
           <label className="field-label">{t("groupColor")}</label>
           <div className="color-options">
-            {(["violet", "teal", "blue", "amber"] as GroupColor[]).map(
+            {(["blue", "violet", "teal", "amber"] as GroupColor[]).map(
               (color) => (
                 <button
                   key={color}
                   type="button"
                   aria-label={t(color)}
-                  className={`color-${color} ${(selectedNode.color ?? "violet") === color ? "selected" : ""}`}
+                  className={`color-${color} ${(selectedNode.color ?? "blue") === color ? "selected" : ""}`}
                   onClick={() => onEditNode(selectedNode.id, { color })}
                 />
               ),

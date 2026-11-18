@@ -57,6 +57,8 @@ export const ICONS: Record<string, string> = {
   upload: "M8 10.5V3 M5 6l3-3 3 3 M3 13h10",
   trash: "M3.5 4.5h9 M6 4.5V3h4v1.5 M5 4.5l.6 8.5h4.8l.6-8.5",
   refresh: "M13 8a5 5 0 1 1-1.4-3.5 M13 2.8v3.2H9.8",
+  unplug: "M5 11L11 5 M4 8L2.5 9.5a2.8 2.8 0 0 0 4 4L8 12 M12 8l1.5-1.5a2.8 2.8 0 0 0-4-4L8 4",
+  grip: "M6 4.5h.01 M10 4.5h.01 M6 8h.01 M10 8h.01 M6 11.5h.01 M10 11.5h.01",
 };
 
 export function Icon({
@@ -112,12 +114,12 @@ export function BrandMark() {
     <svg viewBox="0 0 32 32" aria-hidden="true" className="fs-brand-svg">
       <defs>
         <linearGradient id="fs-brand-bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#1e1b2e" />
-          <stop offset="100%" stopColor="#12131c" />
+          <stop offset="0%" stopColor="#132242" />
+          <stop offset="100%" stopColor="#0c1322" />
         </linearGradient>
         <linearGradient id="fs-brand-stroke" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#9e8cfc" />
-          <stop offset="100%" stopColor="#6fd0ff" />
+          <stop offset="0%" stopColor="#4d7cfe" />
+          <stop offset="100%" stopColor="#38bdf8" />
         </linearGradient>
       </defs>
       <rect width="32" height="32" rx="9" fill="url(#fs-brand-bg)" />
@@ -128,7 +130,7 @@ export function BrandMark() {
         height="6"
         rx="2"
         fill="none"
-        stroke="#9e8cfc"
+        stroke="#4d7cfe"
         strokeWidth="1.8"
       />
       <rect
@@ -138,7 +140,7 @@ export function BrandMark() {
         height="6"
         rx="2"
         fill="none"
-        stroke="#6fd0ff"
+        stroke="#38bdf8"
         strokeWidth="1.8"
       />
       <path

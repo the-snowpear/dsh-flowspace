@@ -175,9 +175,9 @@ function newNode(kind, x, y, title) {
     fixed: kind !== "detail",
     collapsed: false,
     ...title ? { customTitle: true } : {},
-    ...kind === "agent" ? { tab: "conversation", rerun: "change" } : {},
+    ...kind === "agent" ? { tab: "task", rerun: "change" } : {},
     ...kind === "git" ? { gitTab: "changes" } : {},
-    ...kind === "group" ? { color: "violet", ports: [] } : {},
+    ...kind === "group" ? { color: "blue", ports: [] } : {},
     ...columns ? { columns, selectedItems: [] } : {}
   };
 }

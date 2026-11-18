@@ -11,9 +11,16 @@ import {
   emptyDocument,
   newEdge,
   newNode,
+  sample,
 } from "../src/core/document.ts";
 import { launchPlan } from "../src/core/graph.ts";
-import { capsuleStateOf } from "../src/client/geometry.ts";
+import {
+  capsuleStateOf,
+  computeInputHubLayout,
+  endpoint,
+  hubFilamentPath,
+} from "../src/client/geometry.ts";
+import { nodeStatusOf } from "../src/client/SurfaceViews.tsx";
 import {
   buildDerivedStructure,
   resolveDraftAffiliation,
@@ -388,3 +395,110 @@ test("M08: HostGitService inspects, stages, commits, diffs, creates worktrees, a
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("Multi-input ComfyUI fan-out layout uncrosses upstream wires and interpolates 0..1 cleanly", () => {
+  const doc = emptyDocument();
+  const srcBottom = newNode("agent", 40, 420, "Bottom Source");
+  const srcTop = newNode("agent", 40, 60, "Top Source");
+  const srcMiddle = newNode("agent", 40, 240, "Middle Source");
+  const target = newNode("agent", 520, 240, "Synthesis");
+  doc.nodes.push(srcBottom, srcTop, srcMiddle, target);
+
+  // Add edges in scrambled order: layout must sort top-to-bottom so wires never cross
+  const eBottom = newEdge(srcBottom.id, target.id, "continuation");
+  const eTop = newEdge(srcTop.id, target.id, "continuation");
+  const eMiddle = newEdge(srcMiddle.id, target.id, "continuation");
+  doc.edges.push(eBottom, eTop, eMiddle);
+
+  const portPt = endpoint(doc, target.id, "continuation", "in");
+  const atZero = computeInputHubLayout({
+    doc,
+    nodeId: target.id,
+    kind: "continuation",
+    progress: 0,
+  })!;
+  assert.equal(atZero.satellites.length, 3);
+  assert.deepEqual(
+    atZero.satellites.map((s) => s.sourceNode.title),
+    ["Top Source", "Middle Source", "Bottom Source"],
+  );
+  for (const sat of atZero.satellites) {
+    assert.equal(sat.wireIn.x, portPt.x);
+    assert.equal(sat.wireIn.y, portPt.y);
+  }
+
+  const atFull = computeInputHubLayout({
+    doc,
+    nodeId: target.id,
+    kind: "continuation",
+    progress: 1,
+  })!;
+  assert.ok(atFull.satellites[0].cy < atFull.satellites[1].cy);
+  assert.ok(atFull.satellites[1].cy < atFull.satellites[2].cy);
+  // Concave lens arc places outer satellites slightly further left than center satellite
+  assert.ok(atFull.satellites[0].cx < atFull.satellites[1].cx);
+  assert.ok(atFull.satellites[2].cx < atFull.satellites[1].cx);
+  assert.ok(
+    hubFilamentPath(atFull.satellites[0].wireOut, atFull.portPoint).startsWith(
+      "M ",
+    ),
+  );
+});
+
+test("Agent Overview defaults, DeepSeek Blue group defaults, and blank bound session status", () => {
+  const grp = newNode("group", 0, 0, "Blue Group");
+  assert.equal(grp.color, "blue");
+  const ag = newNode("agent", 0, 0, "Overview First");
+  assert.equal(ag.tab, "task");
+  const seeded = sample(emptyDocument(), "review");
+  assert.equal(
+    seeded.nodes.find((n) => n.kind === "group")?.color,
+    "blue",
+  );
+
+  // Pre-bound blank session (seq = -1, no steps) stays "draft" instead of falsely showing Done
+  ag.sessionId = "blank-session-1";
+  const doc = emptyDocument();
+  doc.nodes.push(ag);
+  assert.equal(
+    nodeStatusOf(
+      {
+        document: doc,
+        runs: [],
+        live: [
+          {
+            nodeId: ag.id,
+            sessionId: "blank-session-1",
+            output: "",
+            seq: -1,
+            running: false,
+            pendingInput: [],
+          },
+        ],
+      },
+      ag.id,
+    ),
+    "draft",
+  );
+  assert.equal(
+    nodeStatusOf(
+      {
+        document: doc,
+        runs: [],
+        live: [
+          {
+            nodeId: ag.id,
+            sessionId: "blank-session-1",
+            output: "Done output",
+            seq: 4,
+            running: false,
+            pendingInput: [],
+          },
+        ],
+      },
+      ag.id,
+    ),
+    "completed",
+  );
+});
+

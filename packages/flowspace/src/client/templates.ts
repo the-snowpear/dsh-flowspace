@@ -128,7 +128,7 @@ export function builtinTemplates(): WorkflowTemplate[] {
       description: "implementationReviewDescription",
       revision: 1,
       builtin: true,
-      color: "violet",
+      color: "blue",
       w: 1152,
       h: 474,
       nodes: reviewNodes,
@@ -283,7 +283,7 @@ export function captureTemplate(
     title,
     description,
     revision: 1,
-    color: group.color ?? "violet",
+    color: group.color ?? "blue",
     w: group.width,
     h: group.height,
     nodes,
@@ -302,7 +302,7 @@ export function instantiateTemplate(
 ): FlowNode {
   const group: FlowNode = {
     ...newNode("group", x, y, displayTitle),
-    color: template.color ?? "violet",
+    color: template.color ?? "blue",
     width: template.w,
     height: template.h,
     templateId: template.id,

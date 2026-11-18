@@ -115,10 +115,10 @@ export function newNode(
     collapsed: false,
     ...(title ? { customTitle: true } : {}),
     ...(kind === "agent"
-      ? { tab: "conversation" as const, rerun: "change" as const }
+      ? { tab: "task" as const, rerun: "change" as const }
       : {}),
     ...(kind === "git" ? { gitTab: "changes" as const } : {}),
-    ...(kind === "group" ? { color: "violet" as const, ports: [] } : {}),
+    ...(kind === "group" ? { color: "blue" as const, ports: [] } : {}),
     ...(columns ? { columns, selectedItems: [] } : {}),
   };
 }
@@ -173,7 +173,7 @@ export function sample(
       baseY - 54,
       kind === "review" ? "分析与审查工作流" : "并行调查工作流",
     ),
-    color: (kind === "review" ? "violet" : "teal") as "violet" | "teal",
+    color: (kind === "review" ? "blue" : "teal") as "blue" | "teal",
     width: kind === "review" ? 1152 : 756,
     height: 474,
   };

@@ -560,17 +560,103 @@
 .fs-root .fs-canvas-column:has(.has-right-window) .fs-canvas-toolbar {
   right: calc(50% + 12px);
 }
+/* ---------- Liquid Glass capsules ----------
+   Shared material for every floating canvas bar and the minimap:
+   translucent tint + strong backdrop blur/saturation, a top sheen,
+   specular inner edges, and a gradient rim drawn by ::before. */
 .fs-root .canvas-title,
 .fs-root .toolbar-actions,
 .fs-root .pointer-tools,
-.fs-root .view-tools {
+.fs-root .view-tools,
+.fs-root .canvas-hint,
+.fs-root .fs-minimap {
   pointer-events: auto;
-  background: var(--glass);
-  border: 1px solid var(--glass-border);
-  border-radius: 11px;
-  backdrop-filter: blur(14px) saturate(1.5);
-  -webkit-backdrop-filter: blur(14px) saturate(1.5);
-  box-shadow: var(--float-shadow);
+  isolation: isolate;
+  border: 1px solid var(--lg-rim);
+  border-radius: var(--r-full);
+  background:
+    linear-gradient(180deg, var(--lg-sheen) 0%, transparent 52%),
+    var(--lg-tint);
+  backdrop-filter: var(--lg-filter);
+  -webkit-backdrop-filter: var(--lg-filter);
+  box-shadow:
+    inset 0 1px 0.5px var(--lg-edge-hi),
+    inset 0 -1px 0.5px var(--lg-edge-lo),
+    inset 0 0 14px var(--lg-glow),
+    var(--lg-shadow);
+}
+.fs-root .canvas-title,
+.fs-root .toolbar-actions,
+.fs-root .pointer-tools,
+.fs-root .view-tools,
+.fs-root .canvas-hint {
+  position: relative;
+}
+/* Specular rim: bright on the top-left and bottom-right, clear elsewhere. */
+.fs-root .canvas-title::before,
+.fs-root .toolbar-actions::before,
+.fs-root .pointer-tools::before,
+.fs-root .view-tools::before,
+.fs-root .canvas-hint::before,
+.fs-root .fs-minimap::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(
+    135deg,
+    var(--lg-edge-hi) 0%,
+    transparent 32%,
+    transparent 68%,
+    var(--lg-edge-hi) 100%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+  opacity: 0.7;
+  pointer-events: none;
+}
+.fs-root .toolbar-actions .toolbar-button,
+.fs-root .toolbar-actions .toolbar-search,
+.fs-root .pointer-tools .icon-button,
+.fs-root .view-tools .icon-button,
+.fs-root .view-tools .zoom-label {
+  border-radius: var(--r-full);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.fs-root .toolbar-actions .toolbar-button.active,
+.fs-root .pointer-tools .icon-button.active,
+.fs-root .view-tools .icon-button.active {
+  box-shadow: inset 0 1px 0.5px var(--lg-edge-hi);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .fs-root .canvas-title,
+  .fs-root .toolbar-actions,
+  .fs-root .pointer-tools,
+  .fs-root .view-tools,
+  .fs-root .canvas-hint,
+  .fs-root .fs-minimap {
+    background: var(--lg-tint-solid);
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .fs-root .canvas-title,
+  .fs-root .toolbar-actions,
+  .fs-root .pointer-tools,
+  .fs-root .view-tools,
+  .fs-root .canvas-hint,
+  .fs-root .fs-minimap {
+    background: var(--lg-tint-solid);
+  }
 }
 .fs-root .canvas-title {
   display: flex;
@@ -578,7 +664,7 @@
   align-items: center;
   min-width: 0;
   height: 36px;
-  padding: 0 12px 0 10px;
+  padding: 0 15px 0 13px;
   animation: var(--motion-reveal);
 }
 .fs-root .canvas-title > span:first-child {
@@ -812,7 +898,6 @@
 .fs-root .view-tools .icon-button {
   width: 28px;
   height: 28px;
-  border-radius: 8px;
 }
 .fs-root .pointer-tools .ic,
 .fs-root .view-tools .ic {
@@ -846,45 +931,48 @@
   border-radius: var(--r-full);
   color: var(--text-faint);
   font-size: 11px;
-  background: color-mix(in srgb, var(--canvas) 70%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  opacity: 0.82;
+  opacity: 0.86;
+  pointer-events: none;
 }
 .fs-root .canvas-hint i {
   font-style: normal;
   color: var(--glyph);
 }
+/* Minimap sits in the bottom-right corner; the view-tools capsule slides to
+   its left while it is open and back to the corner when it closes. */
+.fs-root .fs-canvas-column {
+  --minimap-w: 200px;
+}
+.fs-root .fs-canvas-controls .view-tools {
+  transition: margin-right var(--dur-slow) var(--ease-nav);
+}
+.fs-root .fs-canvas-controls.minimap-open .view-tools {
+  margin-right: calc(var(--minimap-w) + 8px);
+}
 .fs-root .fs-minimap {
   position: absolute;
   right: 12px;
-  bottom: 58px;
-  width: 200px;
-  border: 1px solid var(--glass-border);
-  border-radius: 11px;
-  background: var(--glass);
-  backdrop-filter: blur(14px) saturate(1.5);
-  -webkit-backdrop-filter: blur(14px) saturate(1.5);
-  box-shadow: var(--float-shadow);
-  overflow: hidden;
+  bottom: 12px;
+  width: var(--minimap-w);
+  border-radius: 18px;
   z-index: 10;
   animation: var(--motion-reveal);
 }
 .fs-root .fs-minimap > header {
-  height: 26px;
+  height: 28px;
   display: flex;
   align-items: center;
-  padding: 0 5px 0 10px;
+  padding: 0 6px 0 12px;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.06em;
   color: var(--text-faint);
-  border-bottom: 1px solid var(--border);
 }
 .fs-root .fs-minimap > header .icon-button {
   margin-left: auto;
   width: 20px;
   height: 20px;
+  border-radius: var(--r-full);
 }
 .fs-root .fs-minimap > header .ic {
   width: 10px;
@@ -894,8 +982,18 @@
   display: block;
   width: 186px;
   height: 108px;
-  margin: 6px;
+  margin: 0 6px 6px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--canvas) 22%, transparent);
   cursor: crosshair;
+}
+@container flowspace (max-width: 640px) {
+  .fs-root .fs-canvas-controls.minimap-open .view-tools {
+    margin-right: 0;
+  }
+  .fs-root .fs-minimap {
+    bottom: 58px;
+  }
 }
 .fs-root .mini-node {
   fill: var(--glyph);

@@ -95,8 +95,12 @@ export function nodeBox(
     return { x: node.x, y: node.y, w: cw, h: ch, compact: true };
   }
   const [fw, fh] = FULL_SIZE[node.kind] ?? [320, 280];
-  const minW = node.kind === "agent" && node.sessionId ? 420 : fw;
-  const minH = node.kind === "agent" && node.sessionId ? 490 : fh;
+  const inLiveChat =
+    node.kind === "agent" &&
+    Boolean(node.sessionId) &&
+    (node.tab ?? "task") === "conversation";
+  const minW = inLiveChat ? 420 : fw;
+  const minH = inLiveChat ? 490 : fh;
   return {
     x: node.x,
     y: node.y,
@@ -590,3 +594,175 @@ export function giveRoomBack(
     }
   }
 }
+
+export interface HubSatelliteItem {
+  edge: FlowEdge;
+  sourceNode: FlowNode;
+  index: number;
+  total: number;
+  cx: number;
+  cy: number;
+  targetCx: number;
+  targetCy: number;
+  w: number;
+  h: number;
+  scale: number;
+  opacity: number;
+  wireIn: { x: number; y: number; box: Box };
+  wireOut: { x: number; y: number };
+}
+
+export interface InputHubLayout {
+  nodeId: string;
+  kind: "reference" | "continuation";
+  portPoint: { x: number; y: number; box: Box };
+  progress: number;
+  satellites: HubSatelliteItem[];
+  corridorBox: Box;
+}
+
+/**
+ * Computes the multi-input hover fan-out ("one input = one draggable mini-node")
+ * sorted top-to-bottom by upstream Y so bundled wires uncross cleanly.
+ */
+export function computeInputHubLayout(params: {
+  doc: FlowspaceDocument;
+  nodeId: string;
+  kind: "reference" | "continuation";
+  progress: number;
+  closing?: boolean;
+  reducedMotion?: boolean;
+  excludeEdgeId?: string;
+  lod?: boolean;
+  keepExpandedIds?: Set<string>;
+  isNodeVisible?: (node: FlowNode | undefined, allowCollapsedChild?: boolean) => boolean;
+}): InputHubLayout | null {
+  const {
+    doc,
+    nodeId,
+    kind,
+    progress,
+    closing = false,
+    reducedMotion = false,
+    excludeEdgeId,
+    lod = false,
+    keepExpandedIds,
+    isNodeVisible,
+  } = params;
+  const targetNode = doc.nodes.find((n) => n.id === nodeId);
+  if (!targetNode || (isNodeVisible && !isNodeVisible(targetNode))) return null;
+
+  const incoming = doc.edges
+    .filter(
+      (e) =>
+        e.target === nodeId &&
+        e.kind === kind &&
+        e.id !== excludeEdgeId,
+    )
+    .map((edge) => {
+      const sourceNode = doc.nodes.find((n) => n.id === edge.source);
+      if (!sourceNode || (isNodeVisible && !isNodeVisible(sourceNode, true))) {
+        return null;
+      }
+      const srcOut = endpoint(doc, sourceNode.id, kind, "out", lod, keepExpandedIds);
+      return { edge, sourceNode, srcOut };
+    })
+    .filter(
+      (item): item is { edge: FlowEdge; sourceNode: FlowNode; srcOut: { x: number; y: number; box: Box } } =>
+        item !== null,
+    )
+    .sort(
+      (a, b) =>
+        a.srcOut.y - b.srcOut.y ||
+        a.srcOut.x - b.srcOut.x ||
+        a.edge.id.localeCompare(b.edge.id),
+    );
+
+  if (incoming.length < 2) return null;
+
+  const portPoint = endpoint(doc, nodeId, kind, "in", lod, keepExpandedIds);
+  const satW = 148;
+  const satH = 30;
+  const stepY = 38;
+  const total = incoming.length;
+  const clampedP = clamp(progress, 0, 1);
+
+  const satellites: HubSatelliteItem[] = incoming.map((item, index) => {
+    const offset = index - (total - 1) / 2;
+    const arcX = Math.abs(offset) * 7.5;
+    const targetCx = portPoint.x - 104 - arcX;
+    const targetCy = portPoint.y + offset * stepY;
+
+    const stagger = reducedMotion ? 0 : Math.min(0.24, index * 0.055);
+    const u =
+      stagger >= 1
+        ? clampedP
+        : clamp((clampedP - stagger) / (1 - stagger), 0, 1);
+
+    const spatialP = reducedMotion
+      ? u
+      : closing
+        ? 1 - (1 - u) ** 3
+        : u === 0 || u === 1
+          ? u
+          : 1 + 1.42 * (u - 1) ** 3 + 0.42 * (u - 1) ** 2;
+
+    const cx = portPoint.x + (targetCx - portPoint.x) * spatialP;
+    const cy = portPoint.y + (targetCy - portPoint.y) * spatialP;
+    const halfW = (satW / 2) * u;
+    const box: Box = {
+      x: cx - halfW,
+      y: cy - (satH / 2) * u,
+      w: halfW * 2,
+      h: satH * u,
+    };
+    return {
+      edge: item.edge,
+      sourceNode: item.sourceNode,
+      index,
+      total,
+      cx,
+      cy,
+      targetCx,
+      targetCy,
+      w: satW,
+      h: satH,
+      scale: reducedMotion ? 1 : 0.56 + 0.44 * Math.max(0, spatialP),
+      opacity: clamp(u * 1.35, 0, 1),
+      wireIn: { x: cx - halfW, y: cy, box },
+      wireOut: { x: cx + halfW, y: cy },
+    };
+  });
+
+  const minX = Math.min(...satellites.map((s) => s.targetCx - satW / 2)) - 18;
+  const maxX = portPoint.x + 20;
+  const minY =
+    Math.min(portPoint.y - 22, ...satellites.map((s) => s.targetCy - satH / 2)) -
+    16;
+  const maxY =
+    Math.max(portPoint.y + 22, ...satellites.map((s) => s.targetCy + satH / 2)) +
+    16;
+
+  return {
+    nodeId,
+    kind,
+    portPoint,
+    progress: clampedP,
+    satellites,
+    corridorBox: {
+      x: minX,
+      y: minY,
+      w: Math.max(40, maxX - minX),
+      h: Math.max(40, maxY - minY),
+    },
+  };
+}
+
+export function hubFilamentPath(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): string {
+  const dx = Math.max(14, Math.abs(to.x - from.x) * 0.56);
+  return `M ${round(from.x)} ${round(from.y)} C ${round(from.x + dx)} ${round(from.y)}, ${round(to.x - dx)} ${round(to.y)}, ${round(to.x)} ${round(to.y)}`;
+}
+

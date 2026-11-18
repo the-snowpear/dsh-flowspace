@@ -191,19 +191,30 @@ dsh plugin --profile web remove dsh-flowspace
 
 </details>
 
-### 方式二：本地独立工作区开发运行
+### 方式二：本地独立沙盒开发与秒级热预览
 
 ```bash
 pnpm install
-pnpm build
-pnpm dev          # 默认端口 3190（真实模型配置）
+pnpm dev          # 默认端口 3190（真实模型沙盒，自动增量编译 + 双端实时 HMR）
 ```
 
-- **隔离安全**：`pnpm dev` 使用仓库内 `.local/flowspace` 作为独立 `$DSH_HOME`（工作区位于其中的 `workspace`），不会升级全局 DSH，也不会触碰日常 `web` profile。请通过该独立 profile 或环境变量配置模型，**切勿将凭据写入源码**。
+- **完全隔离全局 DSH**：`pnpm dev` 使用仓库内 `.local/flowspace` 作为独立 `$DSH_HOME`（工作区位于其中的 `workspace`），不触碰日常 `~/.dsh` 与全局复杂插件，可与电脑已安装的 DSH 同时开启。首次启动若检测到全局 `~/.dsh/.credentials.yaml` 会单向同步凭据副本（可用 `--no-sync-auth` 关闭）。
+- **源码级秒级无刷新热重载（Live HMR）**：常驻监听 `packages/flowspace/src/**`——修改前端 TSX/CSS 约几十毫秒自动增量打包并通过 `client-hmr` 无刷新热替换；修改 Host 服务或 `@Remote` 协议自动通过 `dsh-hmr` 内存级热重载并自动重连画布快照流。
+- **独立沙盒多插件联调（`pnpm sandbox`）**：可在该纯净测试 DSH 中仅安装所需测试插件而不污染全局：
+
+```bash
+pnpm sandbox                              # 查看独立沙盒状态、已装插件与软链目录
+pnpm sandbox:plugin link ../other-plugin  # 软链挂载另一个本地开发的测试插件联调
+pnpm sandbox:plugin add <pkg-or-tgz>      # 在隔离沙盒中安装其他测试插件
+pnpm sandbox:plugin remove <pkg>          # 从隔离沙盒移除测试插件
+pnpm sandbox:sync-auth --force            # 重新从 ~/.dsh 单向同步模型凭据
+pnpm sandbox:reset                        # 一键清空测试会话与画布脏数据（自动备份）
+```
+
 - **确定性测试模型环境**：
 
 ```bash
-pnpm dev:mock     # 默认端口 3191（界面模型名：FlowSpace integration fixture）
+pnpm dev:mock     # 默认端口 3191（独立 .local/flowspace-mock + 零账单确定性模拟模型）
 ```
 
 > `dev:mock` 下会话、队列、持久化与事件流均为真实 DSH 运行时，仅模型输出替换为带 `【测试模型】` 标记的确定性夹具，适合无账单联调 UI 与调度逻辑。
