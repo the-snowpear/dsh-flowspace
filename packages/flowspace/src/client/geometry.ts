@@ -799,6 +799,37 @@ export function fit(
   };
 }
 
+/** Readable zoom band for freshly loaded workflows: well above the LOD fold threshold. */
+export const COMFORT_ZOOM = { min: 0.82, max: 0.95 } as const;
+
+/**
+ * Like `fit`, but keeps the zoom inside `COMFORT_ZOOM` so a just-loaded workflow never
+ * folds into LOD cards. Content larger than the viewport is anchored at its top-left
+ * (inside the same insets as `fit`) instead of being shrunk.
+ */
+export function comfortableFit(
+  viewport: { width: number; height: number },
+  boxes: Box[],
+): { x: number; y: number; zoom: number } {
+  const target = fit(viewport, boxes, COMFORT_ZOOM.max);
+  const minZoom = Math.max(COMFORT_ZOOM.min, LOD_ZOOM + 0.05);
+  if (target.zoom >= minZoom) return target;
+  const b = bounds(boxes);
+  const availW = Math.max(120, viewport.width - 88);
+  const availH = Math.max(120, viewport.height - 130);
+  return {
+    zoom: minZoom,
+    x:
+      b.w * minZoom <= availW
+        ? 44 + (availW - b.w * minZoom) / 2 - b.x * minZoom
+        : 44 - b.x * minZoom,
+    y:
+      b.h * minZoom <= availH
+        ? 64 + (availH - b.h * minZoom) / 2 - b.y * minZoom
+        : 64 - b.y * minZoom,
+  };
+}
+
 export function zoomAt(
   view: { x: number; y: number; zoom: number },
   rect: DOMRect,

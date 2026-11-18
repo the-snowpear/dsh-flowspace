@@ -749,6 +749,22 @@ export const dict: Record<string, [string, string]> = {
   ],
   selectAgentOption: ["选择关联 Agent…", "Select bound Agent…"],
   diffAction: ["查看 Diff", "View diff"],
+
+  /* ---------- Wave 2B: ComfyUI shortcut help & native dock X-Ray ---------- */
+  shortcutSectionCreate: ["创建与连接", "Create & connect"],
+  shortcutSectionEdit: ["编辑与子图", "Edit & subgraphs"],
+  shortcutSectionRun: ["运行与参与", "Run & participation"],
+  shortcutSectionView: ["视图", "View"],
+  quickCreateShortcut: ["光标处模糊搜索新建", "Fuzzy quick-create at cursor"],
+  wireDropShortcut: ["拖线到空白处快选接续", "Drop a wire on empty canvas"],
+  dragWireToEmpty: ["拖线 → 空白", "Drag wire → empty"],
+  doubleClickKey: ["双击空白", "Double-click empty"],
+  selectAllShortcut: ["全选可见节点", "Select all visible"],
+  shortcutHelp: ["快捷键帮助", "Shortcut help"],
+  dockCapsuleHint: [
+    "点击透视载荷 · Shift 点击常驻 · 右键重新待发",
+    "Click to X-Ray · Shift-click to pin · Right-click to re-arm",
+  ],
 };
 
 export function tFor(

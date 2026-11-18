@@ -18,9 +18,10 @@ import type { SessionId } from "@deepseek-ai/dsh-session/types";
 import { useEffect, useState } from "react";
 import { Pin, Quote, Workflow } from "lucide-react";
 import { TYPERT_REMOTE } from "../../lib/typert.remote-client.js";
-import { CanvasApp } from "./CanvasApp.tsx";
+import { CanvasApp, detectHostDark } from "./CanvasApp.tsx";
 import { FlowClient, type CanvasBridge } from "./bridge.ts";
 import { capsuleStateOf } from "./geometry.ts";
+import { PayloadPeekPopover } from "./PayloadPeekPopover.tsx";
 import "./style.css";
 
 declare module "@deepseek-ai/dsh-api-session-controller/client" {
@@ -158,6 +159,10 @@ function FlowspaceComposerDock({
   bridge: CanvasBridge;
 }) {
   const snapshot = bridge.useSnapshot();
+  const [peek, setPeek] = useState<{
+    edgeId: string;
+    anchor: { x: number; y: number };
+  } | null>(null);
   const doc = snapshot?.document;
   const node = doc?.nodes.find((n) => n.sessionId === sessionId);
   if (!doc || !node) return null;
@@ -166,20 +171,19 @@ function FlowspaceComposerDock({
   );
   if (!incomingRefs.length) return null;
 
-  const toggleCapsule = (edgeId: string, shiftKey: boolean) => {
+  /** Shift+click pins (always); right-click re-arms a sent capsule, else toggles pinning (M03). */
+  const toggleCapsule = (edgeId: string, pinOnly: boolean) => {
     const next = structuredClone(doc);
     const target = next.edges.find((e) => e.id === edgeId);
     if (!target) return;
-    if (shiftKey) {
-      target.always = !target.always;
-    } else if (target.sentVersion && !target.always) {
-      // Re-arm sent capsule back to pending (M03)
+    if (!pinOnly && target.sentVersion && !target.always) {
       target.sentVersion = "";
     } else {
       target.always = !target.always;
     }
     void bridge.save(next).catch(() => {});
   };
+  const peekEdge = peek && doc.edges.find((e) => e.id === peek.edgeId);
 
   return (
     <div className="fs-native-dock-tray" aria-label={t("context")}>
@@ -192,8 +196,19 @@ function FlowspaceComposerDock({
             key={refEdge.id}
             type="button"
             className={`fs-dock-capsule fs-dock-${state}`}
-            title={`${label} · ${t(state)} (${t(`${state}Tip`)})`}
-            onClick={(ev) => toggleCapsule(refEdge.id, ev.shiftKey)}
+            title={`${label} · ${t(state)} (${t(`${state}Tip`)}) · ${t("dockCapsuleHint")}`}
+            onClick={(ev) => {
+              if (ev.shiftKey) {
+                toggleCapsule(refEdge.id, true);
+                return;
+              }
+              const r = ev.currentTarget.getBoundingClientRect();
+              setPeek({ edgeId: refEdge.id, anchor: { x: r.left, y: r.top - 8 } });
+            }}
+            onContextMenu={(ev) => {
+              ev.preventDefault();
+              toggleCapsule(refEdge.id, false);
+            }}
             onDoubleClick={() => bridge.openCanvas(refEdge.source)}
           >
             <span className="fs-dock-dot" />
@@ -202,6 +217,29 @@ function FlowspaceComposerDock({
           </button>
         );
       })}
+      {peek && peekEdge && (
+        /* The native composer sits outside .fs-root; this box-less host scopes FlowSpace tokens. */
+        <div
+          className="fs-root fs-popover-host"
+          data-theme={
+            doc.prefs?.theme && doc.prefs.theme !== "auto"
+              ? doc.prefs.theme
+              : detectHostDark()
+                ? "dark"
+                : "light"
+          }
+        >
+          <PayloadPeekPopover
+            anchor={peek.anchor}
+            edge={peekEdge}
+            doc={doc}
+            snapshot={snapshot}
+            bridge={bridge}
+            onClose={() => setPeek(null)}
+            onOpenInspector={() => bridge.openCanvas(peekEdge.target)}
+          />
+        </div>
+      )}
     </div>
   );
 }

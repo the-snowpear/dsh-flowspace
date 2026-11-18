@@ -169,6 +169,19 @@
   border-color: var(--violet-border);
 }
 
+/* Prominent stop control on running Agent headers */
+.fs-root .node-actions .node-stop-button {
+  color: var(--red, #e5484d);
+  border: 1px solid color-mix(in oklab, var(--red, #e5484d) 45%, transparent);
+  background: color-mix(in oklab, var(--red, #e5484d) 12%, transparent);
+}
+.fs-root .node-actions .node-stop-button .ic {
+  fill: currentColor;
+}
+.fs-root .node-actions .node-stop-button:hover {
+  background: color-mix(in oklab, var(--red, #e5484d) 22%, transparent);
+}
+
 /* Running conic beam & Waiting breathing aura */
 .fs-root .node.status-running {
   border-style: solid;

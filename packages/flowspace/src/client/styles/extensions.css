@@ -22,6 +22,11 @@
   padding: 2px 0;
 }
 
+/* Box-less token scope for FlowSpace popovers rendered inside native DSH chrome */
+.fs-root.fs-popover-host {
+  display: contents;
+}
+
 .fs-dock-capsule {
   display: inline-flex;
   align-items: center;

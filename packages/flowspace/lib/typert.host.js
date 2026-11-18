@@ -37,7 +37,7 @@ const dsh_flowspace_flowspace_bind_result$schema = () => (dsh_flowspace_flowspac
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -135,7 +135,7 @@ const dsh_flowspace_flowspace_display_result$schema = () => (dsh_flowspace_flows
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -197,6 +197,15 @@ const dsh_flowspace_flowspace_draft_parameter_0$schema = () => (dsh_flowspace_fl
 }))
 let dsh_flowspace_flowspace_draft_result$schema$value
 const dsh_flowspace_flowspace_draft_result$schema = () => (dsh_flowspace_flowspace_draft_result$schema$value ??= z.void())
+let dsh_flowspace_flowspace_extendLoop_parameter_0$schema$value
+const dsh_flowspace_flowspace_extendLoop_parameter_0$schema = () => (dsh_flowspace_flowspace_extendLoop_parameter_0$schema$value ??= z.object({
+  'runId': z.string(),
+  'edgeId': z.string().optional(),
+  'nodeId': z.string().optional(),
+  'extraRounds': z.number().optional(),
+}))
+let dsh_flowspace_flowspace_extendLoop_result$schema$value
+const dsh_flowspace_flowspace_extendLoop_result$schema = () => (dsh_flowspace_flowspace_extendLoop_result$schema$value ??= z.void())
 let dsh_flowspace_flowspace_follow_result$schema$value
 const dsh_flowspace_flowspace_follow_result$schema = () => (dsh_flowspace_flowspace_follow_result$schema$value ??= z.object({
   'document': z.object({
@@ -227,7 +236,7 @@ const dsh_flowspace_flowspace_follow_result$schema = () => (dsh_flowspace_flowsp
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -354,7 +363,7 @@ const dsh_flowspace_flowspace_follow_result$schema = () => (dsh_flowspace_flowsp
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -467,7 +476,7 @@ const dsh_flowspace_flowspace_follow_result$schema = () => (dsh_flowspace_flowsp
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -594,7 +603,7 @@ const dsh_flowspace_flowspace_follow_result$schema = () => (dsh_flowspace_flowsp
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -683,6 +692,8 @@ const dsh_flowspace_flowspace_follow_result$schema = () => (dsh_flowspace_flowsp
   'sources': z.array(z.object({
   'id': z.string(),
   'kind': z.union([z.literal("file"), z.literal("conclusion"), z.literal("session"), z.literal("fork"), z.literal("text")]),
+  'referenceKind': z.union([z.literal("note"), z.literal("file"), z.literal("display"), z.literal("board"), z.literal("git"), z.literal("changes"), z.literal("terminal")]).optional(),
+  'missing': z.boolean().optional(),
   'sourceNodeId': z.string(),
   'sourceSessionId': z.string().optional(),
   'seq': z.number().optional(),
@@ -696,6 +707,12 @@ const dsh_flowspace_flowspace_follow_result$schema = () => (dsh_flowspace_flowsp
   'endSeq': z.number().optional(),
   'output': z.string().optional(),
   'error': z.string().optional(),
+  'telemetry': z.object({
+  'stepCount': z.number(),
+  'inputTokens': z.number(),
+  'outputTokens': z.number(),
+  'durationMs': z.number().optional(),
+}).optional(),
 })),
   'tokens': z.array(z.object({
   'id': z.string(),
@@ -704,6 +721,8 @@ const dsh_flowspace_flowspace_follow_result$schema = () => (dsh_flowspace_flowsp
   'source': z.object({
   'id': z.string(),
   'kind': z.union([z.literal("file"), z.literal("conclusion"), z.literal("session"), z.literal("fork"), z.literal("text")]),
+  'referenceKind': z.union([z.literal("note"), z.literal("file"), z.literal("display"), z.literal("board"), z.literal("git"), z.literal("changes"), z.literal("terminal")]).optional(),
+  'missing': z.boolean().optional(),
   'sourceNodeId': z.string(),
   'sourceSessionId': z.string().optional(),
   'seq': z.number().optional(),
@@ -716,6 +735,8 @@ const dsh_flowspace_flowspace_follow_result$schema = () => (dsh_flowspace_flowsp
   'consumed': z.boolean(),
   'boundary': z.boolean(),
   'dismissed': z.boolean(),
+  'loopCapReached': z.boolean().optional(),
+  'planGate': z.boolean().optional(),
 })),
   'notes': z.array(z.string()),
   'deliverables': z.array(z.object({
@@ -760,7 +781,7 @@ const dsh_flowspace_flowspace_follow_result$schema = () => (dsh_flowspace_flowsp
   'id': z.string(),
   'fromSessionId': z.string(),
   'toSessionId': z.string(),
-  'kind': z.union([z.literal("agent-message"), z.literal("subagent-settled")]),
+  'kind': z.union([z.literal("agent-message"), z.literal("subagent-settled"), z.literal("team-message")]),
   'text': z.string(),
   'summary': z.string().optional(),
   'seq': z.number(),
@@ -779,7 +800,7 @@ let dsh_flowspace_flowspace_gitAction_parameter_0$schema$value
 const dsh_flowspace_flowspace_gitAction_parameter_0$schema = () => (dsh_flowspace_flowspace_gitAction_parameter_0$schema$value ??= z.object({
   'cwd': z.string().optional(),
   'expectedRevision': z.string().optional(),
-  'action': z.union([z.literal("commit"), z.literal("stage"), z.literal("unstage"), z.literal("stageAll"), z.literal("unstageAll"), z.literal("discard"), z.literal("createBranch"), z.literal("checkoutBranch"), z.literal("fetch"), z.literal("pull"), z.literal("push"), z.literal("createWorktree"), z.literal("removeWorktree")]),
+  'action': z.union([z.literal("commit"), z.literal("init"), z.literal("stage"), z.literal("unstage"), z.literal("stageAll"), z.literal("unstageAll"), z.literal("discard"), z.literal("createBranch"), z.literal("checkoutBranch"), z.literal("fetch"), z.literal("pull"), z.literal("push"), z.literal("createWorktree"), z.literal("removeWorktree")]),
   'paths': z.array(z.string()).optional(),
   'message': z.string().optional(),
   'branch': z.string().optional(),
@@ -924,6 +945,26 @@ const dsh_flowspace_flowspace_gitInspect_result$schema = () => (dsh_flowspace_fl
   'refs': z.array(z.string()),
 })),
 }))
+let dsh_flowspace_flowspace_inspectEdgePayload_parameter_0$schema$value
+const dsh_flowspace_flowspace_inspectEdgePayload_parameter_0$schema = () => (dsh_flowspace_flowspace_inspectEdgePayload_parameter_0$schema$value ??= z.object({
+  'edgeId': z.string(),
+  'runId': z.string().optional(),
+}))
+let dsh_flowspace_flowspace_inspectEdgePayload_result$schema$value
+const dsh_flowspace_flowspace_inspectEdgePayload_result$schema = () => (dsh_flowspace_flowspace_inspectEdgePayload_result$schema$value ??= z.object({
+  'edgeId': z.string(),
+  'kind': z.union([z.literal("reference"), z.literal("continuation")]),
+  'mode': z.string(),
+  'sourceTitle': z.string(),
+  'targetTitle': z.string(),
+  'sessionId': z.string().optional(),
+  'seq': z.number().optional(),
+  'byteLength': z.number(),
+  'willSpill': z.boolean(),
+  'freshness': z.union([z.literal("always"), z.literal("pending"), z.literal("sent"), z.literal("updated"), z.literal("live")]),
+  'summary': z.string(),
+  'content': z.string(),
+}))
 let dsh_flowspace_flowspace_openSessionTerminal_parameter_0$schema$value
 const dsh_flowspace_flowspace_openSessionTerminal_parameter_0$schema = () => (dsh_flowspace_flowspace_openSessionTerminal_parameter_0$schema$value ??= z.object({
   'sessionId': z.string(),
@@ -941,7 +982,7 @@ const dsh_flowspace_flowspace_openSessionTerminal_result$schema = () => (dsh_flo
 let dsh_flowspace_flowspace_plan_parameter_0$schema$value
 const dsh_flowspace_flowspace_plan_parameter_0$schema = () => (dsh_flowspace_flowspace_plan_parameter_0$schema$value ??= z.object({
   'nodeIds': z.array(z.string()),
-  'kind': z.union([z.literal("group"), z.literal("global"), z.literal("single"), z.literal("selection")]),
+  'kind': z.union([z.literal("group"), z.literal("global"), z.literal("single"), z.literal("selection"), z.literal("from-node"), z.literal("to-node")]),
   'excludeRootIds': z.array(z.string()).optional(),
 }))
 let dsh_flowspace_flowspace_plan_result$schema$value
@@ -1054,7 +1095,7 @@ const dsh_flowspace_flowspace_rerunFailed_result$schema = () => (dsh_flowspace_f
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -1143,6 +1184,8 @@ const dsh_flowspace_flowspace_rerunFailed_result$schema = () => (dsh_flowspace_f
   'sources': z.array(z.object({
   'id': z.string(),
   'kind': z.union([z.literal("file"), z.literal("conclusion"), z.literal("session"), z.literal("fork"), z.literal("text")]),
+  'referenceKind': z.union([z.literal("note"), z.literal("file"), z.literal("display"), z.literal("board"), z.literal("git"), z.literal("changes"), z.literal("terminal")]).optional(),
+  'missing': z.boolean().optional(),
   'sourceNodeId': z.string(),
   'sourceSessionId': z.string().optional(),
   'seq': z.number().optional(),
@@ -1156,6 +1199,12 @@ const dsh_flowspace_flowspace_rerunFailed_result$schema = () => (dsh_flowspace_f
   'endSeq': z.number().optional(),
   'output': z.string().optional(),
   'error': z.string().optional(),
+  'telemetry': z.object({
+  'stepCount': z.number(),
+  'inputTokens': z.number(),
+  'outputTokens': z.number(),
+  'durationMs': z.number().optional(),
+}).optional(),
 })),
   'tokens': z.array(z.object({
   'id': z.string(),
@@ -1164,6 +1213,8 @@ const dsh_flowspace_flowspace_rerunFailed_result$schema = () => (dsh_flowspace_f
   'source': z.object({
   'id': z.string(),
   'kind': z.union([z.literal("file"), z.literal("conclusion"), z.literal("session"), z.literal("fork"), z.literal("text")]),
+  'referenceKind': z.union([z.literal("note"), z.literal("file"), z.literal("display"), z.literal("board"), z.literal("git"), z.literal("changes"), z.literal("terminal")]).optional(),
+  'missing': z.boolean().optional(),
   'sourceNodeId': z.string(),
   'sourceSessionId': z.string().optional(),
   'seq': z.number().optional(),
@@ -1176,6 +1227,8 @@ const dsh_flowspace_flowspace_rerunFailed_result$schema = () => (dsh_flowspace_f
   'consumed': z.boolean(),
   'boundary': z.boolean(),
   'dismissed': z.boolean(),
+  'loopCapReached': z.boolean().optional(),
+  'planGate': z.boolean().optional(),
 })),
   'notes': z.array(z.string()),
   'deliverables': z.array(z.object({
@@ -1189,8 +1242,12 @@ const dsh_flowspace_flowspace_rerunFailed_result$schema = () => (dsh_flowspace_f
   'description': z.string().optional(),
 })).optional(),
 }))
-let dsh_flowspace_flowspace_save_parameter_0$schema$value
-const dsh_flowspace_flowspace_save_parameter_0$schema = () => (dsh_flowspace_flowspace_save_parameter_0$schema$value ??= z.object({
+let dsh_flowspace_flowspace_restoreSnapshot_parameter_0$schema$value
+const dsh_flowspace_flowspace_restoreSnapshot_parameter_0$schema = () => (dsh_flowspace_flowspace_restoreSnapshot_parameter_0$schema$value ??= z.object({
+  'snapshotId': z.string(),
+}))
+let dsh_flowspace_flowspace_restoreSnapshot_result$schema$value
+const dsh_flowspace_flowspace_restoreSnapshot_result$schema = () => (dsh_flowspace_flowspace_restoreSnapshot_result$schema$value ??= z.object({
   'version': z.literal(1),
   'id': z.string(),
   'title': z.string(),
@@ -1218,7 +1275,7 @@ const dsh_flowspace_flowspace_save_parameter_0$schema = () => (dsh_flowspace_flo
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -1345,7 +1402,7 @@ const dsh_flowspace_flowspace_save_parameter_0$schema = () => (dsh_flowspace_flo
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -1458,7 +1515,369 @@ const dsh_flowspace_flowspace_save_parameter_0$schema = () => (dsh_flowspace_flo
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
+  'text': z.string(),
+  'sourceNodeId': z.string().optional(),
+  'sourceSeq': z.number().optional(),
+  'fixed': z.boolean(),
+  'collapsed': z.boolean(),
+  'lastSubmittedTask': z.string().optional(),
+  'tab': z.union([z.literal("task"), z.literal("conversation"), z.literal("execution")]).optional().describe('Optional rich canvas UI metadata persisted in DSH storageDomain'),
+  'pinned': z.boolean().optional(),
+  'roleLabel': z.string().optional(),
+  'rerun': z.union([z.literal("change"), z.literal("update"), z.literal("always")]).optional(),
+  'color': z.union([z.literal("violet"), z.literal("teal"), z.literal("blue"), z.literal("amber")]).optional(),
+  'ports': z.array(z.object({
+  'id': z.string(),
+  'kind': z.union([z.literal("reference"), z.literal("continuation")]),
+  'direction': z.union([z.literal("in"), z.literal("out")]),
+  'name': z.string(),
+  'nodes': z.array(z.string()),
+  'hidden': z.boolean(),
+})).optional(),
+  'templateId': z.string().optional(),
+  'templateRevision': z.number().optional(),
+  'templateSlotId': z.string().optional(),
+  'titleKey': z.string().optional(),
+  'window': z.object({
+  'x': z.number(),
+  'y': z.number(),
+  'w': z.number(),
+  'h': z.number(),
+  'snap': z.union([z.literal("left"), z.literal("right"), z.literal("max")]).optional(),
+  'z': z.number().optional(),
+}).optional(),
+  'columns': z.array(z.object({
+  'id': z.string(),
+  'name': z.string(),
+  'cards': z.array(z.object({
+  'id': z.string(),
+  'text': z.string(),
+})),
+})).optional(),
+  'items': z.array(z.string()).optional(),
+  'selectedItems': z.array(z.string()).optional(),
+  'nudge': z.object({
+  'by': z.string(),
+  'origY': z.number().optional(),
+  'origH': z.number().optional(),
+}).optional(),
+  'gitTab': z.union([z.literal("changes"), z.literal("history"), z.literal("branches")]).optional().describe('Tool node bindings (Git / Changes / Terminal)'),
+  'gitCommitOid': z.string().optional(),
+  'changesSessionId': z.string().optional(),
+  'changesSeq': z.number().optional(),
+  'changesTurn': z.number().optional(),
+  'terminalSessionId': z.string().optional(),
+  'terminalId': z.string().optional(),
+})),
+  'edges': z.array(z.object({
+  'id': z.string(),
+  'source': z.string(),
+  'target': z.string(),
+  'kind': z.union([z.literal("reference"), z.literal("continuation")]),
+  'mode': z.union([z.literal("conclusion"), z.literal("session"), z.literal("fork")]),
+  'trigger': z.union([z.literal("off"), z.literal("auto"), z.literal("confirm")]),
+  'maxRounds': z.number(),
+  'always': z.boolean(),
+  'sentVersion': z.string().optional(),
+  'currentVersion': z.string().optional(),
+  'sourceItemKey': z.string().optional(),
+  'snapshotTitle': z.string().optional(),
+  'snapshotText': z.string().optional(),
+  'originMode': z.union([z.literal("conclusion"), z.literal("session"), z.literal("fork")]).optional(),
+  'waypoints': z.array(z.object({
+  'x': z.number(),
+  'y': z.number(),
+})).optional(),
+  'placedCapsules': z.array(z.string()).optional(),
+})),
+  'viewport': z.object({
+  'x': z.number(),
+  'y': z.number(),
+  'zoom': z.number(),
+}),
+  'summary': z.object({
+  'drafts': z.number(),
+  'stopping': z.number(),
+  'awaiting': z.number(),
+  'queued': z.number(),
+  'recentOutputs': z.array(z.object({
+  'title': z.string(),
+  'snippet': z.string(),
+})),
+}).optional(),
+})).optional(),
+}))
+let dsh_flowspace_flowspace_save_parameter_0$schema$value
+const dsh_flowspace_flowspace_save_parameter_0$schema = () => (dsh_flowspace_flowspace_save_parameter_0$schema$value ??= z.object({
+  'version': z.literal(1),
+  'id': z.string(),
+  'title': z.string(),
+  'nodes': z.array(z.object({
+  'id': z.string(),
+  'kind': z.union([z.literal("agent"), z.literal("note"), z.literal("file"), z.literal("display"), z.literal("group"), z.literal("board"), z.literal("detail"), z.literal("git"), z.literal("changes"), z.literal("terminal")]),
+  'title': z.string(),
+  'x': z.number(),
+  'y': z.number(),
+  'width': z.number(),
+  'height': z.number(),
+  'expanded': z.boolean(),
+  'parentId': z.string().optional(),
+  'sessionId': z.string().optional(),
+  'workspaceId': z.string().optional(),
+  'cwd': z.string().optional(),
+  'branch': z.string().optional(),
+  'worktreePath': z.string().optional(),
+  'agentPreset': z.string().optional(),
+  'planMode': z.boolean().optional(),
+  'customTitle': z.boolean().optional(),
+  'subAgentsExpanded': z.boolean().optional(),
+  'task': z.string(),
+  'draft': z.string(),
+  'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
+  'continuationCollapsed': z.boolean().optional(),
+  'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
+  'text': z.string(),
+  'sourceNodeId': z.string().optional(),
+  'sourceSeq': z.number().optional(),
+  'fixed': z.boolean(),
+  'collapsed': z.boolean(),
+  'lastSubmittedTask': z.string().optional(),
+  'tab': z.union([z.literal("task"), z.literal("conversation"), z.literal("execution")]).optional().describe('Optional rich canvas UI metadata persisted in DSH storageDomain'),
+  'pinned': z.boolean().optional(),
+  'roleLabel': z.string().optional(),
+  'rerun': z.union([z.literal("change"), z.literal("update"), z.literal("always")]).optional(),
+  'color': z.union([z.literal("violet"), z.literal("teal"), z.literal("blue"), z.literal("amber")]).optional(),
+  'ports': z.array(z.object({
+  'id': z.string(),
+  'kind': z.union([z.literal("reference"), z.literal("continuation")]),
+  'direction': z.union([z.literal("in"), z.literal("out")]),
+  'name': z.string(),
+  'nodes': z.array(z.string()),
+  'hidden': z.boolean(),
+})).optional(),
+  'templateId': z.string().optional(),
+  'templateRevision': z.number().optional(),
+  'templateSlotId': z.string().optional(),
+  'titleKey': z.string().optional(),
+  'window': z.object({
+  'x': z.number(),
+  'y': z.number(),
+  'w': z.number(),
+  'h': z.number(),
+  'snap': z.union([z.literal("left"), z.literal("right"), z.literal("max")]).optional(),
+  'z': z.number().optional(),
+}).optional(),
+  'columns': z.array(z.object({
+  'id': z.string(),
+  'name': z.string(),
+  'cards': z.array(z.object({
+  'id': z.string(),
+  'text': z.string(),
+})),
+})).optional(),
+  'items': z.array(z.string()).optional(),
+  'selectedItems': z.array(z.string()).optional(),
+  'nudge': z.object({
+  'by': z.string(),
+  'origY': z.number().optional(),
+  'origH': z.number().optional(),
+}).optional(),
+  'gitTab': z.union([z.literal("changes"), z.literal("history"), z.literal("branches")]).optional().describe('Tool node bindings (Git / Changes / Terminal)'),
+  'gitCommitOid': z.string().optional(),
+  'changesSessionId': z.string().optional(),
+  'changesSeq': z.number().optional(),
+  'changesTurn': z.number().optional(),
+  'terminalSessionId': z.string().optional(),
+  'terminalId': z.string().optional(),
+})),
+  'edges': z.array(z.object({
+  'id': z.string(),
+  'source': z.string(),
+  'target': z.string(),
+  'kind': z.union([z.literal("reference"), z.literal("continuation")]),
+  'mode': z.union([z.literal("conclusion"), z.literal("session"), z.literal("fork")]),
+  'trigger': z.union([z.literal("off"), z.literal("auto"), z.literal("confirm")]),
+  'maxRounds': z.number(),
+  'always': z.boolean(),
+  'sentVersion': z.string().optional(),
+  'currentVersion': z.string().optional(),
+  'sourceItemKey': z.string().optional(),
+  'snapshotTitle': z.string().optional(),
+  'snapshotText': z.string().optional(),
+  'originMode': z.union([z.literal("conclusion"), z.literal("session"), z.literal("fork")]).optional(),
+  'waypoints': z.array(z.object({
+  'x': z.number(),
+  'y': z.number(),
+})).optional(),
+  'placedCapsules': z.array(z.string()).optional(),
+})),
+  'viewport': z.object({
+  'x': z.number(),
+  'y': z.number(),
+  'zoom': z.number(),
+}),
+  'settings': z.object({
+  'nativeChatTriggers': z.boolean(),
+  'reducedMotion': z.boolean(),
+}),
+  'prefs': z.object({
+  'theme': z.union([z.literal("auto"), z.literal("dark"), z.literal("light")]).optional(),
+  'wheel': z.union([z.literal("zoom"), z.literal("pan")]).optional(),
+  'snap': z.boolean().optional(),
+  'filter': z.union([z.literal("auto"), z.literal("running"), z.literal("3d"), z.literal("7d"), z.literal("all")]).optional(),
+  'hiddenWorkspaces': z.array(z.string()).optional(),
+  'showBranches': z.boolean().optional(),
+  'showWorktrees': z.boolean().optional(),
+}).optional(),
+  'templates': z.array(z.object({
+  'id': z.string(),
+  'title': z.string(),
+  'description': z.string(),
+  'revision': z.number(),
+  'builtin': z.boolean().optional(),
+  'color': z.union([z.literal("violet"), z.literal("teal"), z.literal("blue"), z.literal("amber")]).optional(),
+  'w': z.number(),
+  'h': z.number(),
+  'nodes': z.array(z.object({
+  'id': z.string(),
+  'kind': z.union([z.literal("agent"), z.literal("note"), z.literal("file"), z.literal("display"), z.literal("group"), z.literal("board"), z.literal("detail"), z.literal("git"), z.literal("changes"), z.literal("terminal")]),
+  'title': z.string(),
+  'x': z.number(),
+  'y': z.number(),
+  'width': z.number(),
+  'height': z.number(),
+  'expanded': z.boolean(),
+  'parentId': z.string().optional(),
+  'sessionId': z.string().optional(),
+  'workspaceId': z.string().optional(),
+  'cwd': z.string().optional(),
+  'branch': z.string().optional(),
+  'worktreePath': z.string().optional(),
+  'agentPreset': z.string().optional(),
+  'planMode': z.boolean().optional(),
+  'customTitle': z.boolean().optional(),
+  'subAgentsExpanded': z.boolean().optional(),
+  'task': z.string(),
+  'draft': z.string(),
+  'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
+  'continuationCollapsed': z.boolean().optional(),
+  'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
+  'text': z.string(),
+  'sourceNodeId': z.string().optional(),
+  'sourceSeq': z.number().optional(),
+  'fixed': z.boolean(),
+  'collapsed': z.boolean(),
+  'lastSubmittedTask': z.string().optional(),
+  'tab': z.union([z.literal("task"), z.literal("conversation"), z.literal("execution")]).optional().describe('Optional rich canvas UI metadata persisted in DSH storageDomain'),
+  'pinned': z.boolean().optional(),
+  'roleLabel': z.string().optional(),
+  'rerun': z.union([z.literal("change"), z.literal("update"), z.literal("always")]).optional(),
+  'color': z.union([z.literal("violet"), z.literal("teal"), z.literal("blue"), z.literal("amber")]).optional(),
+  'ports': z.array(z.object({
+  'id': z.string(),
+  'kind': z.union([z.literal("reference"), z.literal("continuation")]),
+  'direction': z.union([z.literal("in"), z.literal("out")]),
+  'name': z.string(),
+  'nodes': z.array(z.string()),
+  'hidden': z.boolean(),
+})).optional(),
+  'templateId': z.string().optional(),
+  'templateRevision': z.number().optional(),
+  'templateSlotId': z.string().optional(),
+  'titleKey': z.string().optional(),
+  'window': z.object({
+  'x': z.number(),
+  'y': z.number(),
+  'w': z.number(),
+  'h': z.number(),
+  'snap': z.union([z.literal("left"), z.literal("right"), z.literal("max")]).optional(),
+  'z': z.number().optional(),
+}).optional(),
+  'columns': z.array(z.object({
+  'id': z.string(),
+  'name': z.string(),
+  'cards': z.array(z.object({
+  'id': z.string(),
+  'text': z.string(),
+})),
+})).optional(),
+  'items': z.array(z.string()).optional(),
+  'selectedItems': z.array(z.string()).optional(),
+  'nudge': z.object({
+  'by': z.string(),
+  'origY': z.number().optional(),
+  'origH': z.number().optional(),
+}).optional(),
+  'gitTab': z.union([z.literal("changes"), z.literal("history"), z.literal("branches")]).optional().describe('Tool node bindings (Git / Changes / Terminal)'),
+  'gitCommitOid': z.string().optional(),
+  'changesSessionId': z.string().optional(),
+  'changesSeq': z.number().optional(),
+  'changesTurn': z.number().optional(),
+  'terminalSessionId': z.string().optional(),
+  'terminalId': z.string().optional(),
+})),
+  'edges': z.array(z.object({
+  'id': z.string(),
+  'source': z.string(),
+  'target': z.string(),
+  'kind': z.union([z.literal("reference"), z.literal("continuation")]),
+  'mode': z.union([z.literal("conclusion"), z.literal("session"), z.literal("fork")]),
+  'trigger': z.union([z.literal("off"), z.literal("auto"), z.literal("confirm")]),
+  'maxRounds': z.number(),
+  'always': z.boolean(),
+  'sentVersion': z.string().optional(),
+  'currentVersion': z.string().optional(),
+  'sourceItemKey': z.string().optional(),
+  'snapshotTitle': z.string().optional(),
+  'snapshotText': z.string().optional(),
+  'originMode': z.union([z.literal("conclusion"), z.literal("session"), z.literal("fork")]).optional(),
+  'waypoints': z.array(z.object({
+  'x': z.number(),
+  'y': z.number(),
+})).optional(),
+  'placedCapsules': z.array(z.string()).optional(),
+})),
+  'ports': z.array(z.object({
+  'id': z.string(),
+  'kind': z.union([z.literal("reference"), z.literal("continuation")]),
+  'direction': z.union([z.literal("in"), z.literal("out")]),
+  'name': z.string(),
+  'nodes': z.array(z.string()),
+  'hidden': z.boolean(),
+})),
+})).optional(),
+  'snapshots': z.array(z.object({
+  'id': z.string(),
+  'title': z.string(),
+  'createdAt': z.number(),
+  'nodes': z.array(z.object({
+  'id': z.string(),
+  'kind': z.union([z.literal("agent"), z.literal("note"), z.literal("file"), z.literal("display"), z.literal("group"), z.literal("board"), z.literal("detail"), z.literal("git"), z.literal("changes"), z.literal("terminal")]),
+  'title': z.string(),
+  'x': z.number(),
+  'y': z.number(),
+  'width': z.number(),
+  'height': z.number(),
+  'expanded': z.boolean(),
+  'parentId': z.string().optional(),
+  'sessionId': z.string().optional(),
+  'workspaceId': z.string().optional(),
+  'cwd': z.string().optional(),
+  'branch': z.string().optional(),
+  'worktreePath': z.string().optional(),
+  'agentPreset': z.string().optional(),
+  'planMode': z.boolean().optional(),
+  'customTitle': z.boolean().optional(),
+  'subAgentsExpanded': z.boolean().optional(),
+  'task': z.string(),
+  'draft': z.string(),
+  'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
+  'continuationCollapsed': z.boolean().optional(),
+  'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -1580,7 +1999,7 @@ const dsh_flowspace_flowspace_save_result$schema = () => (dsh_flowspace_flowspac
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -1707,7 +2126,7 @@ const dsh_flowspace_flowspace_save_result$schema = () => (dsh_flowspace_flowspac
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -1820,7 +2239,7 @@ const dsh_flowspace_flowspace_save_result$schema = () => (dsh_flowspace_flowspac
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -2007,7 +2426,7 @@ const dsh_flowspace_flowspace_snapshot_result$schema = () => (dsh_flowspace_flow
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -2134,7 +2553,7 @@ const dsh_flowspace_flowspace_snapshot_result$schema = () => (dsh_flowspace_flow
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -2247,7 +2666,7 @@ const dsh_flowspace_flowspace_snapshot_result$schema = () => (dsh_flowspace_flow
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -2374,7 +2793,7 @@ const dsh_flowspace_flowspace_snapshot_result$schema = () => (dsh_flowspace_flow
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -2463,6 +2882,8 @@ const dsh_flowspace_flowspace_snapshot_result$schema = () => (dsh_flowspace_flow
   'sources': z.array(z.object({
   'id': z.string(),
   'kind': z.union([z.literal("file"), z.literal("conclusion"), z.literal("session"), z.literal("fork"), z.literal("text")]),
+  'referenceKind': z.union([z.literal("note"), z.literal("file"), z.literal("display"), z.literal("board"), z.literal("git"), z.literal("changes"), z.literal("terminal")]).optional(),
+  'missing': z.boolean().optional(),
   'sourceNodeId': z.string(),
   'sourceSessionId': z.string().optional(),
   'seq': z.number().optional(),
@@ -2476,6 +2897,12 @@ const dsh_flowspace_flowspace_snapshot_result$schema = () => (dsh_flowspace_flow
   'endSeq': z.number().optional(),
   'output': z.string().optional(),
   'error': z.string().optional(),
+  'telemetry': z.object({
+  'stepCount': z.number(),
+  'inputTokens': z.number(),
+  'outputTokens': z.number(),
+  'durationMs': z.number().optional(),
+}).optional(),
 })),
   'tokens': z.array(z.object({
   'id': z.string(),
@@ -2484,6 +2911,8 @@ const dsh_flowspace_flowspace_snapshot_result$schema = () => (dsh_flowspace_flow
   'source': z.object({
   'id': z.string(),
   'kind': z.union([z.literal("file"), z.literal("conclusion"), z.literal("session"), z.literal("fork"), z.literal("text")]),
+  'referenceKind': z.union([z.literal("note"), z.literal("file"), z.literal("display"), z.literal("board"), z.literal("git"), z.literal("changes"), z.literal("terminal")]).optional(),
+  'missing': z.boolean().optional(),
   'sourceNodeId': z.string(),
   'sourceSessionId': z.string().optional(),
   'seq': z.number().optional(),
@@ -2496,6 +2925,8 @@ const dsh_flowspace_flowspace_snapshot_result$schema = () => (dsh_flowspace_flow
   'consumed': z.boolean(),
   'boundary': z.boolean(),
   'dismissed': z.boolean(),
+  'loopCapReached': z.boolean().optional(),
+  'planGate': z.boolean().optional(),
 })),
   'notes': z.array(z.string()),
   'deliverables': z.array(z.object({
@@ -2540,7 +2971,7 @@ const dsh_flowspace_flowspace_snapshot_result$schema = () => (dsh_flowspace_flow
   'id': z.string(),
   'fromSessionId': z.string(),
   'toSessionId': z.string(),
-  'kind': z.union([z.literal("agent-message"), z.literal("subagent-settled")]),
+  'kind': z.union([z.literal("agent-message"), z.literal("subagent-settled"), z.literal("team-message")]),
   'text': z.string(),
   'summary': z.string().optional(),
   'seq': z.number(),
@@ -2558,7 +2989,7 @@ const dsh_flowspace_flowspace_snapshot_result$schema = () => (dsh_flowspace_flow
 let dsh_flowspace_flowspace_start_parameter_0$schema$value
 const dsh_flowspace_flowspace_start_parameter_0$schema = () => (dsh_flowspace_flowspace_start_parameter_0$schema$value ??= z.object({
   'nodeIds': z.array(z.string()),
-  'kind': z.union([z.literal("group"), z.literal("global"), z.literal("single"), z.literal("selection")]),
+  'kind': z.union([z.literal("group"), z.literal("global"), z.literal("single"), z.literal("selection"), z.literal("from-node"), z.literal("to-node")]),
   'excludeRootIds': z.array(z.string()).optional(),
 }))
 let dsh_flowspace_flowspace_start_result$schema$value
@@ -2596,7 +3027,7 @@ const dsh_flowspace_flowspace_start_result$schema = () => (dsh_flowspace_flowspa
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -2685,6 +3116,8 @@ const dsh_flowspace_flowspace_start_result$schema = () => (dsh_flowspace_flowspa
   'sources': z.array(z.object({
   'id': z.string(),
   'kind': z.union([z.literal("file"), z.literal("conclusion"), z.literal("session"), z.literal("fork"), z.literal("text")]),
+  'referenceKind': z.union([z.literal("note"), z.literal("file"), z.literal("display"), z.literal("board"), z.literal("git"), z.literal("changes"), z.literal("terminal")]).optional(),
+  'missing': z.boolean().optional(),
   'sourceNodeId': z.string(),
   'sourceSessionId': z.string().optional(),
   'seq': z.number().optional(),
@@ -2698,6 +3131,12 @@ const dsh_flowspace_flowspace_start_result$schema = () => (dsh_flowspace_flowspa
   'endSeq': z.number().optional(),
   'output': z.string().optional(),
   'error': z.string().optional(),
+  'telemetry': z.object({
+  'stepCount': z.number(),
+  'inputTokens': z.number(),
+  'outputTokens': z.number(),
+  'durationMs': z.number().optional(),
+}).optional(),
 })),
   'tokens': z.array(z.object({
   'id': z.string(),
@@ -2706,6 +3145,8 @@ const dsh_flowspace_flowspace_start_result$schema = () => (dsh_flowspace_flowspa
   'source': z.object({
   'id': z.string(),
   'kind': z.union([z.literal("file"), z.literal("conclusion"), z.literal("session"), z.literal("fork"), z.literal("text")]),
+  'referenceKind': z.union([z.literal("note"), z.literal("file"), z.literal("display"), z.literal("board"), z.literal("git"), z.literal("changes"), z.literal("terminal")]).optional(),
+  'missing': z.boolean().optional(),
   'sourceNodeId': z.string(),
   'sourceSessionId': z.string().optional(),
   'seq': z.number().optional(),
@@ -2718,6 +3159,8 @@ const dsh_flowspace_flowspace_start_result$schema = () => (dsh_flowspace_flowspa
   'consumed': z.boolean(),
   'boundary': z.boolean(),
   'dismissed': z.boolean(),
+  'loopCapReached': z.boolean().optional(),
+  'planGate': z.boolean().optional(),
 })),
   'notes': z.array(z.string()),
   'deliverables': z.array(z.object({
@@ -2775,11 +3218,18 @@ const dsh_flowspace_flowspace_draft_parameter_0_strict$schema = () => (dsh_flows
   'nodeId': z.string(),
   'draft': z.string(),
 }))
+let dsh_flowspace_flowspace_extendLoop_parameter_0_strict$schema$value
+const dsh_flowspace_flowspace_extendLoop_parameter_0_strict$schema = () => (dsh_flowspace_flowspace_extendLoop_parameter_0_strict$schema$value ??= z.strictObject({
+  'runId': z.string(),
+  'edgeId': z.string().optional(),
+  'nodeId': z.string().optional(),
+  'extraRounds': z.number().optional(),
+}))
 let dsh_flowspace_flowspace_gitAction_parameter_0_strict$schema$value
 const dsh_flowspace_flowspace_gitAction_parameter_0_strict$schema = () => (dsh_flowspace_flowspace_gitAction_parameter_0_strict$schema$value ??= z.strictObject({
   'cwd': z.string().optional(),
   'expectedRevision': z.string().optional(),
-  'action': z.union([z.literal("commit"), z.literal("stage"), z.literal("unstage"), z.literal("stageAll"), z.literal("unstageAll"), z.literal("discard"), z.literal("createBranch"), z.literal("checkoutBranch"), z.literal("fetch"), z.literal("pull"), z.literal("push"), z.literal("createWorktree"), z.literal("removeWorktree")]),
+  'action': z.union([z.literal("commit"), z.literal("init"), z.literal("stage"), z.literal("unstage"), z.literal("stageAll"), z.literal("unstageAll"), z.literal("discard"), z.literal("createBranch"), z.literal("checkoutBranch"), z.literal("fetch"), z.literal("pull"), z.literal("push"), z.literal("createWorktree"), z.literal("removeWorktree")]),
   'paths': z.array(z.string()).optional(),
   'message': z.string().optional(),
   'branch': z.string().optional(),
@@ -2797,6 +3247,11 @@ let dsh_flowspace_flowspace_gitInspect_parameter_0_strict$schema$value
 const dsh_flowspace_flowspace_gitInspect_parameter_0_strict$schema = () => (dsh_flowspace_flowspace_gitInspect_parameter_0_strict$schema$value ??= z.strictObject({
   'cwd': z.string().optional(),
 }))
+let dsh_flowspace_flowspace_inspectEdgePayload_parameter_0_strict$schema$value
+const dsh_flowspace_flowspace_inspectEdgePayload_parameter_0_strict$schema = () => (dsh_flowspace_flowspace_inspectEdgePayload_parameter_0_strict$schema$value ??= z.strictObject({
+  'edgeId': z.string(),
+  'runId': z.string().optional(),
+}))
 let dsh_flowspace_flowspace_openSessionTerminal_parameter_0_strict$schema$value
 const dsh_flowspace_flowspace_openSessionTerminal_parameter_0_strict$schema = () => (dsh_flowspace_flowspace_openSessionTerminal_parameter_0_strict$schema$value ??= z.strictObject({
   'sessionId': z.string(),
@@ -2804,7 +3259,7 @@ const dsh_flowspace_flowspace_openSessionTerminal_parameter_0_strict$schema = ()
 let dsh_flowspace_flowspace_plan_parameter_0_strict$schema$value
 const dsh_flowspace_flowspace_plan_parameter_0_strict$schema = () => (dsh_flowspace_flowspace_plan_parameter_0_strict$schema$value ??= z.strictObject({
   'nodeIds': z.array(z.string()),
-  'kind': z.union([z.literal("group"), z.literal("global"), z.literal("single"), z.literal("selection")]),
+  'kind': z.union([z.literal("group"), z.literal("global"), z.literal("single"), z.literal("selection"), z.literal("from-node"), z.literal("to-node")]),
   'excludeRootIds': z.array(z.string()).optional(),
 }))
 let dsh_flowspace_flowspace_readTerminalScreen_parameter_0_strict$schema$value
@@ -2827,6 +3282,10 @@ const dsh_flowspace_flowspace_release_parameter_0_strict$schema = () => (dsh_flo
 let dsh_flowspace_flowspace_rerunFailed_parameter_0_strict$schema$value
 const dsh_flowspace_flowspace_rerunFailed_parameter_0_strict$schema = () => (dsh_flowspace_flowspace_rerunFailed_parameter_0_strict$schema$value ??= z.strictObject({
   'runId': z.string(),
+}))
+let dsh_flowspace_flowspace_restoreSnapshot_parameter_0_strict$schema$value
+const dsh_flowspace_flowspace_restoreSnapshot_parameter_0_strict$schema = () => (dsh_flowspace_flowspace_restoreSnapshot_parameter_0_strict$schema$value ??= z.strictObject({
+  'snapshotId': z.string(),
 }))
 let dsh_flowspace_flowspace_save_parameter_0_strict$schema$value
 const dsh_flowspace_flowspace_save_parameter_0_strict$schema = () => (dsh_flowspace_flowspace_save_parameter_0_strict$schema$value ??= z.strictObject({
@@ -2857,7 +3316,7 @@ const dsh_flowspace_flowspace_save_parameter_0_strict$schema = () => (dsh_flowsp
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -2984,7 +3443,7 @@ const dsh_flowspace_flowspace_save_parameter_0_strict$schema = () => (dsh_flowsp
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -3097,7 +3556,7 @@ const dsh_flowspace_flowspace_save_parameter_0_strict$schema = () => (dsh_flowsp
   'continuationPrompt': z.string().optional().describe('Independent prompt sent when triggered by upstream completion (M02).'),
   'continuationCollapsed': z.boolean().optional(),
   'nativeTrigger': z.union([z.literal("inherit"), z.literal("enabled"), z.literal("disabled")]),
-  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused")]),
+  'participation': z.union([z.literal("global"), z.literal("manual"), z.literal("paused"), z.literal("bypassed")]),
   'text': z.string(),
   'sourceNodeId': z.string().optional(),
   'sourceSeq': z.number().optional(),
@@ -3207,7 +3666,7 @@ const dsh_flowspace_flowspace_sessionTerminals_parameter_0_strict$schema = () =>
 let dsh_flowspace_flowspace_start_parameter_0_strict$schema$value
 const dsh_flowspace_flowspace_start_parameter_0_strict$schema = () => (dsh_flowspace_flowspace_start_parameter_0_strict$schema$value ??= z.strictObject({
   'nodeIds': z.array(z.string()),
-  'kind': z.union([z.literal("group"), z.literal("global"), z.literal("single"), z.literal("selection")]),
+  'kind': z.union([z.literal("group"), z.literal("global"), z.literal("single"), z.literal("selection"), z.literal("from-node"), z.literal("to-node")]),
   'excludeRootIds': z.array(z.string()).optional(),
 }))
 let dsh_flowspace_flowspace_stopNode_parameter_0_strict$schema$value
@@ -3245,9 +3704,9 @@ const $remote = createTypertRemoteInfo({
         mode: 'strict',
         typeSymbol: 'dsh-flowspace/types#FlowNode',
         create: dsh_flowspace_flowspace_bind_result$schema,
-        jsonSchema: {"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true},
+        jsonSchema: {"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":860,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1363,"column":9},
     },
     'flowspace/canvasPresence': {
       service: 'flowspace',
@@ -3276,7 +3735,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_canvasPresence_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1238,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1825,"column":3},
     },
     'flowspace/command': {
       service: 'flowspace',
@@ -3305,7 +3764,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_command_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":848,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1148,"column":3},
     },
     'flowspace/display': {
       service: 'flowspace',
@@ -3332,9 +3791,9 @@ const $remote = createTypertRemoteInfo({
         mode: 'strict',
         typeSymbol: 'dsh-flowspace/types#FlowNode',
         create: dsh_flowspace_flowspace_display_result$schema,
-        jsonSchema: {"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true},
+        jsonSchema: {"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":897,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1407,"column":9},
     },
     'flowspace/draft': {
       service: 'flowspace',
@@ -3363,7 +3822,36 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_draft_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":827,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1113,"column":9},
+    },
+    'flowspace/extendLoop': {
+      service: 'flowspace',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'request',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: 'dsh-flowspace/types#ExtendLoopRequest',
+            create: dsh_flowspace_flowspace_extendLoop_parameter_0$schema,
+            jsonSchema: {"type":"object","properties":{"runId":{"type":"string"},"edgeId":{"type":"string"},"nodeId":{"type":"string"},"extraRounds":{"type":"number"}},"required":["runId"],"additionalProperties":true},
+          },
+          strictCodec: {
+            mode: 'strict',
+            typeSymbol: 'dsh-flowspace/types#ExtendLoopRequest',
+            create: dsh_flowspace_flowspace_extendLoop_parameter_0_strict$schema,
+            jsonSchema: {"type":"object","properties":{"runId":{"type":"string"},"edgeId":{"type":"string"},"nodeId":{"type":"string"},"extraRounds":{"type":"number"}},"required":["runId"],"additionalProperties":false},
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: 'dsh-flowspace#flowspace/extendLoop:result',
+        create: dsh_flowspace_flowspace_extendLoop_result$schema,
+        jsonSchemaError: 'typert tool schema: unsupported void value',
+      },
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1143,"column":3},
     },
     'flowspace/follow': {
       service: 'flowspace',
@@ -3378,7 +3866,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_follow_result$schema,
         jsonSchemaError: 'typert tool schema: selected dictionaries require string keys and unconstrained JSON values',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1250,"column":10},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1839,"column":10},
     },
     'flowspace/gitAction': {
       service: 'flowspace',
@@ -3391,13 +3879,13 @@ const $remote = createTypertRemoteInfo({
             mode: 'strict',
             typeSymbol: 'dsh-flowspace/types#GitActionRequest',
             create: dsh_flowspace_flowspace_gitAction_parameter_0$schema,
-            jsonSchema: {"type":"object","properties":{"cwd":{"type":"string"},"expectedRevision":{"type":"string"},"action":{"type":"string","enum":["commit","stage","unstage","stageAll","unstageAll","discard","createBranch","checkoutBranch","fetch","pull","push","createWorktree","removeWorktree"]},"paths":{"type":"array","items":{"type":"string"}},"message":{"type":"string"},"branch":{"type":"string"},"baseRef":{"type":"string"},"worktreePath":{"type":"string"}},"required":["action"],"additionalProperties":true},
+            jsonSchema: {"type":"object","properties":{"cwd":{"type":"string"},"expectedRevision":{"type":"string"},"action":{"type":"string","enum":["commit","init","stage","unstage","stageAll","unstageAll","discard","createBranch","checkoutBranch","fetch","pull","push","createWorktree","removeWorktree"]},"paths":{"type":"array","items":{"type":"string"}},"message":{"type":"string"},"branch":{"type":"string"},"baseRef":{"type":"string"},"worktreePath":{"type":"string"}},"required":["action"],"additionalProperties":true},
           },
           strictCodec: {
             mode: 'strict',
             typeSymbol: 'dsh-flowspace/types#GitActionRequest',
             create: dsh_flowspace_flowspace_gitAction_parameter_0_strict$schema,
-            jsonSchema: {"type":"object","properties":{"cwd":{"type":"string"},"expectedRevision":{"type":"string"},"action":{"type":"string","enum":["commit","stage","unstage","stageAll","unstageAll","discard","createBranch","checkoutBranch","fetch","pull","push","createWorktree","removeWorktree"]},"paths":{"type":"array","items":{"type":"string"}},"message":{"type":"string"},"branch":{"type":"string"},"baseRef":{"type":"string"},"worktreePath":{"type":"string"}},"required":["action"],"additionalProperties":false},
+            jsonSchema: {"type":"object","properties":{"cwd":{"type":"string"},"expectedRevision":{"type":"string"},"action":{"type":"string","enum":["commit","init","stage","unstage","stageAll","unstageAll","discard","createBranch","checkoutBranch","fetch","pull","push","createWorktree","removeWorktree"]},"paths":{"type":"array","items":{"type":"string"}},"message":{"type":"string"},"branch":{"type":"string"},"baseRef":{"type":"string"},"worktreePath":{"type":"string"}},"required":["action"],"additionalProperties":false},
           },
         },
       ],
@@ -3407,7 +3895,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_gitAction_result$schema,
         jsonSchema: {"type":"object","properties":{"isGitRepo":{"type":"boolean"},"cwd":{"type":"string"},"topLevel":{"type":"string"},"commonDir":{"type":"string"},"branch":{"type":"string"},"detached":{"type":"boolean"},"upstream":{"type":"string"},"ahead":{"type":"number"},"behind":{"type":"number"},"revision":{"type":"string"},"staged":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"origPath":{"type":"string"},"status":{"type":"string","enum":["M","A","D","R","U","?"]},"staged":{"type":"boolean"},"added":{"type":"number"},"deleted":{"type":"number"}},"required":["path","status","staged"],"additionalProperties":true}},"unstaged":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"origPath":{"type":"string"},"status":{"type":"string","enum":["M","A","D","R","U","?"]},"staged":{"type":"boolean"},"added":{"type":"number"},"deleted":{"type":"number"}},"required":["path","status","staged"],"additionalProperties":true}},"branches":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"current":{"type":"boolean"},"upstream":{"type":"string"},"ahead":{"type":"number"},"behind":{"type":"number"},"commitOid":{"type":"string"},"worktreePath":{"type":"string"}},"required":["name","current","ahead","behind","commitOid"],"additionalProperties":true}},"worktrees":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"head":{"type":"string"},"branch":{"type":"string"},"bare":{"type":"boolean"},"detached":{"type":"boolean"},"locked":{"type":"boolean"},"isMain":{"type":"boolean"}},"required":["path","head","bare","detached","locked","isMain"],"additionalProperties":true}},"commits":{"type":"array","items":{"type":"object","properties":{"oid":{"type":"string"},"shortOid":{"type":"string"},"parents":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"author":{"type":"string"},"relativeTime":{"type":"string"},"timestamp":{"type":"number"},"refs":{"type":"array","items":{"type":"string"}}},"required":["oid","shortOid","parents","subject","author","relativeTime","timestamp","refs"],"additionalProperties":true}}},"required":["isGitRepo","cwd","branch","detached","ahead","behind","revision","staged","unstaged","branches","worktrees","commits"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":978,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1511,"column":9},
     },
     'flowspace/gitDiff': {
       service: 'flowspace',
@@ -3436,7 +3924,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_gitDiff_result$schema,
         jsonSchema: {"type":"object","properties":{"title":{"type":"string"},"text":{"type":"string"},"hunks":{"type":"array","items":{"type":"object","properties":{"oldStart":{"type":"number"},"oldLines":{"type":"number"},"newStart":{"type":"number"},"newLines":{"type":"number"},"lines":{"type":"array","items":{"type":"string"}}},"required":["oldStart","oldLines","newStart","newLines","lines"],"additionalProperties":true}},"truncated":{"type":"boolean"}},"required":["title","text","hunks","truncated"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":973,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1505,"column":9},
     },
     'flowspace/gitInspect': {
       service: 'flowspace',
@@ -3465,7 +3953,37 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_gitInspect_result$schema,
         jsonSchema: {"type":"object","properties":{"isGitRepo":{"type":"boolean"},"cwd":{"type":"string"},"topLevel":{"type":"string"},"commonDir":{"type":"string"},"branch":{"type":"string"},"detached":{"type":"boolean"},"upstream":{"type":"string"},"ahead":{"type":"number"},"behind":{"type":"number"},"revision":{"type":"string"},"staged":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"origPath":{"type":"string"},"status":{"type":"string","enum":["M","A","D","R","U","?"]},"staged":{"type":"boolean"},"added":{"type":"number"},"deleted":{"type":"number"}},"required":["path","status","staged"],"additionalProperties":true}},"unstaged":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"origPath":{"type":"string"},"status":{"type":"string","enum":["M","A","D","R","U","?"]},"staged":{"type":"boolean"},"added":{"type":"number"},"deleted":{"type":"number"}},"required":["path","status","staged"],"additionalProperties":true}},"branches":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"current":{"type":"boolean"},"upstream":{"type":"string"},"ahead":{"type":"number"},"behind":{"type":"number"},"commitOid":{"type":"string"},"worktreePath":{"type":"string"}},"required":["name","current","ahead","behind","commitOid"],"additionalProperties":true}},"worktrees":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"head":{"type":"string"},"branch":{"type":"string"},"bare":{"type":"boolean"},"detached":{"type":"boolean"},"locked":{"type":"boolean"},"isMain":{"type":"boolean"}},"required":["path","head","bare","detached","locked","isMain"],"additionalProperties":true}},"commits":{"type":"array","items":{"type":"object","properties":{"oid":{"type":"string"},"shortOid":{"type":"string"},"parents":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"author":{"type":"string"},"relativeTime":{"type":"string"},"timestamp":{"type":"number"},"refs":{"type":"array","items":{"type":"string"}}},"required":["oid","shortOid","parents","subject","author","relativeTime","timestamp","refs"],"additionalProperties":true}}},"required":["isGitRepo","cwd","branch","detached","ahead","behind","revision","staged","unstaged","branches","worktrees","commits"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":968,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1491,"column":9},
+    },
+    'flowspace/inspectEdgePayload': {
+      service: 'flowspace',
+      description: 'Read-only Glass-Box X-Ray wire & capsule payload inspector (zero mutation to `sentVersion`).',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'request',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: 'dsh-flowspace/types#InspectEdgeRequest',
+            create: dsh_flowspace_flowspace_inspectEdgePayload_parameter_0$schema,
+            jsonSchema: {"type":"object","properties":{"edgeId":{"type":"string"},"runId":{"type":"string"}},"required":["edgeId"],"additionalProperties":true},
+          },
+          strictCodec: {
+            mode: 'strict',
+            typeSymbol: 'dsh-flowspace/types#InspectEdgeRequest',
+            create: dsh_flowspace_flowspace_inspectEdgePayload_parameter_0_strict$schema,
+            jsonSchema: {"type":"object","properties":{"edgeId":{"type":"string"},"runId":{"type":"string"}},"required":["edgeId"],"additionalProperties":false},
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: 'dsh-flowspace/types#EdgePayloadPreview',
+        create: dsh_flowspace_flowspace_inspectEdgePayload_result$schema,
+        jsonSchema: {"type":"object","properties":{"edgeId":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string"},"sourceTitle":{"type":"string"},"targetTitle":{"type":"string"},"sessionId":{"type":"string"},"seq":{"type":"number"},"byteLength":{"type":"number"},"willSpill":{"type":"boolean"},"freshness":{"type":"string","enum":["always","pending","sent","updated","live"]},"summary":{"type":"string"},"content":{"type":"string"}},"required":["edgeId","kind","mode","sourceTitle","targetTitle","byteLength","willSpill","freshness","summary","content"],"additionalProperties":true},
+      },
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1207,"column":9},
     },
     'flowspace/openSessionTerminal': {
       service: 'flowspace',
@@ -3494,7 +4012,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_openSessionTerminal_result$schema,
         jsonSchema: {"type":"object","properties":{"id":{"type":"string"},"sessionId":{"type":"string"},"title":{"type":"string"},"cwd":{"type":"string"},"state":{"type":"string","enum":["running","exited","failed"]},"exitCode":{"type":"number"},"origin":{"type":"string","enum":["agent","user"]}},"required":["id","sessionId","title","cwd","state","exitCode","origin"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1092,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1637,"column":9},
     },
     'flowspace/plan': {
       service: 'flowspace',
@@ -3507,13 +4025,13 @@ const $remote = createTypertRemoteInfo({
             mode: 'strict',
             typeSymbol: 'dsh-flowspace/types#StartRequest',
             create: dsh_flowspace_flowspace_plan_parameter_0$schema,
-            jsonSchema: {"type":"object","properties":{"nodeIds":{"type":"array","items":{"type":"string"}},"kind":{"type":"string","enum":["group","global","single","selection"]},"excludeRootIds":{"type":"array","items":{"type":"string"}}},"required":["nodeIds","kind"],"additionalProperties":true},
+            jsonSchema: {"type":"object","properties":{"nodeIds":{"type":"array","items":{"type":"string"}},"kind":{"type":"string","enum":["group","global","single","selection","from-node","to-node"]},"excludeRootIds":{"type":"array","items":{"type":"string"}}},"required":["nodeIds","kind"],"additionalProperties":true},
           },
           strictCodec: {
             mode: 'strict',
             typeSymbol: 'dsh-flowspace/types#StartRequest',
             create: dsh_flowspace_flowspace_plan_parameter_0_strict$schema,
-            jsonSchema: {"type":"object","properties":{"nodeIds":{"type":"array","items":{"type":"string"}},"kind":{"type":"string","enum":["group","global","single","selection"]},"excludeRootIds":{"type":"array","items":{"type":"string"}}},"required":["nodeIds","kind"],"additionalProperties":false},
+            jsonSchema: {"type":"object","properties":{"nodeIds":{"type":"array","items":{"type":"string"}},"kind":{"type":"string","enum":["group","global","single","selection","from-node","to-node"]},"excludeRootIds":{"type":"array","items":{"type":"string"}}},"required":["nodeIds","kind"],"additionalProperties":false},
           },
         },
       ],
@@ -3523,7 +4041,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_plan_result$schema,
         jsonSchema: {"type":"object","properties":{"roots":{"type":"array","items":{"type":"string"}},"later":{"type":"array","items":{"type":"string"}},"confirmation":{"type":"array","items":{"type":"string"}},"skipped":{"type":"array","items":{"type":"object","properties":{"nodeId":{"type":"string"},"reason":{"type":"string"}},"required":["nodeId","reason"],"additionalProperties":true}}},"required":["roots","later","confirmation","skipped"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":836,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1126,"column":3},
     },
     'flowspace/projectStructures': {
       service: 'flowspace',
@@ -3536,7 +4054,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_projectStructures_result$schema,
         jsonSchema: {"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"path":{"type":"string"},"isGitRepo":{"type":"boolean"},"currentBranch":{"type":"string"},"branches":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"current":{"type":"boolean"},"upstream":{"type":"string"},"ahead":{"type":"number"},"behind":{"type":"number"},"commitOid":{"type":"string"},"worktreePath":{"type":"string"}},"required":["name","current","ahead","behind","commitOid"],"additionalProperties":true}},"worktrees":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"head":{"type":"string"},"branch":{"type":"string"},"bare":{"type":"boolean"},"detached":{"type":"boolean"},"locked":{"type":"boolean"},"isMain":{"type":"boolean"}},"required":["path","head","bare","detached","locked","isMain"],"additionalProperties":true}}},"required":["id","name","path","isGitRepo","branches","worktrees"],"additionalProperties":true}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":950,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1463,"column":9},
     },
     'flowspace/readTerminalScreen': {
       service: 'flowspace',
@@ -3565,10 +4083,11 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_readTerminalScreen_result$schema,
         jsonSchema: {"type":"object","properties":{"sessionId":{"type":"string"},"terminalId":{"type":"string"},"title":{"type":"string"},"state":{"type":"string","enum":["running","exited","failed"]},"text":{"type":"string"},"totalLines":{"type":"number"},"truncated":{"type":"boolean"}},"required":["sessionId","terminalId","title","state","text","totalLines","truncated"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1121,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1667,"column":9},
     },
     'flowspace/readWorkspaceFile': {
       service: 'flowspace',
+      description: 'Bounded file handle preview: reads at most 64 KiB instead of loading whole files into RAM.',
       invocation: { kind: 'direct' },
       parameters: [
         {
@@ -3594,7 +4113,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_readWorkspaceFile_result$schema,
         jsonSchema: {"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"truncated":{"type":"boolean"}},"required":["path","content","truncated"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1199,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1748,"column":9},
     },
     'flowspace/release': {
       service: 'flowspace',
@@ -3623,7 +4142,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_release_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":852,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1153,"column":3},
     },
     'flowspace/rerunFailed': {
       service: 'flowspace',
@@ -3650,9 +4169,39 @@ const $remote = createTypertRemoteInfo({
         mode: 'strict',
         typeSymbol: 'dsh-flowspace/types#FlowspaceRun',
         create: dsh_flowspace_flowspace_rerunFailed_result$schema,
-        jsonSchema: {"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"origin":{"type":"string","enum":["canvas","chat"]},"state":{"type":"string","enum":["paused","running","waiting","completed","cancelled","interrupted","error"]},"createdAt":{"type":"number"},"scope":{"type":"array","items":{"type":"string"}},"roots":{"type":"array","items":{"type":"string"}},"participants":{"type":"array","items":{"type":"string"}},"graph":{"type":"object","properties":{"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}}},"required":["nodes","edges"],"additionalProperties":true},"steps":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"nodeId":{"type":"string"},"requestId":{"type":"string"},"sessionId":{"type":"string"},"turn":{"type":"number"},"state":{"type":"string","enum":["running","completed","interrupted","error","queued","aborted"]},"iteration":{"type":"number"},"task":{"type":"string"},"sources":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["file","conclusion","session","fork","text"]},"sourceNodeId":{"type":"string"},"sourceSessionId":{"type":"string"},"seq":{"type":"number"},"title":{"type":"string"},"text":{"type":"string"},"capturedAt":{"type":"number"},"version":{"type":"string"}},"required":["id","kind","sourceNodeId","title","text","capturedAt"],"additionalProperties":true}},"createdAt":{"type":"number"},"endedAt":{"type":"number"},"endSeq":{"type":"number"},"output":{"type":"string"},"error":{"type":"string"}},"required":["id","nodeId","requestId","state","iteration","task","sources","createdAt"],"additionalProperties":true}},"tokens":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"edgeId":{"type":"string"},"stepId":{"type":"string"},"source":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["file","conclusion","session","fork","text"]},"sourceNodeId":{"type":"string"},"sourceSessionId":{"type":"string"},"seq":{"type":"number"},"title":{"type":"string"},"text":{"type":"string"},"capturedAt":{"type":"number"},"version":{"type":"string"}},"required":["id","kind","sourceNodeId","title","text","capturedAt"],"additionalProperties":true},"ready":{"type":"boolean"},"consumed":{"type":"boolean"},"boundary":{"type":"boolean"},"dismissed":{"type":"boolean"}},"required":["id","edgeId","stepId","source","ready","consumed","boundary","dismissed"],"additionalProperties":true}},"notes":{"type":"array","items":{"type":"string"}},"deliverables":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"nodeId":{"type":"string"},"sessionId":{"type":"string"},"turn":{"type":"number"},"seq":{"type":"number"},"time":{"type":"number"},"path":{"type":"string"},"description":{"type":"string"}},"required":["id","nodeId","sessionId","turn","seq","time","path"],"additionalProperties":true}}},"required":["id","title","origin","state","createdAt","scope","roots","participants","graph","steps","tokens","notes"],"additionalProperties":true},
+        jsonSchema: {"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"origin":{"type":"string","enum":["canvas","chat"]},"state":{"type":"string","enum":["paused","running","waiting","completed","cancelled","interrupted","error"]},"createdAt":{"type":"number"},"scope":{"type":"array","items":{"type":"string"}},"roots":{"type":"array","items":{"type":"string"}},"participants":{"type":"array","items":{"type":"string"}},"graph":{"type":"object","properties":{"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}}},"required":["nodes","edges"],"additionalProperties":true},"steps":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"nodeId":{"type":"string"},"requestId":{"type":"string"},"sessionId":{"type":"string"},"turn":{"type":"number"},"state":{"type":"string","enum":["running","completed","interrupted","error","queued","aborted"]},"iteration":{"type":"number"},"task":{"type":"string"},"sources":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["file","conclusion","session","fork","text"]},"referenceKind":{"type":"string","enum":["note","file","display","board","git","changes","terminal"]},"missing":{"type":"boolean"},"sourceNodeId":{"type":"string"},"sourceSessionId":{"type":"string"},"seq":{"type":"number"},"title":{"type":"string"},"text":{"type":"string"},"capturedAt":{"type":"number"},"version":{"type":"string"}},"required":["id","kind","sourceNodeId","title","text","capturedAt"],"additionalProperties":true}},"createdAt":{"type":"number"},"endedAt":{"type":"number"},"endSeq":{"type":"number"},"output":{"type":"string"},"error":{"type":"string"},"telemetry":{"type":"object","properties":{"stepCount":{"type":"number"},"inputTokens":{"type":"number"},"outputTokens":{"type":"number"},"durationMs":{"type":"number"}},"required":["stepCount","inputTokens","outputTokens"],"additionalProperties":true}},"required":["id","nodeId","requestId","state","iteration","task","sources","createdAt"],"additionalProperties":true}},"tokens":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"edgeId":{"type":"string"},"stepId":{"type":"string"},"source":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["file","conclusion","session","fork","text"]},"referenceKind":{"type":"string","enum":["note","file","display","board","git","changes","terminal"]},"missing":{"type":"boolean"},"sourceNodeId":{"type":"string"},"sourceSessionId":{"type":"string"},"seq":{"type":"number"},"title":{"type":"string"},"text":{"type":"string"},"capturedAt":{"type":"number"},"version":{"type":"string"}},"required":["id","kind","sourceNodeId","title","text","capturedAt"],"additionalProperties":true},"ready":{"type":"boolean"},"consumed":{"type":"boolean"},"boundary":{"type":"boolean"},"dismissed":{"type":"boolean"},"loopCapReached":{"type":"boolean"},"planGate":{"type":"boolean"}},"required":["id","edgeId","stepId","source","ready","consumed","boundary","dismissed"],"additionalProperties":true}},"notes":{"type":"array","items":{"type":"string"}},"deliverables":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"nodeId":{"type":"string"},"sessionId":{"type":"string"},"turn":{"type":"number"},"seq":{"type":"number"},"time":{"type":"number"},"path":{"type":"string"},"description":{"type":"string"}},"required":["id","nodeId","sessionId","turn","seq","time","path"],"additionalProperties":true}}},"required":["id","title","origin","state","createdAt","scope","roots","participants","graph","steps","tokens","notes"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":844,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1138,"column":3},
+    },
+    'flowspace/restoreSnapshot': {
+      service: 'flowspace',
+      description: 'Atomic snapshot restore (`R10`): safely stops active runs before restoring document state.',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'request',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: 'dsh-flowspace/types#RestoreSnapshotRequest',
+            create: dsh_flowspace_flowspace_restoreSnapshot_parameter_0$schema,
+            jsonSchema: {"type":"object","properties":{"snapshotId":{"type":"string"}},"required":["snapshotId"],"additionalProperties":true},
+          },
+          strictCodec: {
+            mode: 'strict',
+            typeSymbol: 'dsh-flowspace/types#RestoreSnapshotRequest',
+            create: dsh_flowspace_flowspace_restoreSnapshot_parameter_0_strict$schema,
+            jsonSchema: {"type":"object","properties":{"snapshotId":{"type":"string"}},"required":["snapshotId"],"additionalProperties":false},
+          },
+        },
+      ],
+      result: {
+        mode: 'strict',
+        typeSymbol: 'dsh-flowspace/types#FlowspaceDocument',
+        create: dsh_flowspace_flowspace_restoreSnapshot_result$schema,
+        jsonSchema: {"type":"object","properties":{"version":{"type":"number","const":1},"id":{"type":"string"},"title":{"type":"string"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"viewport":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"zoom":{"type":"number"}},"required":["x","y","zoom"],"additionalProperties":true},"settings":{"type":"object","properties":{"nativeChatTriggers":{"type":"boolean"},"reducedMotion":{"type":"boolean"}},"required":["nativeChatTriggers","reducedMotion"],"additionalProperties":true},"prefs":{"type":"object","properties":{"theme":{"type":"string","enum":["auto","dark","light"]},"wheel":{"type":"string","enum":["zoom","pan"]},"snap":{"type":"boolean"},"filter":{"type":"string","enum":["auto","running","3d","7d","all"]},"hiddenWorkspaces":{"type":"array","items":{"type":"string"}},"showBranches":{"type":"boolean"},"showWorktrees":{"type":"boolean"}},"required":[],"additionalProperties":true},"templates":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"revision":{"type":"number"},"builtin":{"type":"boolean"},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"w":{"type":"number"},"h":{"type":"number"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}}},"required":["id","title","description","revision","w","h","nodes","edges","ports"],"additionalProperties":true}},"snapshots":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"createdAt":{"type":"number"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"viewport":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"zoom":{"type":"number"}},"required":["x","y","zoom"],"additionalProperties":true},"summary":{"type":"object","properties":{"drafts":{"type":"number"},"stopping":{"type":"number"},"awaiting":{"type":"number"},"queued":{"type":"number"},"recentOutputs":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"snippet":{"type":"string"}},"required":["title","snippet"],"additionalProperties":true}}},"required":["drafts","stopping","awaiting","queued","recentOutputs"],"additionalProperties":true}},"required":["id","title","createdAt","nodes","edges","viewport"],"additionalProperties":true}}},"required":["version","id","title","nodes","edges","viewport","settings"],"additionalProperties":true},
+      },
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1163,"column":9},
     },
     'flowspace/save': {
       service: 'flowspace',
@@ -3665,13 +4214,13 @@ const $remote = createTypertRemoteInfo({
             mode: 'strict',
             typeSymbol: 'dsh-flowspace/types#FlowspaceDocument',
             create: dsh_flowspace_flowspace_save_parameter_0$schema,
-            jsonSchema: {"type":"object","properties":{"version":{"type":"number","const":1},"id":{"type":"string"},"title":{"type":"string"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"viewport":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"zoom":{"type":"number"}},"required":["x","y","zoom"],"additionalProperties":true},"settings":{"type":"object","properties":{"nativeChatTriggers":{"type":"boolean"},"reducedMotion":{"type":"boolean"}},"required":["nativeChatTriggers","reducedMotion"],"additionalProperties":true},"prefs":{"type":"object","properties":{"theme":{"type":"string","enum":["auto","dark","light"]},"wheel":{"type":"string","enum":["zoom","pan"]},"snap":{"type":"boolean"},"filter":{"type":"string","enum":["auto","running","3d","7d","all"]},"hiddenWorkspaces":{"type":"array","items":{"type":"string"}},"showBranches":{"type":"boolean"},"showWorktrees":{"type":"boolean"}},"required":[],"additionalProperties":true},"templates":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"revision":{"type":"number"},"builtin":{"type":"boolean"},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"w":{"type":"number"},"h":{"type":"number"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}}},"required":["id","title","description","revision","w","h","nodes","edges","ports"],"additionalProperties":true}},"snapshots":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"createdAt":{"type":"number"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"viewport":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"zoom":{"type":"number"}},"required":["x","y","zoom"],"additionalProperties":true},"summary":{"type":"object","properties":{"drafts":{"type":"number"},"stopping":{"type":"number"},"awaiting":{"type":"number"},"queued":{"type":"number"},"recentOutputs":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"snippet":{"type":"string"}},"required":["title","snippet"],"additionalProperties":true}}},"required":["drafts","stopping","awaiting","queued","recentOutputs"],"additionalProperties":true}},"required":["id","title","createdAt","nodes","edges","viewport"],"additionalProperties":true}}},"required":["version","id","title","nodes","edges","viewport","settings"],"additionalProperties":true},
+            jsonSchema: {"type":"object","properties":{"version":{"type":"number","const":1},"id":{"type":"string"},"title":{"type":"string"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"viewport":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"zoom":{"type":"number"}},"required":["x","y","zoom"],"additionalProperties":true},"settings":{"type":"object","properties":{"nativeChatTriggers":{"type":"boolean"},"reducedMotion":{"type":"boolean"}},"required":["nativeChatTriggers","reducedMotion"],"additionalProperties":true},"prefs":{"type":"object","properties":{"theme":{"type":"string","enum":["auto","dark","light"]},"wheel":{"type":"string","enum":["zoom","pan"]},"snap":{"type":"boolean"},"filter":{"type":"string","enum":["auto","running","3d","7d","all"]},"hiddenWorkspaces":{"type":"array","items":{"type":"string"}},"showBranches":{"type":"boolean"},"showWorktrees":{"type":"boolean"}},"required":[],"additionalProperties":true},"templates":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"revision":{"type":"number"},"builtin":{"type":"boolean"},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"w":{"type":"number"},"h":{"type":"number"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}}},"required":["id","title","description","revision","w","h","nodes","edges","ports"],"additionalProperties":true}},"snapshots":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"createdAt":{"type":"number"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"viewport":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"zoom":{"type":"number"}},"required":["x","y","zoom"],"additionalProperties":true},"summary":{"type":"object","properties":{"drafts":{"type":"number"},"stopping":{"type":"number"},"awaiting":{"type":"number"},"queued":{"type":"number"},"recentOutputs":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"snippet":{"type":"string"}},"required":["title","snippet"],"additionalProperties":true}}},"required":["drafts","stopping","awaiting","queued","recentOutputs"],"additionalProperties":true}},"required":["id","title","createdAt","nodes","edges","viewport"],"additionalProperties":true}}},"required":["version","id","title","nodes","edges","viewport","settings"],"additionalProperties":true},
           },
           strictCodec: {
             mode: 'strict',
             typeSymbol: 'dsh-flowspace/types#FlowspaceDocument',
             create: dsh_flowspace_flowspace_save_parameter_0_strict$schema,
-            jsonSchema: {"type":"object","properties":{"version":{"type":"number","const":1},"id":{"type":"string"},"title":{"type":"string"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":false}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":false},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":false}}},"required":["id","name","cards"],"additionalProperties":false}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":false},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":false}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":false}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":false}},"viewport":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"zoom":{"type":"number"}},"required":["x","y","zoom"],"additionalProperties":false},"settings":{"type":"object","properties":{"nativeChatTriggers":{"type":"boolean"},"reducedMotion":{"type":"boolean"}},"required":["nativeChatTriggers","reducedMotion"],"additionalProperties":false},"prefs":{"type":"object","properties":{"theme":{"type":"string","enum":["auto","dark","light"]},"wheel":{"type":"string","enum":["zoom","pan"]},"snap":{"type":"boolean"},"filter":{"type":"string","enum":["auto","running","3d","7d","all"]},"hiddenWorkspaces":{"type":"array","items":{"type":"string"}},"showBranches":{"type":"boolean"},"showWorktrees":{"type":"boolean"}},"required":[],"additionalProperties":false},"templates":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"revision":{"type":"number"},"builtin":{"type":"boolean"},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"w":{"type":"number"},"h":{"type":"number"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":false}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":false},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":false}}},"required":["id","name","cards"],"additionalProperties":false}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":false},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":false}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":false}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":false}},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":false}}},"required":["id","title","description","revision","w","h","nodes","edges","ports"],"additionalProperties":false}},"snapshots":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"createdAt":{"type":"number"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":false}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":false},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":false}}},"required":["id","name","cards"],"additionalProperties":false}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":false},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":false}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":false}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":false}},"viewport":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"zoom":{"type":"number"}},"required":["x","y","zoom"],"additionalProperties":false},"summary":{"type":"object","properties":{"drafts":{"type":"number"},"stopping":{"type":"number"},"awaiting":{"type":"number"},"queued":{"type":"number"},"recentOutputs":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"snippet":{"type":"string"}},"required":["title","snippet"],"additionalProperties":false}}},"required":["drafts","stopping","awaiting","queued","recentOutputs"],"additionalProperties":false}},"required":["id","title","createdAt","nodes","edges","viewport"],"additionalProperties":false}}},"required":["version","id","title","nodes","edges","viewport","settings"],"additionalProperties":false},
+            jsonSchema: {"type":"object","properties":{"version":{"type":"number","const":1},"id":{"type":"string"},"title":{"type":"string"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":false}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":false},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":false}}},"required":["id","name","cards"],"additionalProperties":false}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":false},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":false}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":false}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":false}},"viewport":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"zoom":{"type":"number"}},"required":["x","y","zoom"],"additionalProperties":false},"settings":{"type":"object","properties":{"nativeChatTriggers":{"type":"boolean"},"reducedMotion":{"type":"boolean"}},"required":["nativeChatTriggers","reducedMotion"],"additionalProperties":false},"prefs":{"type":"object","properties":{"theme":{"type":"string","enum":["auto","dark","light"]},"wheel":{"type":"string","enum":["zoom","pan"]},"snap":{"type":"boolean"},"filter":{"type":"string","enum":["auto","running","3d","7d","all"]},"hiddenWorkspaces":{"type":"array","items":{"type":"string"}},"showBranches":{"type":"boolean"},"showWorktrees":{"type":"boolean"}},"required":[],"additionalProperties":false},"templates":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"revision":{"type":"number"},"builtin":{"type":"boolean"},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"w":{"type":"number"},"h":{"type":"number"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":false}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":false},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":false}}},"required":["id","name","cards"],"additionalProperties":false}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":false},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":false}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":false}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":false}},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":false}}},"required":["id","title","description","revision","w","h","nodes","edges","ports"],"additionalProperties":false}},"snapshots":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"createdAt":{"type":"number"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":false}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":false},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":false}}},"required":["id","name","cards"],"additionalProperties":false}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":false},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":false}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":false}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":false}},"viewport":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"zoom":{"type":"number"}},"required":["x","y","zoom"],"additionalProperties":false},"summary":{"type":"object","properties":{"drafts":{"type":"number"},"stopping":{"type":"number"},"awaiting":{"type":"number"},"queued":{"type":"number"},"recentOutputs":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"snippet":{"type":"string"}},"required":["title","snippet"],"additionalProperties":false}}},"required":["drafts","stopping","awaiting","queued","recentOutputs"],"additionalProperties":false}},"required":["id","title","createdAt","nodes","edges","viewport"],"additionalProperties":false}}},"required":["version","id","title","nodes","edges","viewport","settings"],"additionalProperties":false},
           },
         },
       ],
@@ -3679,9 +4228,9 @@ const $remote = createTypertRemoteInfo({
         mode: 'strict',
         typeSymbol: 'dsh-flowspace/types#FlowspaceDocument',
         create: dsh_flowspace_flowspace_save_result$schema,
-        jsonSchema: {"type":"object","properties":{"version":{"type":"number","const":1},"id":{"type":"string"},"title":{"type":"string"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"viewport":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"zoom":{"type":"number"}},"required":["x","y","zoom"],"additionalProperties":true},"settings":{"type":"object","properties":{"nativeChatTriggers":{"type":"boolean"},"reducedMotion":{"type":"boolean"}},"required":["nativeChatTriggers","reducedMotion"],"additionalProperties":true},"prefs":{"type":"object","properties":{"theme":{"type":"string","enum":["auto","dark","light"]},"wheel":{"type":"string","enum":["zoom","pan"]},"snap":{"type":"boolean"},"filter":{"type":"string","enum":["auto","running","3d","7d","all"]},"hiddenWorkspaces":{"type":"array","items":{"type":"string"}},"showBranches":{"type":"boolean"},"showWorktrees":{"type":"boolean"}},"required":[],"additionalProperties":true},"templates":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"revision":{"type":"number"},"builtin":{"type":"boolean"},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"w":{"type":"number"},"h":{"type":"number"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}}},"required":["id","title","description","revision","w","h","nodes","edges","ports"],"additionalProperties":true}},"snapshots":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"createdAt":{"type":"number"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"viewport":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"zoom":{"type":"number"}},"required":["x","y","zoom"],"additionalProperties":true},"summary":{"type":"object","properties":{"drafts":{"type":"number"},"stopping":{"type":"number"},"awaiting":{"type":"number"},"queued":{"type":"number"},"recentOutputs":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"snippet":{"type":"string"}},"required":["title","snippet"],"additionalProperties":true}}},"required":["drafts","stopping","awaiting","queued","recentOutputs"],"additionalProperties":true}},"required":["id","title","createdAt","nodes","edges","viewport"],"additionalProperties":true}}},"required":["version","id","title","nodes","edges","viewport","settings"],"additionalProperties":true},
+        jsonSchema: {"type":"object","properties":{"version":{"type":"number","const":1},"id":{"type":"string"},"title":{"type":"string"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"viewport":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"zoom":{"type":"number"}},"required":["x","y","zoom"],"additionalProperties":true},"settings":{"type":"object","properties":{"nativeChatTriggers":{"type":"boolean"},"reducedMotion":{"type":"boolean"}},"required":["nativeChatTriggers","reducedMotion"],"additionalProperties":true},"prefs":{"type":"object","properties":{"theme":{"type":"string","enum":["auto","dark","light"]},"wheel":{"type":"string","enum":["zoom","pan"]},"snap":{"type":"boolean"},"filter":{"type":"string","enum":["auto","running","3d","7d","all"]},"hiddenWorkspaces":{"type":"array","items":{"type":"string"}},"showBranches":{"type":"boolean"},"showWorktrees":{"type":"boolean"}},"required":[],"additionalProperties":true},"templates":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"revision":{"type":"number"},"builtin":{"type":"boolean"},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"w":{"type":"number"},"h":{"type":"number"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}}},"required":["id","title","description","revision","w","h","nodes","edges","ports"],"additionalProperties":true}},"snapshots":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"createdAt":{"type":"number"},"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}},"viewport":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"zoom":{"type":"number"}},"required":["x","y","zoom"],"additionalProperties":true},"summary":{"type":"object","properties":{"drafts":{"type":"number"},"stopping":{"type":"number"},"awaiting":{"type":"number"},"queued":{"type":"number"},"recentOutputs":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"snippet":{"type":"string"}},"required":["title","snippet"],"additionalProperties":true}}},"required":["drafts","stopping","awaiting","queued","recentOutputs"],"additionalProperties":true}},"required":["id","title","createdAt","nodes","edges","viewport"],"additionalProperties":true}}},"required":["version","id","title","nodes","edges","viewport","settings"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":793,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1064,"column":9},
     },
     'flowspace/sessionChangeDiff': {
       service: 'flowspace',
@@ -3710,7 +4259,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_sessionChangeDiff_result$schema,
         jsonSchema: {"type":"object","properties":{"path":{"type":"string"},"display":{"type":"string"},"kind":{"type":"string","enum":["text","binary","oversized"]},"hunks":{"type":"array","items":{"type":"object","properties":{"oldStart":{"type":"number"},"oldLines":{"type":"number"},"newStart":{"type":"number"},"newLines":{"type":"number"},"lines":{"type":"array","items":{"type":"string"}}},"required":["oldStart","oldLines","newStart","newLines","lines"],"additionalProperties":true}},"formatted":{"type":"string"}},"required":["path","display","kind","hunks","formatted"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":995,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1538,"column":9},
     },
     'flowspace/sessionChanges': {
       service: 'flowspace',
@@ -3739,7 +4288,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_sessionChanges_result$schema,
         jsonSchema: {"type":"array","items":{"type":"object","properties":{"sessionId":{"type":"string"},"turn":{"type":"number"},"seq":{"type":"number"},"cwd":{"type":"string"},"total":{"type":"number"},"added":{"type":"number"},"deleted":{"type":"number"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"display":{"type":"string"},"added":{"type":"number"},"deleted":{"type":"number"},"binary":{"type":"boolean"},"oversized":{"type":"boolean"}},"required":["path","display","added","deleted"],"additionalProperties":true}}},"required":["sessionId","turn","seq","cwd","total","added","deleted","files"],"additionalProperties":true}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":983,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1525,"column":9},
     },
     'flowspace/sessions': {
       service: 'flowspace',
@@ -3752,7 +4301,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_sessions_result$schema,
         jsonSchema: {"type":"array","items":{"type":"object","properties":{"sessionId":{"type":"string"},"title":{"type":"string"},"cwd":{"type":"string"},"running":{"type":"boolean"},"updatedAt":{"type":"number"}},"required":["sessionId","title","running"],"additionalProperties":true}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":923,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1434,"column":9},
     },
     'flowspace/sessionTerminals': {
       service: 'flowspace',
@@ -3781,7 +4330,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_sessionTerminals_result$schema,
         jsonSchema: {"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"sessionId":{"type":"string"},"title":{"type":"string"},"cwd":{"type":"string"},"state":{"type":"string","enum":["running","exited","failed"]},"exitCode":{"type":"number"},"origin":{"type":"string","enum":["agent","user"]}},"required":["id","sessionId","title","cwd","state","exitCode","origin"],"additionalProperties":true}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1072,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1618,"column":3},
     },
     'flowspace/snapshot': {
       service: 'flowspace',
@@ -3794,7 +4343,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_snapshot_result$schema,
         jsonSchemaError: 'typert tool schema: selected dictionaries require string keys and unconstrained JSON values',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":780,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1047,"column":3},
     },
     'flowspace/start': {
       service: 'flowspace',
@@ -3807,13 +4356,13 @@ const $remote = createTypertRemoteInfo({
             mode: 'strict',
             typeSymbol: 'dsh-flowspace/types#StartRequest',
             create: dsh_flowspace_flowspace_start_parameter_0$schema,
-            jsonSchema: {"type":"object","properties":{"nodeIds":{"type":"array","items":{"type":"string"}},"kind":{"type":"string","enum":["group","global","single","selection"]},"excludeRootIds":{"type":"array","items":{"type":"string"}}},"required":["nodeIds","kind"],"additionalProperties":true},
+            jsonSchema: {"type":"object","properties":{"nodeIds":{"type":"array","items":{"type":"string"}},"kind":{"type":"string","enum":["group","global","single","selection","from-node","to-node"]},"excludeRootIds":{"type":"array","items":{"type":"string"}}},"required":["nodeIds","kind"],"additionalProperties":true},
           },
           strictCodec: {
             mode: 'strict',
             typeSymbol: 'dsh-flowspace/types#StartRequest',
             create: dsh_flowspace_flowspace_start_parameter_0_strict$schema,
-            jsonSchema: {"type":"object","properties":{"nodeIds":{"type":"array","items":{"type":"string"}},"kind":{"type":"string","enum":["group","global","single","selection"]},"excludeRootIds":{"type":"array","items":{"type":"string"}}},"required":["nodeIds","kind"],"additionalProperties":false},
+            jsonSchema: {"type":"object","properties":{"nodeIds":{"type":"array","items":{"type":"string"}},"kind":{"type":"string","enum":["group","global","single","selection","from-node","to-node"]},"excludeRootIds":{"type":"array","items":{"type":"string"}}},"required":["nodeIds","kind"],"additionalProperties":false},
           },
         },
       ],
@@ -3821,9 +4370,9 @@ const $remote = createTypertRemoteInfo({
         mode: 'strict',
         typeSymbol: 'dsh-flowspace/types#FlowspaceRun',
         create: dsh_flowspace_flowspace_start_result$schema,
-        jsonSchema: {"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"origin":{"type":"string","enum":["canvas","chat"]},"state":{"type":"string","enum":["paused","running","waiting","completed","cancelled","interrupted","error"]},"createdAt":{"type":"number"},"scope":{"type":"array","items":{"type":"string"}},"roots":{"type":"array","items":{"type":"string"}},"participants":{"type":"array","items":{"type":"string"}},"graph":{"type":"object","properties":{"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}}},"required":["nodes","edges"],"additionalProperties":true},"steps":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"nodeId":{"type":"string"},"requestId":{"type":"string"},"sessionId":{"type":"string"},"turn":{"type":"number"},"state":{"type":"string","enum":["running","completed","interrupted","error","queued","aborted"]},"iteration":{"type":"number"},"task":{"type":"string"},"sources":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["file","conclusion","session","fork","text"]},"sourceNodeId":{"type":"string"},"sourceSessionId":{"type":"string"},"seq":{"type":"number"},"title":{"type":"string"},"text":{"type":"string"},"capturedAt":{"type":"number"},"version":{"type":"string"}},"required":["id","kind","sourceNodeId","title","text","capturedAt"],"additionalProperties":true}},"createdAt":{"type":"number"},"endedAt":{"type":"number"},"endSeq":{"type":"number"},"output":{"type":"string"},"error":{"type":"string"}},"required":["id","nodeId","requestId","state","iteration","task","sources","createdAt"],"additionalProperties":true}},"tokens":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"edgeId":{"type":"string"},"stepId":{"type":"string"},"source":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["file","conclusion","session","fork","text"]},"sourceNodeId":{"type":"string"},"sourceSessionId":{"type":"string"},"seq":{"type":"number"},"title":{"type":"string"},"text":{"type":"string"},"capturedAt":{"type":"number"},"version":{"type":"string"}},"required":["id","kind","sourceNodeId","title","text","capturedAt"],"additionalProperties":true},"ready":{"type":"boolean"},"consumed":{"type":"boolean"},"boundary":{"type":"boolean"},"dismissed":{"type":"boolean"}},"required":["id","edgeId","stepId","source","ready","consumed","boundary","dismissed"],"additionalProperties":true}},"notes":{"type":"array","items":{"type":"string"}},"deliverables":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"nodeId":{"type":"string"},"sessionId":{"type":"string"},"turn":{"type":"number"},"seq":{"type":"number"},"time":{"type":"number"},"path":{"type":"string"},"description":{"type":"string"}},"required":["id","nodeId","sessionId","turn","seq","time","path"],"additionalProperties":true}}},"required":["id","title","origin","state","createdAt","scope","roots","participants","graph","steps","tokens","notes"],"additionalProperties":true},
+        jsonSchema: {"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"origin":{"type":"string","enum":["canvas","chat"]},"state":{"type":"string","enum":["paused","running","waiting","completed","cancelled","interrupted","error"]},"createdAt":{"type":"number"},"scope":{"type":"array","items":{"type":"string"}},"roots":{"type":"array","items":{"type":"string"}},"participants":{"type":"array","items":{"type":"string"}},"graph":{"type":"object","properties":{"nodes":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["agent","note","file","display","group","board","detail","git","changes","terminal"]},"title":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"expanded":{"type":"boolean"},"parentId":{"type":"string"},"sessionId":{"type":"string"},"workspaceId":{"type":"string"},"cwd":{"type":"string"},"branch":{"type":"string"},"worktreePath":{"type":"string"},"agentPreset":{"type":"string"},"planMode":{"type":"boolean"},"customTitle":{"type":"boolean"},"subAgentsExpanded":{"type":"boolean"},"task":{"type":"string"},"draft":{"type":"string"},"continuationPrompt":{"type":"string","description":"Independent prompt sent when triggered by upstream completion (M02)."},"continuationCollapsed":{"type":"boolean"},"nativeTrigger":{"type":"string","enum":["inherit","enabled","disabled"]},"participation":{"type":"string","enum":["global","manual","paused","bypassed"]},"text":{"type":"string"},"sourceNodeId":{"type":"string"},"sourceSeq":{"type":"number"},"fixed":{"type":"boolean"},"collapsed":{"type":"boolean"},"lastSubmittedTask":{"type":"string"},"tab":{"type":"string","enum":["task","conversation","execution"],"description":"Optional rich canvas UI metadata persisted in DSH storageDomain"},"pinned":{"type":"boolean"},"roleLabel":{"type":"string"},"rerun":{"type":"string","enum":["change","update","always"]},"color":{"type":"string","enum":["violet","teal","blue","amber"]},"ports":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"direction":{"type":"string","enum":["in","out"]},"name":{"type":"string"},"nodes":{"type":"array","items":{"type":"string"}},"hidden":{"type":"boolean"}},"required":["id","kind","direction","name","nodes","hidden"],"additionalProperties":true}},"templateId":{"type":"string"},"templateRevision":{"type":"number"},"templateSlotId":{"type":"string"},"titleKey":{"type":"string"},"window":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"w":{"type":"number"},"h":{"type":"number"},"snap":{"type":"string","enum":["left","right","max"]},"z":{"type":"number"}},"required":["x","y","w","h"],"additionalProperties":true},"columns":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"cards":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"],"additionalProperties":true}}},"required":["id","name","cards"],"additionalProperties":true}},"items":{"type":"array","items":{"type":"string"}},"selectedItems":{"type":"array","items":{"type":"string"}},"nudge":{"type":"object","properties":{"by":{"type":"string"},"origY":{"type":"number"},"origH":{"type":"number"}},"required":["by"],"additionalProperties":true},"gitTab":{"type":"string","enum":["changes","history","branches"],"description":"Tool node bindings (Git / Changes / Terminal)"},"gitCommitOid":{"type":"string"},"changesSessionId":{"type":"string"},"changesSeq":{"type":"number"},"changesTurn":{"type":"number"},"terminalSessionId":{"type":"string"},"terminalId":{"type":"string"}},"required":["id","kind","title","x","y","width","height","expanded","task","draft","nativeTrigger","participation","text","fixed","collapsed"],"additionalProperties":true}},"edges":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"source":{"type":"string"},"target":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation"]},"mode":{"type":"string","enum":["conclusion","session","fork"]},"trigger":{"type":"string","enum":["off","auto","confirm"]},"maxRounds":{"type":"number"},"always":{"type":"boolean"},"sentVersion":{"type":"string"},"currentVersion":{"type":"string"},"sourceItemKey":{"type":"string"},"snapshotTitle":{"type":"string"},"snapshotText":{"type":"string"},"originMode":{"type":"string","enum":["conclusion","session","fork"]},"waypoints":{"type":"array","items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":true}},"placedCapsules":{"type":"array","items":{"type":"string"}}},"required":["id","source","target","kind","mode","trigger","maxRounds","always"],"additionalProperties":true}}},"required":["nodes","edges"],"additionalProperties":true},"steps":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"nodeId":{"type":"string"},"requestId":{"type":"string"},"sessionId":{"type":"string"},"turn":{"type":"number"},"state":{"type":"string","enum":["running","completed","interrupted","error","queued","aborted"]},"iteration":{"type":"number"},"task":{"type":"string"},"sources":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["file","conclusion","session","fork","text"]},"referenceKind":{"type":"string","enum":["note","file","display","board","git","changes","terminal"]},"missing":{"type":"boolean"},"sourceNodeId":{"type":"string"},"sourceSessionId":{"type":"string"},"seq":{"type":"number"},"title":{"type":"string"},"text":{"type":"string"},"capturedAt":{"type":"number"},"version":{"type":"string"}},"required":["id","kind","sourceNodeId","title","text","capturedAt"],"additionalProperties":true}},"createdAt":{"type":"number"},"endedAt":{"type":"number"},"endSeq":{"type":"number"},"output":{"type":"string"},"error":{"type":"string"},"telemetry":{"type":"object","properties":{"stepCount":{"type":"number"},"inputTokens":{"type":"number"},"outputTokens":{"type":"number"},"durationMs":{"type":"number"}},"required":["stepCount","inputTokens","outputTokens"],"additionalProperties":true}},"required":["id","nodeId","requestId","state","iteration","task","sources","createdAt"],"additionalProperties":true}},"tokens":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"edgeId":{"type":"string"},"stepId":{"type":"string"},"source":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["file","conclusion","session","fork","text"]},"referenceKind":{"type":"string","enum":["note","file","display","board","git","changes","terminal"]},"missing":{"type":"boolean"},"sourceNodeId":{"type":"string"},"sourceSessionId":{"type":"string"},"seq":{"type":"number"},"title":{"type":"string"},"text":{"type":"string"},"capturedAt":{"type":"number"},"version":{"type":"string"}},"required":["id","kind","sourceNodeId","title","text","capturedAt"],"additionalProperties":true},"ready":{"type":"boolean"},"consumed":{"type":"boolean"},"boundary":{"type":"boolean"},"dismissed":{"type":"boolean"},"loopCapReached":{"type":"boolean"},"planGate":{"type":"boolean"}},"required":["id","edgeId","stepId","source","ready","consumed","boundary","dismissed"],"additionalProperties":true}},"notes":{"type":"array","items":{"type":"string"}},"deliverables":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"nodeId":{"type":"string"},"sessionId":{"type":"string"},"turn":{"type":"number"},"seq":{"type":"number"},"time":{"type":"number"},"path":{"type":"string"},"description":{"type":"string"}},"required":["id","nodeId","sessionId","turn","seq","time","path"],"additionalProperties":true}}},"required":["id","title","origin","state","createdAt","scope","roots","participants","graph","steps","tokens","notes"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":840,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1132,"column":3},
     },
     'flowspace/stopNode': {
       service: 'flowspace',
@@ -3852,7 +4401,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_stopNode_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1242,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1830,"column":3},
     },
     'flowspace/workspaceFiles': {
       service: 'flowspace',
@@ -3881,7 +4430,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_workspaceFiles_result$schema,
         jsonSchema: {"type":"array","items":{"type":"string"}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1165,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1712,"column":9},
     },
     'flowspace/workspaces': {
       service: 'flowspace',
@@ -3894,7 +4443,7 @@ const $remote = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_workspaces_result$schema,
         jsonSchema: {"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"path":{"type":"string"}},"required":["id","name","path"],"additionalProperties":true}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":944,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1456,"column":3},
     },
   },
 }, z)
@@ -3953,6 +4502,11 @@ export const TYPERT = {
           },
           {
             "kind": "method",
+            "name": "extendLoop",
+            "signature": "@Remote extendLoop(request: ExtendLoopRequest): Promise<void>"
+          },
+          {
+            "kind": "method",
             "name": "command",
             "signature": "@Remote command(request: RunCommand): Promise<void>"
           },
@@ -3960,6 +4514,20 @@ export const TYPERT = {
             "kind": "method",
             "name": "release",
             "signature": "@Remote release(request: ReleaseRequest): Promise<void>"
+          },
+          {
+            "kind": "method",
+            "name": "restoreSnapshot",
+            "signature": "@Remote async restoreSnapshot( request: RestoreSnapshotRequest, ): Promise<FlowspaceDocument>",
+            "summary": "Atomic snapshot restore (`R10`): safely stops active runs before restoring document state.",
+            "jsDoc": "/** Atomic snapshot restore (`R10`): safely stops active runs before restoring document state. */"
+          },
+          {
+            "kind": "method",
+            "name": "inspectEdgePayload",
+            "signature": "@Remote async inspectEdgePayload( request: InspectEdgeRequest, ): Promise<EdgePayloadPreview>",
+            "summary": "Read-only Glass-Box X-Ray wire & capsule payload inspector (zero mutation to `sentVersion`).",
+            "jsDoc": "/** Read-only Glass-Box X-Ray wire & capsule payload inspector (zero mutation to `sentVersion`). */"
           },
           {
             "kind": "method",
@@ -4014,7 +4582,7 @@ export const TYPERT = {
           {
             "kind": "method",
             "name": "sessionTerminals",
-            "signature": "@Remote sessionTerminals( request: SessionTerminalsRequest, ): SessionTerminalBrief[]"
+            "signature": "@Remote sessionTerminals(request: SessionTerminalsRequest): SessionTerminalBrief[]"
           },
           {
             "kind": "method",
@@ -4034,7 +4602,16 @@ export const TYPERT = {
           {
             "kind": "method",
             "name": "readWorkspaceFile",
-            "signature": "@Remote async readWorkspaceFile( request: FilePreviewRequest, ): Promise<WorkspaceFilePreview>"
+            "signature": "@Remote async readWorkspaceFile( request: FilePreviewRequest, ): Promise<WorkspaceFilePreview>",
+            "summary": "Bounded file handle preview: reads at most 64 KiB instead of loading whole files into RAM.",
+            "jsDoc": "/** Bounded file handle preview: reads at most 64 KiB instead of loading whole files into RAM. */"
+          },
+          {
+            "kind": "method",
+            "name": "resolveWorkspaceRoot",
+            "signature": "public resolveWorkspaceRoot(cwd?: string): string",
+            "summary": "Confine `cwd` strictly to registered DSH workspaces, `<repo>-worktrees/*` managed directories, or verified Git worktrees discovered from those workspaces (no arbitrary `../*` sibling folders).",
+            "jsDoc": "/**\n * Confine `cwd` strictly to registered DSH workspaces, `<repo>-worktrees/*` managed directories,\n * or verified Git worktrees discovered from those workspaces (no arbitrary `../*` sibling folders).\n */"
           },
           {
             "kind": "method",
@@ -4083,7 +4660,7 @@ export const TYPERT = {
           },
           {
             "name": "ContextSnapshot",
-            "declaration": "export interface ContextSnapshot {\n    id: string;\n    kind: \"conclusion\" | \"session\" | \"fork\" | \"text\" | \"file\";\n    sourceNodeId: string;\n    sourceSessionId?: string;\n    seq?: number;\n    title: string;\n    text: string;\n    capturedAt: number;\n    version?: string;\n}"
+            "declaration": "export interface ContextSnapshot {\n    id: string;\n    kind: \"conclusion\" | \"session\" | \"fork\" | \"text\" | \"file\";\n    referenceKind?: \"file\" | \"changes\" | \"git\" | \"terminal\" | \"display\" | \"note\" | \"board\";\n    missing?: boolean;\n    sourceNodeId: string;\n    sourceSessionId?: string;\n    seq?: number;\n    title: string;\n    text: string;\n    capturedAt: number;\n    version?: string;\n}"
           },
           {
             "name": "DiffHunkView",
@@ -4092,6 +4669,14 @@ export const TYPERT = {
           {
             "name": "DraftRequest",
             "declaration": "export interface DraftRequest {\n    nodeId: string;\n    draft: string;\n}"
+          },
+          {
+            "name": "EdgePayloadPreview",
+            "declaration": "export interface EdgePayloadPreview {\n    edgeId: string;\n    kind: \"reference\" | \"continuation\";\n    mode: string;\n    sourceTitle: string;\n    targetTitle: string;\n    sessionId?: string;\n    seq?: number;\n    byteLength: number;\n    willSpill: boolean;\n    freshness: \"pending\" | \"sent\" | \"updated\" | \"always\" | \"live\";\n    summary: string;\n    content: string;\n}"
+          },
+          {
+            "name": "ExtendLoopRequest",
+            "declaration": "export interface ExtendLoopRequest {\n    runId: string;\n    edgeId?: string;\n    nodeId?: string;\n    extraRounds?: number;\n}"
           },
           {
             "name": "FilePreviewRequest",
@@ -4103,7 +4688,7 @@ export const TYPERT = {
           },
           {
             "name": "FlowNode",
-            "declaration": "export interface FlowNode {\n    id: string;\n    kind: NodeKind;\n    title: string;\n    x: number;\n    y: number;\n    width: number;\n    height: number;\n    expanded: boolean;\n    parentId?: string;\n    sessionId?: string;\n    workspaceId?: string;\n    cwd?: string;\n    branch?: string;\n    worktreePath?: string;\n    agentPreset?: string;\n    planMode?: boolean;\n    customTitle?: boolean;\n    subAgentsExpanded?: boolean;\n    task: string;\n    draft: string;\n    continuationPrompt?: string;\n    continuationCollapsed?: boolean;\n    nativeTrigger: NativeTrigger;\n    participation: \"global\" | \"manual\" | \"paused\";\n    text: string;\n    sourceNodeId?: string;\n    sourceSeq?: number;\n    fixed: boolean;\n    collapsed: boolean;\n    lastSubmittedTask?: string;\n    tab?: AgentTab;\n    pinned?: boolean;\n    roleLabel?: string;\n    rerun?: RerunRule;\n    color?: GroupColor;\n    ports?: GroupPort[];\n    templateId?: string;\n    templateRevision?: number;\n    templateSlotId?: string;\n    titleKey?: string;\n    window?: WindowState | null;\n    columns?: BoardColumn[];\n    items?: string[];\n    selectedItems?: string[];\n    nudge?: NodeNudge;\n    gitTab?: GitPanelTab;\n    gitCommitOid?: string;\n    changesSessionId?: string;\n    changesSeq?: number;\n    changesTurn?: number;\n    terminalSessionId?: string;\n    terminalId?: string;\n}"
+            "declaration": "export interface FlowNode {\n    id: string;\n    kind: NodeKind;\n    title: string;\n    x: number;\n    y: number;\n    width: number;\n    height: number;\n    expanded: boolean;\n    parentId?: string;\n    sessionId?: string;\n    workspaceId?: string;\n    cwd?: string;\n    branch?: string;\n    worktreePath?: string;\n    agentPreset?: string;\n    planMode?: boolean;\n    customTitle?: boolean;\n    subAgentsExpanded?: boolean;\n    task: string;\n    draft: string;\n    continuationPrompt?: string;\n    continuationCollapsed?: boolean;\n    nativeTrigger: NativeTrigger;\n    participation: ParticipationMode;\n    text: string;\n    sourceNodeId?: string;\n    sourceSeq?: number;\n    fixed: boolean;\n    collapsed: boolean;\n    lastSubmittedTask?: string;\n    tab?: AgentTab;\n    pinned?: boolean;\n    roleLabel?: string;\n    rerun?: RerunRule;\n    color?: GroupColor;\n    ports?: GroupPort[];\n    templateId?: string;\n    templateRevision?: number;\n    templateSlotId?: string;\n    titleKey?: string;\n    window?: WindowState | null;\n    columns?: BoardColumn[];\n    items?: string[];\n    selectedItems?: string[];\n    nudge?: NodeNudge;\n    gitTab?: GitPanelTab;\n    gitCommitOid?: string;\n    changesSessionId?: string;\n    changesSeq?: number;\n    changesTurn?: number;\n    terminalSessionId?: string;\n    terminalId?: string;\n}"
           },
           {
             "name": "FlowspaceDocument",
@@ -4119,11 +4704,11 @@ export const TYPERT = {
           },
           {
             "name": "FlowToken",
-            "declaration": "export interface FlowToken {\n    id: string;\n    edgeId: string;\n    stepId: string;\n    source: ContextSnapshot;\n    ready: boolean;\n    consumed: boolean;\n    boundary: boolean;\n    dismissed: boolean;\n}"
+            "declaration": "export interface FlowToken {\n    id: string;\n    edgeId: string;\n    stepId: string;\n    source: ContextSnapshot;\n    ready: boolean;\n    consumed: boolean;\n    boundary: boolean;\n    dismissed: boolean;\n    loopCapReached?: boolean;\n    planGate?: boolean;\n}"
           },
           {
             "name": "GitActionRequest",
-            "declaration": "export interface GitActionRequest {\n    cwd?: string;\n    expectedRevision?: string;\n    action: \"stage\" | \"unstage\" | \"stageAll\" | \"unstageAll\" | \"discard\" | \"commit\" | \"createBranch\" | \"checkoutBranch\" | \"fetch\" | \"pull\" | \"push\" | \"createWorktree\" | \"removeWorktree\";\n    paths?: string[];\n    message?: string;\n    branch?: string;\n    baseRef?: string;\n    worktreePath?: string;\n}"
+            "declaration": "export interface GitActionRequest {\n    cwd?: string;\n    expectedRevision?: string;\n    action: \"init\" | \"stage\" | \"unstage\" | \"stageAll\" | \"unstageAll\" | \"discard\" | \"commit\" | \"createBranch\" | \"checkoutBranch\" | \"fetch\" | \"pull\" | \"push\" | \"createWorktree\" | \"removeWorktree\";\n    paths?: string[];\n    message?: string;\n    branch?: string;\n    baseRef?: string;\n    worktreePath?: string;\n}"
           },
           {
             "name": "GitBranchInfo",
@@ -4170,6 +4755,10 @@ export const TYPERT = {
             "declaration": "export interface GroupPort {\n    id: string;\n    kind: \"reference\" | \"continuation\";\n    direction: \"in\" | \"out\";\n    name: string;\n    nodes: string[];\n    hidden: boolean;\n}"
           },
           {
+            "name": "InspectEdgeRequest",
+            "declaration": "export interface InspectEdgeRequest {\n    edgeId: string;\n    runId?: string;\n}"
+          },
+          {
             "name": "LaunchPlan",
             "declaration": "export interface LaunchPlan {\n    roots: string[];\n    later: string[];\n    confirmation: string[];\n    skipped: { nodeId: string; reason: string; }[];\n}"
           },
@@ -4179,7 +4768,7 @@ export const TYPERT = {
           },
           {
             "name": "NativeAgentMessage",
-            "declaration": "export interface NativeAgentMessage {\n    id: string;\n    fromSessionId: string;\n    toSessionId: string;\n    kind: \"agent-message\" | \"subagent-settled\";\n    text: string;\n    summary?: string;\n    seq: number;\n    time: number;\n}"
+            "declaration": "export interface NativeAgentMessage {\n    id: string;\n    fromSessionId: string;\n    toSessionId: string;\n    kind: \"agent-message\" | \"subagent-settled\" | \"team-message\";\n    text: string;\n    summary?: string;\n    seq: number;\n    time: number;\n}"
           },
           {
             "name": "NativeTrigger",
@@ -4192,6 +4781,10 @@ export const TYPERT = {
           {
             "name": "NodeNudge",
             "declaration": "export interface NodeNudge {\n    by: string;\n    origY?: number;\n    origH?: number;\n}"
+          },
+          {
+            "name": "ParticipationMode",
+            "declaration": "export type ParticipationMode = \"global\" | \"manual\" | \"paused\" | \"bypassed\";"
           },
           {
             "name": "PresentedDeliverable",
@@ -4210,12 +4803,16 @@ export const TYPERT = {
             "declaration": "export type RerunRule = \"change\" | \"update\" | \"always\";"
           },
           {
+            "name": "RestoreSnapshotRequest",
+            "declaration": "export interface RestoreSnapshotRequest {\n    snapshotId: string;\n}"
+          },
+          {
             "name": "RunCommand",
             "declaration": "export interface RunCommand {\n    runId: string;\n    action: \"pause\" | \"resume\" | \"cancel\";\n}"
           },
           {
             "name": "RunStep",
-            "declaration": "export interface RunStep {\n    id: string;\n    nodeId: string;\n    requestId: string;\n    sessionId?: string;\n    turn?: number;\n    state: StepState;\n    iteration: number;\n    task: string;\n    sources: ContextSnapshot[];\n    createdAt: number;\n    endedAt?: number;\n    endSeq?: number;\n    output?: string;\n    error?: string;\n}"
+            "declaration": "export interface RunStep {\n    id: string;\n    nodeId: string;\n    requestId: string;\n    sessionId?: string;\n    turn?: number;\n    state: StepState;\n    iteration: number;\n    task: string;\n    sources: ContextSnapshot[];\n    createdAt: number;\n    endedAt?: number;\n    endSeq?: number;\n    output?: string;\n    error?: string;\n    telemetry?: StepTelemetry;\n}"
           },
           {
             "name": "SessionBrief",
@@ -4255,11 +4852,15 @@ export const TYPERT = {
           },
           {
             "name": "StartRequest",
-            "declaration": "export interface StartRequest {\n    nodeIds: string[];\n    kind: \"single\" | \"selection\" | \"group\" | \"global\";\n    excludeRootIds?: string[];\n}"
+            "declaration": "export interface StartRequest {\n    nodeIds: string[];\n    kind: \"single\" | \"selection\" | \"group\" | \"global\" | \"from-node\" | \"to-node\";\n    excludeRootIds?: string[];\n}"
           },
           {
             "name": "StepState",
             "declaration": "export type StepState = \"queued\" | \"running\" | \"completed\" | \"error\" | \"aborted\" | \"interrupted\";"
+          },
+          {
+            "name": "StepTelemetry",
+            "declaration": "export interface StepTelemetry {\n    stepCount: number;\n    inputTokens: number;\n    outputTokens: number;\n    durationMs?: number;\n}"
           },
           {
             "name": "SubagentBrief",

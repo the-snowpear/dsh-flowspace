@@ -312,6 +312,20 @@
 .fs-root .edge-tag .edge-release:not(:disabled):hover {
   filter: brightness(1.08);
 }
+/* X-Ray payload peek: revealed on hover / selection so idle wires stay quiet */
+.fs-root .edge-tag > button.edge-xray {
+  display: none;
+  padding: 0 5px;
+  border-left: 1px solid var(--border-strong);
+  border-radius: 0 var(--r-full) var(--r-full) 0;
+  color: var(--text-faint);
+}
+.fs-root .edge-tag:is(:hover, :focus-within, .selected) > button.edge-xray {
+  display: flex;
+}
+.fs-root .edge-tag > button.edge-xray:hover {
+  color: var(--accent);
+}
 
 .fs-root .exchange-tag {
   border-color: color-mix(in oklab, var(--m-f) 34%, var(--border-strong));

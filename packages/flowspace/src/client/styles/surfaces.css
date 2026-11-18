@@ -1381,6 +1381,22 @@
   border-bottom: 1px solid var(--border);
   font-size: 12px;
 }
+.fs-root .shortcut-section + .shortcut-section {
+  margin-top: 14px;
+}
+.fs-root .shortcut-section h3 {
+  margin: 0 0 2px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+@media (max-width: 560px) {
+  .fs-root .shortcut-list {
+    grid-template-columns: 1fr;
+  }
+}
 .fs-root .help-legend {
   display: grid;
   grid-template-columns: auto 1fr;
