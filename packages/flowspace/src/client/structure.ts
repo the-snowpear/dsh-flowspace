@@ -4,7 +4,7 @@ import type {
   WorkspaceBrief,
   WorkspaceStructureBrief,
 } from "../types.ts";
-import { nodeBox, type Box } from "./geometry.ts";
+import { bounds, nodeBox, type Box } from "./geometry.ts";
 
 export type StructureKind = "project" | "branch" | "worktree" | "subagent";
 
@@ -135,6 +135,7 @@ export function buildDerivedStructure(opts: {
   showBranches: boolean;
   showWorktrees: boolean;
   visibleNodes: FlowNode[];
+  visibleGroupBoxes?: Box[];
   lod: boolean;
   keepExpandedIds: Set<string>;
   subagents: SubagentBrief[];
@@ -152,9 +153,12 @@ export function buildDerivedStructure(opts: {
   }
 
   const agentNodes = opts.visibleNodes.filter((n) => n.kind === "agent");
-  const allBoxes = opts.visibleNodes.map((n) =>
-    nodeBox(n, opts.lod, opts.keepExpandedIds.has(n.id)),
-  );
+  const allBoxes = [
+    ...opts.visibleNodes.map((n) =>
+      nodeBox(n, opts.lod, opts.keepExpandedIds.has(n.id)),
+    ),
+    ...(opts.visibleGroupBoxes ?? []),
+  ];
   const anchorRightX = allBoxes.length
     ? Math.min(...allBoxes.map((b) => b.x)) - 96
     : -80;
@@ -346,4 +350,24 @@ export function buildDerivedStructure(opts: {
   }
 
   return { cards, links };
+}
+
+/**
+ * Returns the bounding box of derived structure cards, or `null` when none are shown.
+ */
+export function structureBounds(cards: DerivedStructureCard[]): Box | null {
+  if (!cards.length) return null;
+  return bounds(cards.map((c) => c.box));
+}
+
+/**
+ * Combines editable canvas boxes with visible derived structure cards so
+ * full-canvas Fit View (`Shift+F`) and Minimap never clip Project/Branch/Worktree tiers.
+ */
+export function includeStructureInBounds(
+  canvasBoxes: Box[],
+  structureCards: DerivedStructureCard[],
+): Box[] {
+  if (!structureCards.length) return canvasBoxes;
+  return [...canvasBoxes, ...structureCards.map((c) => c.box)];
 }

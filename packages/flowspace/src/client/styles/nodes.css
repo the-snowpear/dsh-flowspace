@@ -25,17 +25,20 @@
     opacity var(--dur) var(--ease);
 }
 .fs-root .node:hover {
-  border-color: color-mix(in srgb, var(--kc) 55%, var(--border-strong));
+  border-color: color-mix(in oklab, var(--kc) 55%, var(--border-strong));
   box-shadow:
     0 2px 6px rgba(15, 18, 25, 0.06),
     0 16px 34px -16px var(--shadow);
+}
+.fs-root .fs-world:not(.connecting) .node:is(:hover, :focus-within) {
+  z-index: 5;
 }
 .fs-root .node.selected {
   z-index: 4;
   border-color: var(--accent);
   box-shadow:
     0 0 0 3px var(--accent-soft),
-    0 18px 40px -18px color-mix(in srgb, var(--accent) calc(55% * var(--glow)), transparent);
+    0 18px 40px -18px color-mix(in oklab, var(--accent) calc(55% * var(--glow)), transparent);
 }
 .fs-root .node:focus {
   outline: none;
@@ -71,17 +74,20 @@
 }
 
 .fs-root .node-agent {
-  --kc: var(--text-3);
+  --kc: var(--k-agent);
 }
 .fs-root .node.status-draft {
   --kc: var(--accent);
   border-style: dashed;
   border-color: var(--accent-border);
 }
-.fs-root .node.status-running,
+.fs-root .node.status-running {
+  --kc: var(--running);
+}
 .fs-root .node.status-completed,
 .fs-root .node.status-done {
   --kc: var(--green);
+  border-color: color-mix(in oklab, var(--green) 36%, var(--border-strong));
 }
 .fs-root .node.status-waiting,
 .fs-root .node.status-input,
@@ -106,17 +112,68 @@
 .fs-root .node-detail {
   --kc: var(--k-detail);
 }
+.fs-root .node-git {
+  --kc: var(--k-git);
+}
+.fs-root .node-changes {
+  --kc: var(--k-changes);
+}
+.fs-root .node-terminal {
+  --kc: var(--k-terminal);
+}
 .fs-root .node-note {
   --kc: var(--k-note);
   background: var(--note-bg);
   border-color: var(--note-border);
 }
 
+/* Muted (paused) & Bypassed (bypassed) Participation Treatments */
+.fs-root .node:is(.is-muted, .participation-paused, [data-participation="paused"]) {
+  opacity: 0.68;
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--amber) 45%, var(--border-strong));
+  filter: saturate(0.75);
+}
+.fs-root .node:is(.is-bypassed, .participation-bypassed, [data-participation="bypassed"]) {
+  --kc: var(--violet);
+  opacity: 0.66;
+  border-style: dashed;
+  border-color: var(--violet-border);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 10px,
+    color-mix(in oklab, var(--violet) 7%, transparent) 10px 20px
+  );
+}
+.fs-root .node-participation-badge,
+.fs-root .node-bypass-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 19px;
+  padding: 0 7px;
+  border-radius: var(--r-full);
+  font: 600 10px/1 var(--font-mono);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--amber);
+  background: var(--amber-soft);
+  border: 1px solid var(--amber-border);
+  flex: none;
+}
+.fs-root .node-bypass-badge,
+.fs-root .node-participation-badge.is-bypassed,
+.fs-root .node:is(.is-bypassed, .participation-bypassed, [data-participation="bypassed"]) .node-participation-badge {
+  color: var(--violet);
+  background: var(--violet-soft);
+  border-color: var(--violet-border);
+}
+
 /* Running conic beam & Waiting breathing aura */
 .fs-root .node.status-running {
   border-style: solid;
-  border-color: color-mix(in srgb, var(--green) 45%, var(--border-strong));
-  box-shadow: 0 0 34px -10px color-mix(in srgb, var(--green) calc(60% * var(--glow)), transparent);
+  border-color: color-mix(in oklab, var(--running) 50%, var(--border-strong));
+  box-shadow: 0 0 34px -10px color-mix(in oklab, var(--running) calc(60% * var(--glow)), transparent);
 }
 .fs-root .node.status-running::before {
   content: "";
@@ -128,9 +185,9 @@
   background: conic-gradient(
     from var(--beam),
     transparent 0 58%,
-    color-mix(in srgb, var(--green) 60%, transparent) 76%,
-    var(--green) 90%,
-    color-mix(in srgb, var(--green) 40%, #fff) 96%,
+    color-mix(in oklab, var(--running) 62%, transparent) 76%,
+    var(--running) 90%,
+    color-mix(in oklab, var(--running) 42%, #fff) 96%,
     transparent 100%
   );
   -webkit-mask:
@@ -177,7 +234,7 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 0 8px 0 11px;
+  padding: 0 11px;
   flex: none;
   border-bottom: 1px solid var(--border);
   cursor: grab;
@@ -249,12 +306,14 @@
 .fs-root .node-actions {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 2px;
   flex: none;
+  position: relative;
+  z-index: 8;
 }
 .fs-root .node-actions .icon-button {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border-radius: 6px;
 }
 .fs-root .node-actions .ic {
@@ -287,8 +346,9 @@
 }
 .fs-root .node.compact .node-actions {
   position: absolute;
-  right: 6px;
-  top: 9px;
+  right: 12px;
+  top: 8px;
+  z-index: 8;
   padding-left: 16px;
   background: linear-gradient(90deg, transparent, var(--surface) 14px);
   opacity: 0;
@@ -655,7 +715,7 @@
   height: 11px;
 }
 
-/* 4-State Context Reference Capsules */
+/* Unified 4-State Context Reference Capsules */
 .fs-root .capsule {
   height: 24px;
   display: inline-flex;
@@ -663,23 +723,23 @@
   gap: 5px;
   max-width: 100%;
   padding: 0 9px 0 7px;
-  border: 1px solid var(--accent-border);
+  border: 1px solid var(--cap-pending-border);
   border-radius: var(--r-full);
   color: var(--text);
   font-size: 11.5px;
-  background: var(--accent-softer);
+  background: var(--cap-pending-bg);
   cursor: grab;
   animation: cv-mark-in var(--dur) var(--ease-spring) backwards;
 }
 .fs-root .capsule:hover {
-  background: var(--accent-soft);
-  border-color: var(--accent);
+  background: color-mix(in oklab, var(--cap-pending) 22%, transparent);
+  border-color: var(--cap-pending);
   translate: 0 -1px;
 }
 .fs-root .capsule .ic {
   width: 12px;
   height: 12px;
-  color: var(--accent);
+  color: var(--cap-pending);
 }
 .fs-root .capsule span {
   overflow: hidden;
@@ -688,26 +748,44 @@
   max-width: 145px;
 }
 .fs-root .capsule-sent {
-  background: transparent;
-  color: var(--text-faint);
-  border-color: var(--border-strong);
-  border-style: dashed;
+  background: var(--cap-sent-bg);
+  color: var(--cap-sent);
+  border-color: var(--cap-sent-border);
+  border-style: solid;
+  opacity: 0.78;
+}
+.fs-root .capsule-sent:hover {
+  background: var(--hover);
+  border-color: var(--border-float);
+  opacity: 1;
 }
 .fs-root .capsule-sent .ic {
   color: var(--glyph);
 }
 .fs-root .capsule-updated {
-  color: var(--green);
-  background: var(--green-soft);
-  border-color: var(--green);
+  color: var(--text);
+  background: var(--cap-updated-bg);
+  border-color: var(--cap-updated-border);
+}
+.fs-root .capsule-updated:hover {
+  background: color-mix(in oklab, var(--cap-updated) 22%, transparent);
+  border-color: var(--cap-updated);
 }
 .fs-root .capsule-updated .ic {
-  color: var(--green);
+  color: var(--cap-updated);
 }
 .fs-root .capsule-always {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  box-shadow: 0 0 0 1px var(--accent-border);
+  color: var(--text);
+  border-color: var(--cap-always-border);
+  background: var(--cap-always-bg);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--cap-always) 24%, transparent);
+}
+.fs-root .capsule-always:hover {
+  background: color-mix(in oklab, var(--cap-always) 22%, transparent);
+  border-color: var(--cap-always);
+}
+.fs-root .capsule-always .ic {
+  color: var(--cap-always);
 }
 
 .fs-root .agent-footer {
@@ -795,10 +873,10 @@
   border-radius: 3px;
   background: linear-gradient(
     90deg,
-    var(--green),
-    color-mix(in srgb, var(--green) 60%, var(--accent-2))
+    var(--running),
+    color-mix(in oklab, var(--running) 60%, var(--accent))
   );
-  box-shadow: 0 0 10px var(--green);
+  box-shadow: 0 0 10px var(--running);
 }
 .fs-root .progress-line i::after {
   content: "";
@@ -878,7 +956,7 @@
   padding: 0 11px;
 }
 
-/* ---------- Ports: Continuation Arrow (Header) & Reference Circle (Below) ---------- */
+/* ---------- Ports: Continuation Diamond (Header) & Reference Circle (Below) ---------- */
 .fs-root .port {
   position: absolute;
   width: 20px;
@@ -887,10 +965,10 @@
   z-index: 5;
   display: grid;
   place-items: center;
-  color: var(--border-float);
+  color: var(--text-faint);
   cursor: crosshair;
-  opacity: 0;
-  scale: 0.5;
+  opacity: 0.44;
+  scale: 0.92;
   transition:
     color var(--dur-fast) var(--ease),
     opacity var(--dur-fast) var(--ease),
@@ -899,16 +977,22 @@
 .fs-root .port::before {
   content: "";
   position: absolute;
-  inset: -6px;
+  inset: -5px;
 }
 .fs-root .port-in {
   left: -11px;
 }
+.fs-root .port-in::before {
+  inset: -5px -1px -5px -8px;
+}
 .fs-root .port-out {
   right: -11px;
 }
+.fs-root .port-out::before {
+  inset: -5px -8px -5px -1px;
+}
 .fs-root .port-reference {
-  --pc: var(--accent);
+  --pc: var(--cap-pending);
 }
 .fs-root .port-continuation {
   --pc: var(--text);
@@ -950,29 +1034,57 @@
   border: 0;
   border-radius: 0;
   background: currentColor;
-  clip-path: polygon(0 8%, 52% 8%, 100% 50%, 52% 92%, 0 92%, 26% 50%);
+  clip-path: polygon(50% 4%, 96% 50%, 50% 96%, 4% 50%);
 }
 .fs-root .port:hover > i,
 .fs-root .port-target > i {
   scale: 1.45;
   background: currentColor;
-  box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 22%, transparent);
+  box-shadow:
+    0 0 0 5px color-mix(in oklab, currentColor 24%, transparent),
+    0 0 14px color-mix(in oklab, currentColor 65%, transparent);
 }
 .fs-root .port:hover,
 .fs-root .port-target {
-  color: var(--pc);
+  color: var(--accent);
+  opacity: 1;
+  z-index: 9;
 }
+.fs-root .port-target {
+  scale: 1.25;
+}
+
+/* Wire-Drag Compatibility Spotlight & Invalid-Target Dimming */
+.fs-root .connecting .node.is-invalid-target,
+.fs-root .connecting-continuation .node:not(.node-agent):not(.is-dragging-source),
+.fs-root .connecting-reference .node:is(
+    .node-file,
+    .node-note,
+    .node-board,
+    .node-git,
+    .node-changes,
+    .node-terminal,
+    .node-detail
+  ):not(.is-dragging-source) {
+  opacity: 0.36;
+  filter: saturate(0.5);
+}
+.fs-root .connecting .port-out:not(.is-dragging-origin),
 .fs-root .connecting-continuation .port-reference,
-.fs-root .connecting-reference .port-continuation {
+.fs-root .connecting-reference .port-continuation,
+.fs-root .connecting .node.is-invalid-target > .port {
   opacity: 0.15;
+  pointer-events: none;
+  animation: none;
 }
-.fs-root .connecting-reference .port-reference.port-in,
-.fs-root .connecting-continuation .port-continuation.port-in {
-  color: var(--pc);
+.fs-root .connecting-reference .node:not(.is-invalid-target) > .port-reference.port-in,
+.fs-root .connecting-continuation .node:not(.is-invalid-target) > .port-continuation.port-in {
+  color: var(--accent);
+  opacity: 1;
   scale: 1.2;
 }
-.fs-root .connecting-reference .port-reference.port-in > i,
-.fs-root .connecting-continuation .port-continuation.port-in > i {
+.fs-root .connecting-reference .node:not(.is-invalid-target) > .port-reference.port-in > i,
+.fs-root .connecting-continuation .node:not(.is-invalid-target) > .port-continuation.port-in > i {
   animation: omp-pulse var(--loop-pulse) var(--ease-loop) infinite;
 }
 .fs-root .semantic-zoom .port {
@@ -1295,7 +1407,7 @@
 
 /* ---------- Workflow Groups & Collapsed Composite Nodes ---------- */
 .fs-root .color-violet {
-  --group-color: var(--accent-2);
+  --group-color: var(--violet);
 }
 .fs-root .color-teal {
   --group-color: var(--teal);
@@ -1470,7 +1582,7 @@
 .fs-root .proxy-pin {
   width: 10px;
   height: 10px;
-  border: 1.75px solid var(--accent);
+  border: 1.75px solid var(--cap-pending);
   background: var(--surface);
   border-radius: 50%;
   flex: none;
@@ -1479,7 +1591,7 @@
 .fs-root .proxy-continuation {
   border: 0;
   background: var(--text-2);
-  clip-path: polygon(0 8%, 52% 8%, 100% 50%, 52% 92%, 0 92%, 26% 50%);
+  clip-path: polygon(50% 4%, 96% 50%, 50% 96%, 4% 50%);
   width: 12px;
   height: 12px;
   border-radius: 0;
