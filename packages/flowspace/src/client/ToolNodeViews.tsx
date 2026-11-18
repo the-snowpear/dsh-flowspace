@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import type {
   DiffHunkView,
   FlowNode,
@@ -54,6 +54,7 @@ export function GitNodeBody({
   onExtractDisplay,
   onError,
   onRefreshStructure,
+  onInitGit,
 }: {
   node: FlowNode;
   bridge: CanvasBridge;
@@ -69,11 +70,13 @@ export function GitNodeBody({
   onExtractDisplay: (title: string, text: string) => void;
   onError: (err: unknown) => void;
   onRefreshStructure: () => void;
+  onInitGit?: () => void;
 }) {
   const [status, setStatus] = useState<GitRepoStatus | null>(null);
   const [diffView, setDiffView] = useState<GitDiffResult | null>(null);
   const [commitMsg, setCommitMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const commitInputId = useId();
 
   const cwd = node.worktreePath || node.cwd;
   const tab: GitPanelTab = node.gitTab ?? "changes";
@@ -86,8 +89,8 @@ export function GitNodeBody({
       if (repo.isGitRepo && !node.gitCommitOid) {
         const summaryLines = [
           `Branch: ${repo.branch}${repo.ahead || repo.behind ? ` (↑${repo.ahead} ↓${repo.behind})` : ""}`,
-          `Staged (${repo.staged.length}): ${repo.staged.map((f) => `${f.status} ${f.path}`).join(", ") || "none"}`,
-          `Working (${repo.unstaged.length}): ${repo.unstaged.map((f) => `${f.status} ${f.path}`).join(", ") || "none"}`,
+          `${t("stagedFiles")} (${repo.staged.length}): ${repo.staged.map((f) => `${f.status} ${f.path}`).join(", ") || "none"}`,
+          `${t("workingFiles")} (${repo.unstaged.length}): ${repo.unstaged.map((f) => `${f.status} ${f.path}`).join(", ") || "none"}`,
           repo.commits[0]
             ? `HEAD: ${repo.commits[0].shortOid} ${repo.commits[0].subject}`
             : "",
@@ -110,15 +113,15 @@ export function GitNodeBody({
   }, [cwd]);
 
   const runAction = async (
-    action: Parameters<CanvasBridge["gitAction"]>[0]["action"],
+    action: Parameters<CanvasBridge["gitAction"]>[0]["action"] | "init",
     extra: Partial<Parameters<CanvasBridge["gitAction"]>[0]> = {},
   ) => {
     setBusy(true);
     try {
       const next = await bridge.gitAction({
         cwd,
-        expectedRevision: status?.revision,
-        action,
+        expectedRevision: action === "init" ? undefined : status?.revision,
+        action: action as Parameters<CanvasBridge["gitAction"]>[0]["action"],
         ...extra,
       });
       setStatus(next);
@@ -167,13 +170,46 @@ export function GitNodeBody({
   };
 
   if (!status) {
-    return <div className="fs-loading">Git…</div>;
+    return <div className="fs-loading">{t("git")}…</div>;
   }
   if (!status.isGitRepo) {
     return (
-      <div className="node-empty">
-        <Icon name="git" />
-        <p>{status.cwd}</p>
+      <div className="node-empty fs-tool-empty-cta">
+        <Icon name="gitInit" />
+        <b>{t("gitNotRepoTitle")}</b>
+        <p>{t("gitNotRepoDesc")}</p>
+        {status.cwd && (
+          <small className="muted user-content">{status.cwd}</small>
+        )}
+        <div
+          className="button-row"
+          style={{ justifyContent: "center", marginTop: 8 }}
+        >
+          <button
+            type="button"
+            className="button button-primary"
+            disabled={busy}
+            onClick={() => {
+              if (onInitGit) {
+                onInitGit();
+              } else {
+                void runAction("init");
+              }
+            }}
+          >
+            <Icon name="gitInit" />
+            <span>{t("initGitRepo")}</span>
+          </button>
+          <button
+            type="button"
+            className="button"
+            disabled={busy}
+            onClick={() => void refresh()}
+          >
+            <Icon name="refresh" />
+            <span>{t("refreshSnapshot")}</span>
+          </button>
+        </div>
       </div>
     );
   }
@@ -224,7 +260,11 @@ export function GitNodeBody({
       <div className="node-tabs" role="tablist">
         {(
           [
-            ["changes", t("gitChanges"), status.staged.length + status.unstaged.length],
+            [
+              "changes",
+              t("gitChanges"),
+              status.staged.length + status.unstaged.length,
+            ],
             ["history", t("gitHistory"), status.commits.length],
             ["branches", t("gitBranches"), status.branches.length],
           ] as const
@@ -246,24 +286,44 @@ export function GitNodeBody({
         {tab === "changes" && (
           <>
             <div className="fs-git-commit-row">
+              <label
+                htmlFor={commitInputId}
+                style={{
+                  position: "absolute",
+                  width: 1,
+                  height: 1,
+                  overflow: "hidden",
+                  clip: "rect(0 0 0 0)",
+                }}
+              >
+                {t("commitMessagePlaceholder")}
+              </label>
               <input
+                id={commitInputId}
                 className="text-field"
                 placeholder={t("commitMessagePlaceholder")}
                 value={commitMsg}
                 onChange={(e) => setCommitMsg(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && commitMsg.trim() && status.staged.length) {
-                    e.preventDefault();
-                    const msg = commitMsg;
-                    setCommitMsg("");
-                    void runAction("commit", { message: msg });
+                  if (e.key === "Enter") {
+                    if (e.nativeEvent.isComposing || e.keyCode === 229) {
+                      return;
+                    }
+                    if (commitMsg.trim() && status.staged.length) {
+                      e.preventDefault();
+                      const msg = commitMsg;
+                      setCommitMsg("");
+                      void runAction("commit", { message: msg });
+                    }
                   }
                 }}
               />
               <button
                 type="button"
                 className="button button-primary"
-                disabled={busy || !commitMsg.trim() || status.staged.length === 0}
+                disabled={
+                  busy || !commitMsg.trim() || status.staged.length === 0
+                }
                 onClick={() => {
                   const msg = commitMsg;
                   setCommitMsg("");
@@ -290,7 +350,9 @@ export function GitNodeBody({
             </div>
             {status.staged.map((f) => (
               <div key={`s-${f.path}`} className="fs-git-file-row">
-                <span className={`fs-git-badge st-${f.status}`}>{f.status}</span>
+                <span className={`fs-git-badge st-${f.status}`}>
+                  {f.status}
+                </span>
                 <button
                   type="button"
                   className="fs-git-file-btn user-content"
@@ -301,7 +363,7 @@ export function GitNodeBody({
                 <button
                   type="button"
                   className="icon-button"
-                  title="Unstage"
+                  title={t("gitUnstageFile")}
                   onClick={() => void runAction("unstage", { paths: [f.path] })}
                 >
                   <Icon name="off" />
@@ -325,7 +387,9 @@ export function GitNodeBody({
             </div>
             {status.unstaged.map((f) => (
               <div key={`u-${f.path}`} className="fs-git-file-row">
-                <span className={`fs-git-badge st-${f.status}`}>{f.status}</span>
+                <span className={`fs-git-badge st-${f.status}`}>
+                  {f.status}
+                </span>
                 <button
                   type="button"
                   className="fs-git-file-btn user-content"
@@ -336,7 +400,7 @@ export function GitNodeBody({
                 <button
                   type="button"
                   className="icon-button"
-                  title="Stage"
+                  title={t("gitStageFile")}
                   onClick={() => void runAction("stage", { paths: [f.path] })}
                 >
                   <Icon name="plus" />
@@ -442,7 +506,7 @@ export function GitNodeBody({
                   onPromptForm({
                     title: t("createBranch"),
                     initialValue: "feat/",
-                    secondaryLabel: "Base ref",
+                    secondaryLabel: t("gitBaseRef"),
                     secondaryInitial: status.branch || "HEAD",
                     onSubmit: (branch, baseRef) =>
                       void runAction("createBranch", { branch, baseRef }),
@@ -498,7 +562,9 @@ export function GitNodeBody({
             ))}
 
             <div className="fs-git-section-head">
-              <span>Worktrees ({status.worktrees.length})</span>
+              <span>
+                {t("gitWorktreesCount", { count: status.worktrees.length })}
+              </span>
             </div>
             {status.worktrees.map((wt) => (
               <div key={wt.path} className="fs-git-file-row">
@@ -633,7 +699,7 @@ export function ChangesNodeBody({
             })
           }
         >
-          <option value="">Agent…</option>
+          <option value="">{t("selectAgentOption")}</option>
           {boundAgents.map((ag) => (
             <option key={ag.id} value={ag.sessionId}>
               {ag.title}
@@ -657,7 +723,8 @@ export function ChangesNodeBody({
           >
             {turns.map((trItem) => (
               <option key={trItem.seq} value={trItem.seq}>
-                Turn #{trItem.turn} (+{trItem.added}/-{trItem.deleted})
+                {t("turnChanges", { turn: trItem.turn })} (+{trItem.added}/-
+                {trItem.deleted})
               </option>
             ))}
           </select>
@@ -681,7 +748,7 @@ export function ChangesNodeBody({
             <div className="fs-git-section-head">
               <span>
                 {t("turnChanges", { turn: activeTurn.turn })} ·{" "}
-                {activeTurn.total} files
+                {t("filesCount", { count: activeTurn.total })}
               </span>
               <button
                 type="button"
@@ -689,7 +756,7 @@ export function ChangesNodeBody({
                 onClick={() => void loadDiff(activeTurn.seq)}
               >
                 <Icon name="diff" />
-                <span>Diff</span>
+                <span>{t("diffAction")}</span>
               </button>
             </div>
             {activeTurn.files.map((f, idx) => (
@@ -714,7 +781,7 @@ export function ChangesNodeBody({
                       .sessionChangeDiff(activeSessionId, activeTurn.seq, idx)
                       .then((d) =>
                         onExtractDisplay(
-                          `Turn #${activeTurn.turn} · ${f.display}`,
+                          `${t("turnChanges", { turn: activeTurn.turn })} · ${f.display}`,
                           d.formatted,
                         ),
                       )
@@ -800,8 +867,28 @@ export function TerminalNodeBody({
         setBusy(false);
       }
     },
-    [activeSessionId, bridge, node.id, node.terminalId, node.text, onEditNode, onError],
+    [
+      activeSessionId,
+      bridge,
+      node.id,
+      node.terminalId,
+      node.text,
+      onEditNode,
+      onError,
+    ],
   );
+
+  const createSessionTerminal = useCallback(() => {
+    if (!activeSessionId) return;
+    setBusy(true);
+    void bridge
+      .openSessionTerminal(activeSessionId)
+      .then((created) => refreshScreen(activeSessionId, created.id))
+      .catch((err) => {
+        setBusy(false);
+        onError(err);
+      });
+  }, [activeSessionId, bridge, onError, refreshScreen]);
 
   useEffect(() => {
     if (activeSessionId) void refreshScreen(activeSessionId, node.terminalId);
@@ -822,7 +909,7 @@ export function TerminalNodeBody({
             if (sid) void refreshScreen(sid, undefined);
           }}
         >
-          <option value="">Agent…</option>
+          <option value="">{t("selectAgentOption")}</option>
           {boundAgents.map((ag) => (
             <option key={ag.id} value={ag.sessionId}>
               {ag.title}
@@ -855,14 +942,9 @@ export function TerminalNodeBody({
               className="icon-button"
               title={t("openTerminal")}
               disabled={busy}
-              onClick={() => {
-                void bridge
-                  .openSessionTerminal(activeSessionId)
-                  .then((created) => refreshScreen(activeSessionId, created.id))
-                  .catch(onError);
-              }}
+              onClick={createSessionTerminal}
             >
-              <Icon name="plus" />
+              <Icon name="termPlus" />
             </button>
           )}
           <button
@@ -891,14 +973,14 @@ export function TerminalNodeBody({
         {node.text ? (
           <>
             <div className="fs-git-section-head">
-              <span>Terminal Screen</span>
+              <span>{t("terminalScreenHeader")}</span>
               <button
                 type="button"
                 className="text-button"
                 onClick={() => {
                   const sel = window.getSelection()?.toString().trim();
                   onExtractDisplay(
-                    `${node.title} · Screen`,
+                    `${node.title} · ${t("terminalScreenHeader")}`,
                     sel || node.text,
                   );
                 }}
@@ -912,9 +994,25 @@ export function TerminalNodeBody({
             </pre>
           </>
         ) : (
-          <div className="node-empty">
-            <Icon name="term" />
-            <p>{t("noTerminalsYet")}</p>
+          <div className="node-empty fs-tool-empty-cta">
+            <Icon name="termPlus" />
+            <p>
+              {activeSessionId
+                ? t("noTerminalsYet")
+                : t("terminalSelectAgentHint")}
+            </p>
+            {activeSessionId && (
+              <button
+                type="button"
+                className="button button-primary"
+                style={{ marginTop: 8 }}
+                disabled={busy}
+                onClick={createSessionTerminal}
+              >
+                <Icon name="termPlus" />
+                <span>{t("openTerminal")}</span>
+              </button>
+            )}
           </div>
         )}
       </div>

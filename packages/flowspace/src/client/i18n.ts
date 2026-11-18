@@ -1,11 +1,13 @@
-let language = "zh";
+export type Locale = "zh" | "en";
+
+let language: Locale = "zh";
 const subscribers = new Set<() => void>();
 
-export const getLanguage = (): "zh" | "en" =>
+export const getLanguage = (): Locale =>
   language.startsWith("en") ? "en" : "zh";
 
 export const setLanguage = (value: string): void => {
-  const next = value.startsWith("en") ? "en" : "zh";
+  const next: Locale = value.startsWith("en") ? "en" : "zh";
   if (next !== language) {
     language = next;
     subscribers.forEach((fn) => fn());
@@ -89,8 +91,14 @@ export const dict: Record<string, [string, string]> = {
   ],
   openingConversation: ["正在打开会话…", "Opening conversation…"],
   openNativeChat: ["在原生对话中打开", "Open in native chat"],
-  noMessages: ["启动运行或创建会话后，原生对话将在此处展开", "Start or create a session to chat here"],
-  noEvents: ["运行后，在这里查看每轮步骤轨迹", "Run an agent to inspect its execution steps here"],
+  noMessages: [
+    "启动运行或创建会话后，原生对话将在此处展开",
+    "Start or create a session to chat here",
+  ],
+  noEvents: [
+    "运行后，在这里查看每轮步骤轨迹",
+    "Run an agent to inspect its execution steps here",
+  ],
   executionDetail: ["执行详情", "Execution details"],
   pinDetail: ["冻结当前快照", "Freeze snapshot"],
   unpinDetail: ["恢复跟随最新", "Follow live"],
@@ -98,7 +106,7 @@ export const dict: Record<string, [string, string]> = {
   addContext: ["添加引用", "Add reference"],
   reference: ["引用", "Reference"],
   continuation: ["接续", "Continuation"],
-  messagesLine: ["交接往来", "Exchanges"],
+  messagesLine: ["原生消息", "Messages"],
   refInput: ["引用输入", "Reference input"],
   refOutput: ["引用输出", "Reference output"],
   contInput: ["接续入口", "Continuation input"],
@@ -113,17 +121,27 @@ export const dict: Record<string, [string, string]> = {
   sent: ["已发", "Sent"],
   updated: ["来源更新", "Updated"],
   always: ["始终附带", "Always include"],
+  live: ["实时预览", "Live"],
   pendingTip: ["下次发送时附带此引用", "Included with the next prompt"],
-  sentTip: ["已发送，点击可重新附带", "Already sent. Click to manage"],
-  updatedTip: ["来源已更新，下次发送时重新附带", "Updated; included next time"],
+  sentTip: ["已发送，点击可重新附带", "Already sent. Click to re-arm"],
+  updatedTip: ["来源已更新，下次发送时重新附带", "Updated; included next turn"],
   alwaysTip: ["每次发送都自动附带", "Included with every turn"],
   mode: ["传递内容", "Context mode"],
   conclusion: ["本轮结论", "Conclusion"],
-  session: ["会话快照", "Session text"],
+  session: ["会话快照", "Session transcript"],
   fork: ["历史分叉", "Fork history"],
-  conclusionDescription: ["传递上游最后一轮助手结论", "Pass the upstream turn conclusion"],
-  sessionDescription: ["传递上游完整用户与助手文本", "Pass user & assistant text snapshot"],
-  forkDescription: ["从上游已完成前缀分叉新会话", "Fork native session at completed turn"],
+  conclusionDescription: [
+    "传递上游截至触发序号的最后一轮助手结论",
+    "Pass the final assistant conclusion locked at trigger seq",
+  ],
+  sessionDescription: [
+    "传递截至触发序号的用户与助手对话快照（剔除工具噪音）",
+    "Pass folded user & assistant transcript at trigger seq (no tool noise)",
+  ],
+  forkDescription: [
+    "从上游已完成事件边界派生独立会话（继承完整历史）",
+    "Fork a new DSH session inheriting full history up to completed seq",
+  ],
   draftOnly: ["目标需要是尚未绑定会话的草稿", "Target must be an unbound draft agent"],
   createdBy: ["首次运行由「{mode}」创建", "Created via {mode}"],
   trigger: ["触发方式", "Trigger"],
@@ -134,16 +152,20 @@ export const dict: Record<string, [string, string]> = {
   dismiss: ["这次跳过", "Skip"],
   waitingConfirmation: ["等待你的确认", "Waiting for confirmation"],
   scopeBoundary: ["已到达启动范围边界", "Reached run scope boundary"],
+  loopCapReached: ["已达循环上限（{count} 轮）", "Reached loop limit ({count} rounds)"],
+  loopCapGate: ["已达有界循环上限，待确认续跑", "Loop bound reached · awaiting +1 round"],
+  extendLoopOne: ["续跑 +1 轮", "+1 round"],
+  planPendingConfirm: ["待确认计划", "Plan awaiting confirmation"],
   waitingDescription: [
     "上游已完成并固定快照。放行后将带着该结果推进当前任务。",
     "Upstream finished and captured. Continue to run with the captured result.",
   ],
   approvalNeeded: ["等待审批或回答", "Approval or answer needed"],
   approvalDescription: [
-    "当前会话正在等待工具审批或提问回答，请在「对话」页签中处理。",
-    "Session is awaiting tool approval or user input in the Conversation tab.",
+    "当前会话正在等待工具审批、计划确认或提问回答，可直接在展开的画布卡片/浮窗内处理，或切至原生对话页同步操作。",
+    "Session is awaiting tool approval, plan confirmation or user input — handle inline on the expanded card/window or in native Conversation.",
   ],
-  openApprovalTab: ["切到对话处理", "Handle in Conversation"],
+  openApprovalTab: ["定位并处理", "Focus & handle"],
   maxRounds: ["循环上限", "Max loop rounds"],
   rounds: ["{count} 轮", "{count} rounds"],
   waypoint: ["中继点", "Waypoint"],
@@ -157,6 +179,7 @@ export const dict: Record<string, [string, string]> = {
   waiting: ["等你确认", "Needs confirm"],
   input: ["等待审批", "Input needed"],
   paused: ["已暂停", "Paused"],
+  bypassed: ["旁路透传", "Bypassed"],
   completed: ["已完成", "Done"],
   done: ["已完成", "Done"],
   interrupted: ["待恢复", "Interrupted"],
@@ -166,6 +189,7 @@ export const dict: Record<string, [string, string]> = {
   pause: ["暂停后续", "Pause"],
   resume: ["继续推进", "Resume"],
   stop: ["中止", "Stop"],
+  stopAgent: ["停止当前回合", "Stop active turn"],
   cancelRun: ["取消运行", "Cancel run"],
   inspector: ["检查器", "Inspector"],
   close: ["关闭", "Close"],
@@ -175,6 +199,7 @@ export const dict: Record<string, [string, string]> = {
   save: ["保存", "Save"],
   delete: ["移除", "Remove"],
   deleteNode: ["从画布移除", "Remove from canvas"],
+  deleteSelected: ["移除所选对象", "Remove selected"],
   removeKeepSession: ["移除节点不会删除 DSH 会话历史。", "Removing a node keeps its DSH session."],
   rename: ["重命名", "Rename"],
   expand: ["展开卡片", "Expand"],
@@ -191,10 +216,24 @@ export const dict: Record<string, [string, string]> = {
   participation: ["参与方式", "Participation"],
   global: ["参与全局与分组工作流", "Include in workflow"],
   manual: ["仅手动启动或放行", "Manual start only"],
-  pausedParticipation: ["暂停参与（暂时跳过）", "Paused (skip)"],
+  pausedParticipation: ["暂停参与（静音阻断 Ctrl+M）", "Muted / Paused (halt branch Ctrl+M)"],
+  bypassParticipation: [
+    "旁路透传（跳过本卡并直传上游快照 Ctrl+B）",
+    "Bypass (pass upstream snapshot through Ctrl+B)",
+  ],
+  toggleBypass: ["切换旁路透传 (Ctrl+B)", "Toggle bypass (Ctrl+B)"],
+  toggleMute: ["切换静音暂停 (Ctrl+M)", "Toggle mute/pause (Ctrl+M)"],
+  runFromHere: ["从此节点向下游运行", "Run from here downstream"],
+  runToHere: ["运行上游至此节点", "Run ancestors to here"],
+  forkHypothesis: ["分叉并行实验分支", "Fork hypothesis branch"],
+  forkHypothesisTip: [
+    "基于当前已完成回合历史派生并行实验草稿",
+    "Branch a new draft agent inheriting completed session history",
+  ],
   nativeTriggerLabel: ["原生对话触发接续", "Continue from native chat"],
   nativeTriggerOn: ["接续·开", "Auto·On"],
   nativeTriggerOff: ["接续·关", "Auto·Off"],
+  viewInFlowspace: ["在 FlowSpace 中查看和设置接续", "View and configure continuations in FlowSpace"],
   sessionBound: ["已绑定会话", "Session"],
   sessionUnbound: ["原生会话", "DSH Session"],
   inheritGlobal: ["继承全局（{state}）", "Use global ({state})"],
@@ -204,13 +243,14 @@ export const dict: Record<string, [string, string]> = {
   onInput: ["有新草稿输入时", "When new draft exists"],
   onUpdate: ["引用内容更新时", "When references update"],
   everyRun: ["每次全局启动都运行", "Every workflow launch"],
-  groupSelection: ["编组工作流 (G)", "Group workflow (G)"],
+  groupSelection: ["编组工作流 (Ctrl+G)", "Group workflow (Ctrl+G)"],
   groupNeedSelection: ["请按住 Shift 选择至少 2 个节点后再编组", "Select at least 2 nodes to group"],
+  groupNotFound: ["工作流分组不存在", "Workflow group does not exist"],
   nestedLimit: ["分组最多支持两层嵌套", "Groups support at most 2 nesting levels"],
   groupSettings: ["工作流分组", "Workflow group"],
   groupColor: ["分组强调色", "Accent color"],
   blue: ["深索蓝", "DeepSeek Blue"],
-  violet: ["晴空冰蓝", "Ice Blue"],
+  violet: ["星云紫", "Nebula Violet"],
   teal: ["青碧", "Teal"],
   amber: ["琥珀金", "Amber"],
   ports: ["折叠代理端口", "Composite proxy ports"],
@@ -228,24 +268,24 @@ export const dict: Record<string, [string, string]> = {
   templateLinked: ["模板 v{version}", "Template v{version}"],
   workflowLibrary: ["工作流与状态库", "Workflows & snapshots"],
   libraryDescription: [
-    "从成熟的多 Agent 协作范式起步，或将画布上的工作流保存为可版本化同步的模板与状态快照。",
-    "Start from multi-agent workflow patterns, or save your own reusable templates and canvas state snapshots.",
+    "从成熟的 Agent ComfyUI 协作蓝图起步，或将画布上的工作流保存为可原地同步的模板与状态快照。",
+    "Start from battle-tested Agent ComfyUI blueprints, or save your own syncable templates and state snapshots.",
   ],
-  builtIn: ["内置工作流范式", "Built-in patterns"],
+  builtIn: ["内置工作流蓝图", "Built-in blueprints"],
   mine: ["我的模板", "My templates"],
   snapshots: ["状态快照", "Snapshots"],
-  useTemplate: ["添加到画布", "Add to canvas"],
-  previewTemplate: ["预览结构", "Preview"],
+  useTemplate: ["放入画布", "Drop on canvas"],
+  previewTemplate: ["预览拓扑", "Preview topology"],
   nodesCount: ["{count} 个节点", "{count} nodes"],
   noTemplates: ["还没有自定义模板", "No custom templates yet"],
   noTemplatesDescription: [
-    "在画布中框选多个节点按 G 编组，即可在检查器中保存为可复用模板。",
-    "Group nodes with G on the canvas, then save the group as a reusable template.",
+    "在画布中框选多个节点按 G / Ctrl+G 编组，即可在检查器中保存为可复用模板。",
+    "Group nodes with G / Ctrl+G on the canvas, then save the group as a reusable template.",
   ],
   saveSnapshot: ["保存状态", "Save snapshot"],
   snapshotDescription: [
-    "保存当前画布布局、草稿与最近输出摘要。恢复快照时不会自动重放任何已发送提示词。",
-    "Save layout, drafts and recent output summaries. Restoring never replays prompts.",
+    "保存当前画布布局、草稿与最近输出摘要。恢复快照时安全停止在途调度，绝不重放提示词。",
+    "Save layout, drafts and recent output summaries. Restoring safely stops active runs and never replays prompts.",
   ],
   restoreSnapshot: ["恢复此状态", "Restore snapshot"],
   noSnapshots: ["还没有保存状态快照", "No snapshots saved yet"],
@@ -254,32 +294,78 @@ export const dict: Record<string, [string, string]> = {
     "Use Save snapshot in the top bar before rearranging or experimenting.",
   ],
   snapshotSaved: ["状态快照已保存", "Snapshot saved"],
-  snapshotRestored: ["已恢复画布快照（在途运行已停止，不会重放提示词）", "Snapshot restored without replaying prompts"],
+  snapshotRestored: [
+    "已恢复画布快照（在途运行已停止，不会重放提示词）",
+    "Snapshot restored without replaying prompts",
+  ],
   templateSaved: ["工作流模板已保存", "Workflow template saved"],
-  templateAdded: ["工作流已添加到画布", "Workflow added to canvas"],
+  templateAdded: ["工作流已放入画布", "Workflow added to canvas"],
   templateSynced: ["已按模板原地同步", "Workflow synced with template"],
   groupCreated: ["已创建工作流分组", "Workflow group created"],
   nodeCreated: ["节点已创建", "Node created"],
   copied: ["已复制到剪贴板", "Copied to clipboard"],
-  implementationReview: ["分析 → 审查 → 汇总交付", "Analyze → Review → Deliver"],
+
+  /* ---------- 6 Built-In "Agent ComfyUI" Blueprints ---------- */
+  implementationReview: [
+    "方案规划 → 挑刺审查 → 确认交付",
+    "Spec → Plan Gate → Adversarial Critique → Delivery",
+  ],
   implementationReviewDescription: [
-    "上游分析架构与问题，中游独立审查可行性与风险，人工确认放行后整理最终行动清单。",
-    "Analyze first, review independently, then pause for your confirmation before producing the delivery checklist.",
+    "便签锚定验收约束（始终附带），架构师开启 Plan 模式输出方案，审查员基于完整会话快照挑刺，人工确认后生成可执行清单。",
+    "Pinned constraints feed a Plan-mode Architect; a Staff Critic audits the folded session transcript before human-gated delivery.",
   ],
-  parallelResearch: ["两路并行探索 → 汇总结论", "Parallel exploration → Synthesis"],
+  parallelResearch: [
+    "双路并行侦察 → 汇合综述",
+    "Parallel Repo Recon → Join Synthesis",
+  ],
   parallelResearchDescription: [
-    "两个精简 Agent 同时从架构与验证两个维度调查，全部完成后自动汇合到总结 Agent。",
-    "Two parallel agents investigate architecture and testing simultaneously, joining into one synthesis agent.",
+    "目标便签引导两路侦察 Agent 同时扫描模块数据流与类型测试边界，在汇合屏障处自动合成全景路线图。",
+    "Investigation goals guide two parallel scouts across architecture and test boundaries, auto-joining into one synthesis brief.",
   ],
-  releaseWorkflow: ["整理变更说明 → 双语校对", "Release notes → Bilingual review"],
+  tddLoopWorkflow: [
+    "红绿重构 · 有界自愈闭环 (×3)",
+    "Self-Healing TDD Bounded Loop (×3)",
+  ],
+  tddLoopWorkflowDescription: [
+    "看板定义验收项，实现者编写测试与代码，独立验证员结合 Changes Diff 核验并最多循环 3 轮自动修复，通过后确认交付。",
+    "Kanban criteria drive a Test & Feature Author; an Independent Verifier audits turn diffs in a 3-round self-repair loop before sign-off.",
+  ],
+  abForkWorkflow: [
+    "同源分叉实验 (A/B Fork) → 裁决选型",
+    "A/B Hypothesis Fork → Trade-off Judge",
+  ],
+  abForkWorkflowDescription: [
+    "先由探索会话定位问题基线，再通过两条 Fork 分叉线派生「保守最小补丁」与「架构级重构」并行对比，最后交由评委综合裁决。",
+    "Frame root context once, fork session history into Conservative Patch vs. Clean Refactor branches, then join transcripts into a Judge.",
+  ],
+  bugHuntWorkflow: [
+    "终端报错 + Git 诊断 → 根因定位 → 修复报告",
+    "Bug Triage: Terminal + Git → Root Cause → Fix",
+  ],
+  bugHuntWorkflowDescription: [
+    "汇集终端屏幕报错与 Git 近期改动，先只读锁定精确根因，人工确认后编写最小修复与回归测试，并实时同步至展示卡。",
+    "Correlate Terminal snapshots and Git diffs to localize root cause read-only, confirm, author a minimal fix, and stream a live report card.",
+  ],
+  releaseWorkflow: [
+    "Git 变更双路会审 → 双语发布说明",
+    "Multi-Reviewer PR Audit → Release Notes",
+  ],
   releaseWorkflowDescription: [
-    "整理本轮新增、改进与修复说明，确认无误后交由下游核对格式、命令与双语表达。",
-    "Draft structured release notes, confirm, then verify commands, links and bilingual phrasing.",
+    "从 Git 节点提取改动快照，正确性审查与破坏性变更/DX 审查并行会诊，人工放行后输出结构化发布说明。",
+    "Wire Git repo status into parallel Correctness and DX/Breaking-Change reviewers, joining at a confirm gate for bilingual release notes.",
   ],
+
+  badgePlan: ["Plan 门控", "Plan gate"],
+  badgeJoin: ["并行汇合", "Join barrier"],
+  badgeLoop: ["循环 ×{count}", "Loop ×{count}"],
+  badgeFork: ["历史分叉", "Fork A/B"],
+  badgeTools: ["工具协同", "Tool refs"],
+
   activityDescription: [
-    "每次启动聚合为一张运行总览卡：直观查看完成进度、当前卡点、捕获上下文与每一步执行时间线。",
-    "One card per workflow launch: completion ring, step pipeline, active gates, outputs and full timeline.",
+    "每次启动聚合为一张运行总览卡：直观查看完成进度、步骤耗时与用量、当前门控、交付产物与详细时间线。",
+    "One card per workflow launch: completion ring, step telemetry, active gates, presented deliverables and full timeline.",
   ],
+  runDockTitle: ["单次运行总览", "Run overview"],
   allRuns: ["全部运行", "All runs"],
   outputsTab: ["结果与展示卡", "Outputs & displays"],
   waitingTab: ["待确认与审批", "Waiting & approvals"],
@@ -318,8 +404,8 @@ export const dict: Record<string, [string, string]> = {
   snapGrid: ["拖动时吸附网格 (12px)", "Snap nodes to 12px grid"],
   reducedMotion: ["减弱动效", "Reduce motion"],
   reducedMotionDescription: [
-    "关闭流光、极光与弹簧过渡，保留全部状态颜色、图标与文案信息。",
-    "Disable ambient aurora, wire flow and spring transitions while keeping all state indicators.",
+    "关闭流光、背景呼吸与位移过渡，保留全部状态色彩、图标与数字信息。",
+    "Disable ambient motion, wire flow and transitions while keeping all state colors and counters.",
   ],
   orchestration: ["宿主编排", "Host orchestration"],
   nativeChatTriggers: [
@@ -335,16 +421,112 @@ export const dict: Record<string, [string, string]> = {
   importCanvas: ["导入画布 JSON", "Import canvas JSON"],
   download: ["导出文件", "Download"],
   import: ["选择文件…", "Choose file…"],
-  loadStarter: ["添加三步审查起手工作流", "Add 3-step review workflow"],
+  loadStarter: ["放入起手审查工作流", "Drop starter review workflow"],
   loadStarterDescription: [
-    "在画布空白处放入一套可直接运行的「分析 → 审查 → 汇总」三步工作流，不影响已有会话。",
-    "Insert a ready-to-run Analyze → Review → Deliver workflow beside existing nodes.",
+    "在画布空白处放入一套双语自适应的「规划 → 审查 → 交付」工作流，不影响已有会话。",
+    "Insert a localized Analyze → Review → Deliver blueprint beside existing nodes.",
   ],
   selectObject: ["选择节点、分组或连线", "Select a node, group or wire"],
   selectObjectDescription: [
-    "在这里查看和调整 Agent 参与方式、接续模式、循环上限、分组颜色与代理端口。",
-    "Inspect and configure agent participation, continuation mode, loop bounds, group colors and proxy ports.",
+    "在这里查看载荷透视（X-Ray）、配置参与策略与旁路透传、调整循环上限或批量对齐多个节点。",
+    "Inspect live wire payloads (X-Ray), configure participation & bypass, tune loop bounds or batch-align nodes.",
   ],
+
+  /* ---------- Multi-Select, Subgraph Clipboard & Structure Inspector ---------- */
+  multiSelectionTitle: ["已选 {count} 个画布对象", "{count} canvas items selected"],
+  alignNodesLabel: ["对齐选区", "Align selection"],
+  distributeNodesLabel: ["等距分布", "Distribute spacing"],
+  alignLeft: ["左对齐", "Align left"],
+  alignCenter: ["水平居中", "Align center"],
+  alignRight: ["右对齐", "Align right"],
+  alignTop: ["顶对齐", "Align top"],
+  alignMiddle: ["垂直居中", "Align middle"],
+  alignBottom: ["底对齐", "Align bottom"],
+  distributeH: ["水平等距分布", "Distribute horizontally"],
+  distributeV: ["垂直等距分布", "Distribute vertically"],
+  duplicateSelection: ["复制为独立草稿 (Ctrl+D)", "Duplicate as clean drafts (Ctrl+D)"],
+  copySelection: ["复制子图 (Ctrl+C)", "Copy subgraph (Ctrl+C)"],
+  pasteSelection: ["粘贴子图 (Ctrl+V)", "Paste subgraph (Ctrl+V)"],
+  batchParticipation: ["批量设置参与策略", "Batch participation"],
+  structureInspectorEyebrow: ["项目拓扑结构（只读派生）", "Derived project topology"],
+  structureInspectorDesc: [
+    "结构卡实时投影工作区、Git 分支、隔离 Worktree 与原生子 Agent 层级关系。",
+    "Projects live workspace, Git branch, isolated worktree and native subagent hierarchy.",
+  ],
+
+  /* ---------- Payload X-Ray Popover & Inspector ---------- */
+  payloadXray: ["载荷透视（X-Ray）", "Payload X-Ray"],
+  inspectPayload: ["透视传递载荷", "Inspect wire payload"],
+  loadingPayload: ["正在读取宿主快照…", "Reading host snapshot…"],
+  payloadEmpty: [
+    "暂无已捕获文本；当上游产生回复或写入内容后在此实时透视。",
+    "No captured payload yet; live text appears as soon as upstream produces content.",
+  ],
+  seqWatermark: ["序号 #{seq}", "seq #{seq}"],
+  spillBadge: ["超 64 KiB · 自动转存 spillStore", ">64 KiB · Auto-spilled to spillStore"],
+  withinInlineLimit: ["直注上下文 (≤64 KiB)", "Inline context (≤64 KiB)"],
+  expandPayload: ["展开全文", "Expand"],
+  collapsePayload: ["收起", "Collapse"],
+
+  /* ---------- Fuzzy Quick-Create & Wire-Drop Quick-Connect ---------- */
+  quickCreateTitle: ["快速创建节点或工作流蓝图", "Quick-create node or blueprint"],
+  quickCreatePlaceholder: [
+    "检索节点、研发工具或工作流蓝图…",
+    "Search nodes, dev tools or workflow blueprints…",
+  ],
+  quickConnectFrom: ["从「{name}」连出", "Wire out from “{name}”"],
+  quickConnectTo: ["接入「{name}」", "Wire into “{name}”"],
+  catAll: ["全部", "All"],
+  catNodes: ["节点", "Nodes"],
+  catTools: ["工具", "Tools"],
+  catBlueprints: ["蓝图", "Blueprints"],
+  qcAutoAgent: ["新建自动接续 Agent", "New auto-continued Agent"],
+  qcAutoAgentDesc: [
+    "上游完成后自动携带本轮结论启动下游",
+    "Starts automatically with upstream conclusion upon completion",
+  ],
+  qcConfirmAgent: ["新建确认门控审查员", "New confirm-gated Reviewer"],
+  qcConfirmAgentDesc: [
+    "上游完成后驻留在线上预览快照，人工放行后执行",
+    "Holds captured output at wire gate until you click Continue",
+  ],
+  qcSessionAgent: ["新建共享快照 Agent (Session)", "New shared-transcript Agent"],
+  qcSessionAgentDesc: [
+    "接收上游截至触发序号的精简对话全貌（剔除工具噪音）",
+    "Receives folded user & assistant transcript locked at atSeq",
+  ],
+  qcForkAgent: ["分叉并行假设 Agent (Fork)", "Fork hypothesis Agent"],
+  qcForkAgentDesc: [
+    "基于上游已完成历史分叉独立会话，适合 A/B 方案实验",
+    "Clones upstream session history at atSeq for A/B branching",
+  ],
+  qcRefConsumerAgent: ["新建消费此引用的 Agent", "New Agent fed by this reference"],
+  qcRefConsumerAgentDesc: [
+    "将来源作为只读上下文胶囊接入新 Agent 草稿",
+    "Wires this source into a new draft Agent's reference capsule tray",
+  ],
+  qcFollowDisplay: ["引出展示卡（跟随最新）", "Extract Display card (follow latest)"],
+  qcFollowDisplayDesc: [
+    "持续同步来源最新输出，便于一对多分发下游引用",
+    "Tracks latest source output for 1-to-many reference fan-out",
+  ],
+  qcPinnedDisplay: ["引出固定快照卡（Pinned）", "Extract pinned snapshot card"],
+  qcPinnedDisplayDesc: [
+    "冻结此刻文本快照，后续运行不会覆盖",
+    "Freezes current text snapshot for side-by-side comparison",
+  ],
+  qcUpstreamAgent: ["新建前置上游 Agent", "New upstream starter Agent"],
+  qcUpstreamAgentDesc: [
+    "在左侧创建前置 Agent 并连入当前接续入口",
+    "Creates an upstream agent wired into this continuation input",
+  ],
+  qcUpstreamPlanAgent: ["新建前置 Plan 架构师", "New upstream Plan-mode Architect"],
+  qcUpstreamPlanAgentDesc: [
+    "先在 Plan 模式下规划并经批准后再推进当前节点",
+    "Plans first under Plan mode before advancing into this node",
+  ],
+  qcChainBlueprint: ["串联「{name}」蓝图", "Chain “{name}” blueprint"],
+
   pointer: ["选择工具 (V)", "Select tool (V)"],
   hand: ["抓手平移 (H)", "Hand pan (H)"],
   undo: ["撤销 (Ctrl+Z)", "Undo (Ctrl+Z)"],
@@ -352,7 +534,7 @@ export const dict: Record<string, [string, string]> = {
   tidy: ["拓扑整理布局", "Tidy layout"],
   fitView: ["适应视图 (F)", "Fit view (F)"],
   minimap: ["小地图", "Minimap"],
-  help: ["快捷键与连线图例", "Shortcuts & wire legend"],
+  help: ["快捷键与连线图例 (?)", "Shortcuts & wire legend (?)"],
   doubleClickTip: ["双击空白新建 Agent", "Double-click to create agent"],
   rangeSelection: ["框选与多选", "Marquee / multi-select"],
   waitingCount: ["{count} 项待处理", "{count} waiting"],
@@ -368,29 +550,35 @@ export const dict: Record<string, [string, string]> = {
     "Every Agent node binds a real persistent DSH Session. Scheduling runs in the Host; undo never replays prompts.",
   ],
   legendContinuation: [
-    "接续线（标题栏箭头口）：推进下游任务，支持结论 / 快照 / 分叉与确认门控",
-    "Continuation wire (header arrow port): advances tasks with conclusion, snapshot or fork",
+    "接续线（标题栏箭头口）：推进下游任务，支持结论 / 会话快照 / 历史分叉与确认门控",
+    "Continuation wire (header arrow port): advances tasks with conclusion, folded transcript or fork",
   ],
   legendReference: [
     "引用线（下方圆环口）：仅注入只读上下文资料，绝不自动启动对方",
     "Reference wire (lower circle port): supplies read-only context, never triggers execution",
   ],
   legendExchange: [
-    "交接线（双股弧线）：展示已传递的接续快照往来，只读可提取",
-    "Exchange arc (bowed雙strand): visualizes captured handoff turns between agents",
+    "消息线（双股青橙弧线）：只读呈现 DSH 原生 Agent 间通信（agent-message / subagent-settled / team-message）",
+    "Message arc (dual cyan-orange strand): read-only projection of native DSH inter-agent messages (agent-message / subagent-settled / team-message)",
   ],
   legendDisplay: [
     "展示源线（粉色点线）：连接展示/详情卡与其上游来源，支持固定或跟随最新",
     "Display link (pink dotted): links an extracted display/detail card to its source",
   ],
   filesDescription: ["勾选或输入工作区相对路径作为上下文引用", "Select or enter workspace file paths"],
-  filePathPlaceholder: ["输入工作区路径，如 README.md，回车添加…", "Workspace path e.g. README.md, Enter to add…"],
+  filePathPlaceholder: [
+    "输入工作区路径，如 src/index.ts，回车添加…",
+    "Workspace path e.g. src/index.ts, Enter to add…",
+  ],
   selectedCount: ["已选 {count} 项", "{count} selected"],
   filesCount: ["{count} 个文件", "{count} files"],
   openFile: ["预览文件内容", "Preview file"],
   lineCount: ["{count} 行", "{count} lines"],
   copy: ["复制内容", "Copy"],
-  notePlaceholder: ["在这里记录设计约束、验收标准或提示词片段…", "Write constraints, acceptance criteria or notes…"],
+  notePlaceholder: [
+    "在这里记录设计约束、验收标准或提示词片段…",
+    "Write constraints, acceptance criteria or notes…",
+  ],
   todo: ["待办", "To do"],
   inProgress: ["进行中", "In progress"],
   completedColumn: ["完成", "Done"],
@@ -414,18 +602,53 @@ export const dict: Record<string, [string, string]> = {
   snapInterrupted: ["{count} 个运行恢复时停止", "{count} active stop on restore"],
   snapWaiting: ["{count} 项待确认", "{count} awaiting confirm"],
   snapQueued: ["{count} 步排队中", "{count} queued"],
-  welcomeEyebrow: ["DEEPSEEK HARNESS · PERSISTENT AGENT CANVAS", "DEEPSEEK HARNESS · PERSISTENT AGENT CANVAS"],
-  welcomeTitle: ["把多 Agent 协作放上同一张工作台", "Put multi-agent workflows on one live canvas"],
-  welcomeDescription: [
-    "每个节点都是真实的持久化 DSH 会话。用圆环引用口注入文件与便签，用箭头接续口串联分析、审查、并行探索与人工放行。",
-    "Every card is a real persistent DSH session. Wire files and notes into reference ports, and chain analysis, review and confirmation gates through continuation ports.",
+  welcomeEyebrow: [
+    "DEEPSEEK HARNESS · PERSISTENT AGENT COMFYUI",
+    "DEEPSEEK HARNESS · PERSISTENT AGENT COMFYUI",
   ],
-  startWithReview: ["载入「分析 → 审查 → 汇总」三步工作流", "Load “Analyze → Review → Deliver” workflow"],
-  startWithParallel: ["载入「两路探索 → 汇总」并行工作流", "Load “Parallel exploration → Synthesis”"],
-  noSearchResults: ["没有匹配的节点、文件或命令", "No matching nodes, files or commands"],
-  noExistingSessions: ["当前没有可导入的其他 DSH 会话", "No other DSH sessions available to add"],
+  welcomeTitle: [
+    "把多 Agent 协作放上同一张可视工作台",
+    "Orchestrate real DSH agents on one spatial canvas",
+  ],
+  welcomeDescription: [
+    "每个节点都是真实的持久化 DSH 会话。用圆环引用口注入文件、Diff 与看板，用箭头接续口串联分叉实验、并行汇合与有界自愈循环。",
+    "Every Agent card is a real persistent DSH session. Wire files, diffs and boards into reference ports, and chain forks, joins and bounded TDD loops.",
+  ],
+  welcomeStudioSubtitle: [
+    "一键将成熟的多 Agent 协作蓝图放入当前工作区，或双击空白画布自由编排。",
+    "Drop a ready-to-run multi-agent blueprint onto your workspace in one click, or double-click anywhere to build freely.",
+  ],
+  browseAllBlueprints: ["浏览全部 {count} 套蓝图", "Browse all {count} blueprints"],
+  legendPillRef: [
+    "● 引用线：只读上下文胶囊，绝不触发运行",
+    "● Reference: read-only context, never triggers run",
+  ],
+  legendPillCont: [
+    "◆ 接续线：结论 / 会话快照 / 历史分叉推进",
+    "◆ Continuation: advances conclusion / transcript / fork",
+  ],
+  legendPillMsg: [
+    "⌒ 消息线：只读投影 DSH 原生子代理与团队通信",
+    "⌒ Message arc: live native DSH inter-agent comms",
+  ],
+  startWithReview: [
+    "载入「规划 → 审查 → 交付」工作流",
+    "Load “Plan → Critique → Deliver”",
+  ],
+  startWithParallel: [
+    "载入「两路探索 → 汇总」并行工作流",
+    "Load “Parallel Recon → Synthesis”",
+  ],
+  noSearchResults: ["没有匹配的节点、工具或蓝图", "No matching nodes, tools or blueprints"],
+  noExistingSessions: [
+    "当前没有可导入的其他 DSH 会话",
+    "No other DSH sessions available to add",
+  ],
   exchange: ["接续上下文往来", "Continuation exchange"],
-  exchangeReadOnly: ["展示运行过程中实际捕获并投递的上下文快照，只读。", "Captured context snapshots delivered across runs (read-only)."],
+  exchangeReadOnly: [
+    "展示运行过程中实际捕获并投递的上下文快照，只读。",
+    "Captured context snapshots delivered across runs (read-only).",
+  ],
   roundBadge: ["第 {round} 轮", "Round {round}"],
   role_implementation: ["实现", "Build"],
   role_review: ["审查", "Review"],
@@ -462,6 +685,16 @@ export const dict: Record<string, [string, string]> = {
   gitBranches: ["分支 / Worktree", "Branches & WT"],
   stagedFiles: ["已暂存", "Staged"],
   workingFiles: ["工作区改动", "Working tree"],
+  gitStageFile: ["暂存此文件", "Stage file"],
+  gitUnstageFile: ["取消暂存", "Unstage file"],
+  gitBaseRef: ["基准引用 (Base ref)", "Base ref"],
+  gitWorktreesCount: ["Worktree ({count})", "Worktrees ({count})"],
+  gitNotRepoTitle: ["当前目录尚未初始化 Git 仓库", "Not a Git repository yet"],
+  gitNotRepoDesc: [
+    "在此目录初始化本地 Git 仓库以启用变更对比、提交图谱与隔离 Worktree，或在外部初始化后刷新。",
+    "Initialize a local Git repository here to enable diffs, commit graph and isolated worktrees, or refresh.",
+  ],
+  initGitRepo: ["初始化 Git 仓库", "Initialize Git repo"],
   stageAll: ["全部暂存", "Stage all"],
   unstageAll: ["取消全暂存", "Unstage all"],
   commitChanges: ["提交", "Commit"],
@@ -473,16 +706,28 @@ export const dict: Record<string, [string, string]> = {
   push: ["推送 (Push)", "Push"],
   wireReference: ["引出为引用快照", "Extract as reference"],
   turnChanges: ["第 {turn} 轮改动", "Turn #{turn} changes"],
-  noChangesYet: ["关联 Agent 产生文件修改后在此展示摘要与 Diff", "File summaries and diffs appear after an agent edits files"],
+  noChangesYet: [
+    "关联 Agent 产生文件修改后在此展示摘要与 Diff",
+    "File summaries and diffs appear after an agent edits files",
+  ],
   refreshSnapshot: ["刷新快照", "Refresh snapshot"],
-  openTerminal: ["新建会话终端", "Open session terminal"],
-  noTerminalsYet: ["所绑定的会话暂无已打开终端", "No active terminal in the bound session yet"],
+  openTerminal: ["新建会话终端", "New session terminal"],
+  terminalScreenHeader: ["终端屏幕快照", "Terminal screen snapshot"],
+  noTerminalsYet: [
+    "所绑定的会话暂无已打开终端，可一键新建终端捕获屏幕输出。",
+    "No open terminal in this session yet — launch one to capture screen output.",
+  ],
+  terminalSelectAgentHint: [
+    "请先启动或绑定一个 Agent 会话以挂载其专属终端。",
+    "Start or bind an Agent session first to attach its session terminal.",
+  ],
   nativeExchange: ["DSH 原生 Agent 消息往来", "Native DSH inter-agent messages"],
   nativeExchangeReadOnly: [
-    "忠实呈现 DSH Runtime 原生 Agent 间消息（agent-message / subagent-settled），只读。",
-    "Faithful read-only projection of native DSH inter-agent messages.",
+    "忠实呈现 DSH Runtime 原生 Agent 间消息（agent-message / subagent-settled / team-message），只读。",
+    "Faithful read-only projection of native DSH inter-agent messages (agent-message / subagent-settled / team-message).",
   ],
   deliverablesTitle: ["本轮交付产物", "Presented deliverables"],
+  extractDeliverable: ["固定到画布", "Pin to canvas"],
   rerunFailed: ["重跑失败节点及下游", "Rerun failed & downstream"],
   quoteToCanvas: ["引出选区到画布", "Quote to Canvas"],
   overviewTab: ["概览", "Overview"],
@@ -493,24 +738,26 @@ export const dict: Record<string, [string, string]> = {
   reconnectTo: ["重连至「{name}」", "Reconnect to “{name}”"],
   connectTo: ["连接至「{name}」", "Connect to “{name}”"],
   keepConnected: ["松开保持原连接", "Release to keep connected"],
-  wireDisconnected: ["已断开输入连线（可 Ctrl+Z 撤销）", "Input wire disconnected (Ctrl+Z to undo)"],
-  wireReconnected: ["已将连线改接至「{name}」", "Wire rerouted to “{name}”"],
-  dragInputTip: ["拖拽可拔出重连或拖到空白处断开", "Drag to reroute or drop on canvas to unplug"],
-  "在 FlowSpace 中查看和设置接续": [
-    "在 FlowSpace 中查看和设置接续",
-    "View and configure continuations in FlowSpace",
+  wireDisconnected: [
+    "已断开输入连线（可 Ctrl+Z 撤销）",
+    "Input wire disconnected (Ctrl+Z to undo)",
   ],
-  开启: ["开启", "On"],
-  关闭: ["关闭", "Off"],
-  接续: ["接续", "Continuation"],
+  wireReconnected: ["已将连线改接至「{name}」", "Wire rerouted to “{name}”"],
+  dragInputTip: [
+    "拖拽可拔出重连或拖到空白处断开",
+    "Drag to reroute or drop on canvas to unplug",
+  ],
+  selectAgentOption: ["选择关联 Agent…", "Select bound Agent…"],
+  diffAction: ["查看 Diff", "View diff"],
 };
 
-export function t(
+export function tFor(
+  locale: Locale,
   key: string,
   values?: Record<string, string | number>,
 ): string {
   const pair = dict[key];
-  let text = pair ? pair[getLanguage() === "en" ? 1 : 0] : key;
+  let text = pair ? pair[locale === "en" ? 1 : 0] : key;
   if (values) {
     for (const [k, v] of Object.entries(values)) {
       text = text.replaceAll(`{${k}}`, String(v));
@@ -519,17 +766,27 @@ export function t(
   return text;
 }
 
+export function t(
+  key: string,
+  values?: Record<string, string | number>,
+): string {
+  return tFor(getLanguage(), key, values);
+}
+
 const legacyEn: Record<string, string> = {
-  "正在运行": "Already running",
-  "等待确认": "Waiting for confirmation",
-  "尚未填写任务": "No task yet",
-  "暂停参与": "Participation paused",
-  "仅手动启动": "Manual start only",
-  "没有新输入": "No new input",
-  "上游仍在运行或等待确认": "Upstream still running or awaiting confirmation",
+  正在运行: "Already running",
+  等待确认: "Waiting for confirmation",
+  尚未填写任务: "No task yet",
+  暂停参与: "Participation paused",
+  旁路透传: "Bypassed",
+  仅手动启动: "Manual start only",
+  没有新输入: "No new input",
+  待确认计划: "Plan awaiting confirmation",
+  上游仍在运行或等待确认: "Upstream still running or awaiting confirmation",
+  工作流分组不存在: "Workflow group does not exist",
   "在 FlowSpace 中查看和设置接续":
     "View and configure continuations in FlowSpace",
-  接续: "Continuation ",
+  接续: "Continuation: ",
   开启: "On",
   关闭: "Off",
 };

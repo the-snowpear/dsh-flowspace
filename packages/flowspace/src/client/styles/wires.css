@@ -1,6 +1,8 @@
 /* ============================================================
    FlowSpace · Four Wire Systems, Flow Particles, Pill Tags & Waypoints
-   Migrated from omp-studio agent-canvas prototype (wires.css)
+   - Solid thin Reference wires (design.md:97) + 4-state semantics
+   - Thick Continuation execution wires (dashed = confirm / off)
+   - Distinct --running active pulse vs --green completed
    ============================================================ */
 
 .fs-root .edge-path {
@@ -21,65 +23,77 @@
 .fs-root .edge-display {
   stroke: var(--k-display);
   stroke-width: 1.3;
-  stroke-dasharray: 1.5 4;
-  opacity: 0.75;
+  stroke-dasharray: 1.5 4.5;
+  opacity: 0.72;
 }
 
+/* Solid Thin Reference Wire (design.md:97) — Unified 4-State Semantics */
 .fs-root .edge-reference {
-  stroke: var(--accent);
-  stroke-width: 1.6;
-  stroke-dasharray: 5 4;
-  opacity: 0.9;
+  stroke: var(--cap-pending);
+  stroke-width: 1.65;
+  stroke-dasharray: none;
+  opacity: 0.88;
+}
+.fs-root .edge-reference.edge-state-pending {
+  stroke: var(--cap-pending);
+  opacity: 0.92;
 }
 .fs-root .edge-reference.edge-state-sent {
   stroke: var(--glyph);
-  opacity: 0.55;
+  stroke-dasharray: none;
+  opacity: 0.52;
 }
 .fs-root .edge-reference.edge-state-updated {
-  stroke: var(--green);
+  stroke: var(--cap-updated);
   opacity: 1;
+}
+.fs-root .edge-reference.edge-state-always {
+  stroke: var(--cap-always);
+  stroke-width: 1.85;
+  opacity: 0.96;
 }
 .fs-root .edge-reference.edge-state-pending.edge-flow {
   display: block;
-  stroke: var(--accent);
-  stroke-width: 3;
+  stroke: var(--cap-pending);
+  stroke-width: 2.8;
   stroke-dasharray: 0.1 26;
-  opacity: 1;
-  filter: drop-shadow(0 0 3px var(--accent));
+  opacity: 0.95;
+  filter: drop-shadow(0 0 3px var(--cap-pending));
   animation: cv-flow var(--loop-drift) linear infinite;
 }
 .fs-root .edge-reference.edge-state-updated.edge-flow {
   display: block;
-  stroke: var(--green);
-  stroke-width: 3;
-  stroke-dasharray: 0.1 26;
+  stroke: var(--cap-updated);
+  stroke-width: 2.9;
+  stroke-dasharray: 0.1 24;
   opacity: 1;
-  filter: drop-shadow(0 0 3px var(--green));
+  filter: drop-shadow(0 0 3px var(--cap-updated));
   animation: cv-flow var(--loop-pulse) linear infinite;
 }
 
+/* Thick Continuation Execution Wire */
 .fs-root .edge-continuation {
   stroke-width: 2.8;
   stroke: var(--text-2);
 }
 .fs-root .edge-continuation.trigger-confirm {
-  stroke-dasharray: 14 7;
+  stroke-dasharray: 12 6;
 }
 .fs-root .edge-continuation.trigger-off {
   stroke-dasharray: 0.1 7;
-  opacity: 0.6;
+  opacity: 0.58;
 }
 .fs-root .edge-continuation.edge-state-active {
-  stroke: color-mix(in srgb, var(--accent) 45%, transparent);
+  stroke: color-mix(in oklab, var(--running) 48%, transparent);
   stroke-dasharray: none;
   opacity: 1;
 }
 .fs-root .edge-continuation.edge-state-active.edge-flow {
   display: block;
-  stroke: var(--accent);
+  stroke: var(--running);
   stroke-width: 3.4;
   stroke-dasharray: 14 34;
-  filter: drop-shadow(0 0 5px var(--accent));
+  filter: drop-shadow(0 0 5px var(--running));
   animation: cv-flow var(--loop-spin) linear infinite;
 }
 .fs-root .edge-continuation.edge-state-ready,
@@ -90,7 +104,7 @@
 .fs-root .edge-continuation.edge-state-queued.edge-flow {
   display: block;
   stroke: var(--accent);
-  stroke-width: 4.5;
+  stroke-width: 4.2;
   stroke-dasharray: 0.1 12;
   animation: cv-flow var(--loop-drift) linear infinite;
 }
@@ -103,7 +117,7 @@
 .fs-root .edge-continuation.edge-state-boundary.edge-flow {
   display: block;
   stroke: var(--amber);
-  stroke-width: 7;
+  stroke-width: 6.5;
   stroke-dasharray: none;
   opacity: 0.22;
   animation: omp-pulse var(--loop-drift) var(--ease-loop) infinite;
@@ -112,11 +126,16 @@
   stroke: var(--green);
   opacity: 1;
 }
+.fs-root .edge-path.edge-state-bypassed {
+  stroke: var(--violet);
+  stroke-dasharray: 6 4;
+  opacity: 0.65;
+}
 
 /* Exchange Arcs */
 .fs-root .edge-message {
   stroke-width: 1.5;
-  opacity: 0.66;
+  opacity: 0.68;
 }
 .fs-root .message-out {
   stroke: var(--m-f);
@@ -147,8 +166,8 @@
   filter: drop-shadow(0 0 4px var(--accent));
 }
 .fs-root .temporary-edge.edge-reference {
-  stroke: var(--accent);
-  stroke-width: 1.8;
+  stroke: var(--cap-pending);
+  stroke-width: 1.85;
   opacity: 1;
 }
 .fs-root .temporary-edge.edge-continuation {
@@ -167,11 +186,14 @@
   translate: -50% -50%;
   display: inline-flex;
   align-items: center;
-  height: 24px;
-  background: var(--surface);
+  height: 22px;
+  background: color-mix(in oklab, var(--surface) 92%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-full);
   color: var(--text-2);
+  box-shadow: 0 2px 8px -2px var(--shadow);
   animation: cv-mark-in var(--dur) var(--ease-out) backwards;
   transition:
     border-color var(--dur-fast) var(--ease),
@@ -180,25 +202,25 @@
 }
 .fs-root .edge-tag:hover,
 .fs-root .exchange-tag:hover {
-  border-color: var(--text-3);
+  border-color: var(--border-float);
   color: var(--text);
-  z-index: 5;
+  z-index: 6;
 }
 .fs-root .edge-tag > button,
 .fs-root .exchange-tag > button {
   display: flex;
-  gap: 5px;
+  gap: 4px;
   align-items: center;
-  height: 22px;
-  padding: 0 8px;
+  height: 20px;
+  padding: 0 7px;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 10.5px;
   border-radius: var(--r-full);
 }
 .fs-root .edge-tag .ic,
 .fs-root .exchange-tag .ic {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
 }
 .fs-root .edge-tag small {
   font: 600 10px var(--font-mono);
@@ -210,25 +232,31 @@
   place-items: center;
   color: var(--text-faint);
   border-left: 1px solid var(--border-strong);
-  padding-left: 5px;
-  height: 12px;
-}
-.fs-root .edge-tag .trigger-indicator .ic {
-  width: 11px;
+  padding-left: 4px;
   height: 11px;
 }
+.fs-root .edge-tag .trigger-indicator .ic {
+  width: 10px;
+  height: 10px;
+}
 .fs-root .edge-tag.reference {
-  color: var(--accent);
-  border-color: var(--accent-border);
+  color: var(--cap-pending);
+  border-color: var(--cap-pending-border);
 }
 .fs-root .edge-tag.reference.edge-state-sent {
   color: var(--text-faint);
   border-color: var(--border-strong);
-  border-style: dashed;
+  border-style: solid;
 }
 .fs-root .edge-tag.reference.edge-state-updated {
-  color: var(--green);
-  border-color: var(--green);
+  color: var(--cap-updated);
+  border-color: var(--cap-updated-border);
+  background: color-mix(in oklab, var(--amber) 9%, var(--surface));
+}
+.fs-root .edge-tag.reference.edge-state-always {
+  color: var(--cap-always);
+  border-color: var(--cap-always-border);
+  background: color-mix(in oklab, var(--teal) 9%, var(--surface));
 }
 .fs-root .tight-tag:not(:hover):not(.selected) > button > span,
 .fs-root .tight-tag:not(:hover):not(.selected) > button > small {
@@ -240,42 +268,53 @@
 .fs-root .edge-tag.selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+  z-index: 6;
 }
-.fs-root .edge-tag.continuation.edge-state-active,
+.fs-root .edge-tag.continuation.edge-state-active {
+  border-color: var(--running);
+  color: var(--running);
+  box-shadow: 0 0 14px -2px color-mix(in oklab, var(--running) calc(70% * var(--glow)), transparent);
+}
 .fs-root .edge-tag.continuation.edge-state-ready,
 .fs-root .edge-tag.continuation.edge-state-queued {
   border-color: var(--accent);
   color: var(--accent);
-  box-shadow: 0 0 14px -2px color-mix(in srgb, var(--accent) calc(70% * var(--glow)), transparent);
+  box-shadow: 0 0 14px -2px color-mix(in oklab, var(--accent) calc(70% * var(--glow)), transparent);
 }
 .fs-root .edge-tag.continuation.edge-state-done {
-  border-color: var(--green);
+  border-color: color-mix(in oklab, var(--green) 55%, var(--border-strong));
   color: var(--green);
+}
+.fs-root .edge-tag.edge-state-bypassed {
+  border-color: var(--violet-border);
+  color: var(--violet);
+  border-style: dashed;
 }
 .fs-root .edge-tag.edge-state-waiting,
 .fs-root .edge-tag.edge-state-boundary {
-  height: 28px;
+  height: 25px;
   padding-right: 3px;
   border-color: var(--amber);
   color: var(--amber);
-  background: color-mix(in srgb, var(--amber) 10%, var(--surface));
+  background: color-mix(in oklab, var(--amber) 10%, var(--surface));
   --ring: var(--amber-soft);
   animation: cv-breathe var(--loop-drift) var(--ease-loop) infinite;
 }
 .fs-root .edge-tag .edge-release {
   background: var(--amber);
   color: var(--surface);
-  height: 22px;
-  padding: 0 10px 0 8px;
+  height: 19px;
+  padding: 0 8px 0 6px;
+  font-size: 10.5px;
   font-weight: 600;
   box-shadow: 0 4px 12px -4px var(--amber);
 }
-.fs-root .edge-tag .edge-release:hover {
+.fs-root .edge-tag .edge-release:not(:disabled):hover {
   filter: brightness(1.08);
 }
 
 .fs-root .exchange-tag {
-  border-color: color-mix(in srgb, var(--m-f) 34%, var(--border-strong));
+  border-color: color-mix(in oklab, var(--m-f) 34%, var(--border-strong));
   font-variant-numeric: tabular-nums;
 }
 .fs-root .exchange-tag.side {
