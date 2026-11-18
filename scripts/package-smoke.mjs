@@ -12,8 +12,13 @@ import assert from "node:assert/strict";
 import { root, boot } from "./environment.mjs";
 const output = resolve(root, ".local/package-smoke-" + Date.now());
 await mkdir(output, { recursive: true });
+const pkgMeta = JSON.parse(
+  await readFile(resolve(root, "packages/flowspace/package.json"), "utf8"),
+);
 const bytes = gunzipSync(
-  await readFile(resolve(root, "artifacts/dsh-flowspace-0.1.0.tgz")),
+  await readFile(
+    resolve(root, `artifacts/dsh-flowspace-${pkgMeta.version}.tgz`),
+  ),
 );
 for (let offset = 0; offset + 512 <= bytes.length; ) {
   const name = bytes
@@ -74,6 +79,8 @@ const { ctx, shutdown } = await boot({
 try {
   assert.equal(ctx.flowspace.snapshot().document.version, 1);
   assert.ok(ctx.typert.local.get("flowspace/start"));
+  assert.ok(ctx.typert.local.get("flowspace/gitInspect"));
+  assert.ok(ctx.typert.local.get("flowspace/rerunFailed"));
   console.log(
     "PASS: packed plugin loads Host service and generated Remote contracts in rc.3.",
   );

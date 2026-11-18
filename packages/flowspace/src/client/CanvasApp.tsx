@@ -26,6 +26,7 @@ import type {
   WorkflowTemplate,
   WorkspaceBrief,
   WorkspaceFilePreview,
+  WorkspaceStructureBrief,
 } from "../types.ts";
 import {
   boardSummaryText,
@@ -44,6 +45,7 @@ import {
   LOD_ZOOM,
   MOTION,
   bounds,
+  capsuleStateOf,
   clamp,
   collapsedAncestor,
   easeView,
@@ -80,6 +82,17 @@ import {
   formatTime,
   nodeStatusOf,
 } from "./SurfaceViews.tsx";
+import {
+  buildDerivedStructure,
+  resolveDraftAffiliation,
+  type DerivedStructureCard,
+  type DraftAffiliation,
+} from "./structure.ts";
+import {
+  ChangesNodeBody,
+  GitNodeBody,
+  TerminalNodeBody,
+} from "./ToolNodeViews.tsx";
 
 type RouteId = "canvas" | "conversation" | "workflows" | "activity" | "settings";
 
@@ -231,6 +244,16 @@ export function CanvasApp({
   const [future, setFuture] = useState<FlowspaceDocument[]>([]);
 
   const [workspaces, setWorkspaces] = useState<WorkspaceBrief[]>([]);
+  const [projectStructures, setProjectStructures] = useState<
+    WorkspaceStructureBrief[]
+  >([]);
+  const [selectedStructureId, setSelectedStructureId] = useState<string | null>(
+    null,
+  );
+  const preClickSelectionRef = useRef<{
+    nodes: string[];
+    structureId: string | null;
+  }>({ nodes: [], structureId: null });
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
   const [workspaceFilesList, setWorkspaceFilesList] = useState<string[]>([]);
   const [fileInputDrafts, setFileInputDrafts] = useState<
@@ -371,7 +394,7 @@ export function CanvasApp({
       });
       if (!sidebarAutoAdjusted.current && root.clientWidth > 0) {
         sidebarAutoAdjusted.current = true;
-        if (root.clientWidth < 1100) setSidebarOpen(false);
+        if (root.clientWidth < 1040) setSidebarOpen(false);
       }
     });
     ro.observe(vp);
@@ -379,7 +402,14 @@ export function CanvasApp({
     return () => ro.disconnect();
   }, []);
 
-  /* Connect bridge & load workspaces + workspace files */
+  /* Connect bridge & load workspaces + 4-tier project structures */
+  const refreshProjectStructures = useCallback(() => {
+    void bridge
+      .projectStructures()
+      .then(setProjectStructures)
+      .catch(() => {});
+  }, [bridge]);
+
   useEffect(() => bridge.connect(), [bridge]);
   useEffect(() => {
     void bridge
@@ -389,7 +419,8 @@ export function CanvasApp({
         setActiveWorkspaceId(list[0]?.id ?? "");
       })
       .catch(reportError);
-  }, [bridge, reportError]);
+    refreshProjectStructures();
+  }, [bridge, reportError, refreshProjectStructures]);
 
   const activeWorkspaceCwd = useMemo(
     () => workspaces.find((w) => w.id === activeWorkspaceId)?.path,
@@ -510,6 +541,30 @@ export function CanvasApp({
     }
     if (!initialized.current) {
       initialized.current = true;
+      const d = snapshot.document;
+      if (
+        d.nodes.length > 0 &&
+        d.viewport.x === 0 &&
+        d.viewport.y === 0 &&
+        d.viewport.zoom === 1
+      ) {
+        requestAnimationFrame(() => {
+          const vp = viewportRef.current;
+          if (!vp) return;
+          const cur = docRef.current;
+          const boxes = cur.nodes
+            .filter((n) => !collapsedAncestor(cur, n.id))
+            .map((n) => (n.kind === "group" ? groupBox(n) : nodeBox(n, false)));
+          if (boxes.length) {
+            const target = fit(
+              { width: vp.clientWidth || 960, height: vp.clientHeight || 640 },
+              boxes,
+              1,
+            );
+            setViewportDirect(target, 400);
+          }
+        });
+      }
     }
 
     /* Auto-switch newly started Agent steps to Conversation tab so live stream is visible */
@@ -543,6 +598,8 @@ export function CanvasApp({
       snap: doc.prefs?.snap ?? true,
       filter: doc.prefs?.filter ?? "all",
       hiddenWorkspaces: doc.prefs?.hiddenWorkspaces ?? [],
+      showBranches: doc.prefs?.showBranches ?? false,
+      showWorktrees: doc.prefs?.showWorktrees ?? false,
     }),
     [doc.prefs],
   );
@@ -652,10 +709,43 @@ export function CanvasApp({
       const wsKey = node.workspaceId || "__default__";
       if (prefs.hiddenWorkspaces.includes(wsKey)) return false;
       if (!ignoreCollapse && collapsedAncestor(doc, node.id)) return false;
-      if (prefs.filter === "running" && node.kind === "agent") {
+      if (node.kind === "agent" && prefs.filter !== "all") {
         const st = nodeStatusOf(snapshot, node.id);
-        if (!["running", "waiting", "queued", "input"].includes(st)) {
-          return false;
+        const active = ["running", "waiting", "queued", "input"].includes(st);
+        if (prefs.filter === "running") return active;
+        const liveItem = snapshot?.live.find((l) => l.nodeId === node.id);
+        const lastStepAt =
+          snapshot?.runs
+            .flatMap((r) => r.steps)
+            .filter((s) => s.nodeId === node.id)
+            .at(-1)?.createdAt ?? 0;
+        const updatedAt = Math.max(liveItem?.updatedAt ?? 0, lastStepAt);
+        if (prefs.filter === "3d") {
+          return (
+            active ||
+            !node.sessionId ||
+            updatedAt === 0 ||
+            Date.now() - updatedAt <= 3 * 86_400_000
+          );
+        }
+        if (prefs.filter === "7d") {
+          return (
+            active ||
+            !node.sessionId ||
+            updatedAt === 0 ||
+            Date.now() - updatedAt <= 7 * 86_400_000
+          );
+        }
+        if (prefs.filter === "auto") {
+          return (
+            active ||
+            !node.sessionId ||
+            Boolean(node.pinned) ||
+            doc.edges.some(
+              (e) => e.source === node.id || e.target === node.id,
+            ) ||
+            true
+          );
         }
       }
       return true;
@@ -703,6 +793,39 @@ export function CanvasApp({
       }),
     [doc.nodes, snapshot],
   );
+
+  const derivedStructure = useMemo(() => {
+    const visibleNodes = doc.nodes.filter((n) => isNodeVisible(n));
+    const runningIds = new Set(
+      doc.nodes
+        .filter((n) => n.kind === "agent" && nodeStatusOf(snapshot, n.id) === "running")
+        .map((n) => n.id),
+    );
+    const waitingIds = new Set(waitingAgentNodes.map((n) => n.id));
+    return buildDerivedStructure({
+      projects: projectStructures,
+      hiddenWorkspaces: prefs.hiddenWorkspaces,
+      showBranches: prefs.showBranches,
+      showWorktrees: prefs.showWorktrees,
+      visibleNodes,
+      lod,
+      keepExpandedIds,
+      subagents: snapshot?.subagents ?? [],
+      runningNodeIds: runningIds,
+      waitingNodeIds: waitingIds,
+    });
+  }, [
+    doc.nodes,
+    isNodeVisible,
+    snapshot,
+    waitingAgentNodes,
+    projectStructures,
+    prefs.hiddenWorkspaces,
+    prefs.showBranches,
+    prefs.showWorktrees,
+    lod,
+    keepExpandedIds,
+  ]);
 
   /* Selection & Reveal Helpers */
   const selectNode = useCallback(
@@ -788,34 +911,58 @@ export function CanvasApp({
   );
 
   const fitView = useCallback(
-    (all = false) => {
+    (all = false, instant = false) => {
+      const curDoc = docRef.current;
+      const curZoom = curDoc.viewport.zoom;
+      const curLod = curZoom < LOD_ZOOM;
+      const hiddenWs = curDoc.prefs?.hiddenWorkspaces ?? [];
+      const curFilter = curDoc.prefs?.filter ?? "all";
+      const nodeShown = (n: FlowNode) => {
+        if (n.kind === "group") return false;
+        if (hiddenWs.includes(n.workspaceId || "__default__")) return false;
+        if (collapsedAncestor(curDoc, n.id)) return false;
+        if (curFilter === "running" && n.kind === "agent") {
+          const st = nodeStatusOf(snapshot, n.id);
+          if (!["running", "waiting", "queued", "input"].includes(st))
+            return false;
+        }
+        return true;
+      };
       if (!all && selection.groups.length) {
         const boxes = selection.groups
-          .map((id) => docRef.current.nodes.find((n) => n.id === id))
+          .map((id) => curDoc.nodes.find((n) => n.id === id))
           .filter((g): g is FlowNode => !!g)
           .map((g) => groupBox(g));
-        return fitBoxes(boxes);
+        return fitBoxes(boxes, instant);
       }
       if (!all && selection.nodes.length) {
         const boxes = selection.nodes
-          .map((id) => docRef.current.nodes.find((n) => n.id === id))
+          .map((id) => curDoc.nodes.find((n) => n.id === id))
           .filter((n): n is FlowNode => !!n)
           .map((n) => nodeBox(n, false, true));
-        return fitBoxes(boxes);
+        return fitBoxes(boxes, instant);
       }
-      const topGroup = docRef.current.nodes.find(
-        (n) => n.kind === "group" && !n.parentId,
-      );
-      if (topGroup && !all) return fitBoxes([groupBox(topGroup)]);
+      const groupsShown = curDoc.nodes.filter((g) => {
+        if (g.kind !== "group") return false;
+        if (g.parentId) {
+          const parent = curDoc.nodes.find((p) => p.id === g.parentId);
+          if (parent?.collapsed) return false;
+        }
+        const mIds = members(curDoc, g.id);
+        return !mIds.length || mIds.some((id) => {
+          const mn = curDoc.nodes.find((x) => x.id === id);
+          return !!mn && !hiddenWs.includes(mn.workspaceId || "__default__");
+        });
+      });
       const allBoxes = [
-        ...docRef.current.nodes
-          .filter((n) => isNodeVisible(n))
-          .map((n) => nodeBox(n, lod)),
-        ...visibleGroups.map((g) => groupBox(g)),
+        ...curDoc.nodes
+          .filter(nodeShown)
+          .map((n) => nodeBox(n, all ? curLod : false)),
+        ...groupsShown.map((g) => groupBox(g)),
       ];
-      fitBoxes(allBoxes);
+      fitBoxes(allBoxes, instant);
     },
-    [selection, fitBoxes, isNodeVisible, lod, visibleGroups],
+    [selection, fitBoxes, snapshot],
   );
 
   /* Node & Edge Mutations */
@@ -946,7 +1093,12 @@ export function CanvasApp({
   );
 
   const createCanvasNode = useCallback(
-    (kind: NodeKind, worldPoint?: { x: number; y: number }): FlowNode => {
+    (
+      kind: NodeKind,
+      worldPoint?: { x: number; y: number },
+      explicitAffiliation?: DraftAffiliation,
+      usePreClick = false,
+    ): FlowNode => {
       let pt = worldPoint;
       if (!pt) {
         const visibleBoxes = [
@@ -970,7 +1122,30 @@ export function CanvasApp({
             : { x: 120, y: 160 };
         }
       }
-      const ws = workspaces.find((w) => w.id === activeWorkspaceId);
+      const chosenStructId = usePreClick
+        ? preClickSelectionRef.current.structureId
+        : selectedStructureId;
+      const chosenNodeIds = usePreClick
+        ? preClickSelectionRef.current.nodes
+        : selection.nodes;
+      const preStruct: DerivedStructureCard | null = chosenStructId
+        ? (derivedStructure.cards.find((c) => c.id === chosenStructId) ?? null)
+        : null;
+      const preNode = chosenNodeIds[0]
+        ? (docRef.current.nodes.find((n) => n.id === chosenNodeIds[0]) ?? null)
+        : null;
+      const aff = resolveDraftAffiliation({
+        explicit: explicitAffiliation,
+        preSelectedStructure: preStruct,
+        preSelectedNode: preNode,
+        dropPoint: pt,
+        structureCards: derivedStructure.cards,
+        workspaces,
+        activeWorkspaceId,
+      });
+      const boundAgent = docRef.current.nodes.find(
+        (n) => n.kind === "agent" && Boolean(n.sessionId),
+      );
       const created: FlowNode = {
         ...newNode(
           kind,
@@ -979,20 +1154,43 @@ export function CanvasApp({
         ),
         ...(kind === "agent"
           ? {
-              workspaceId: activeWorkspaceId || undefined,
-              cwd: ws?.path,
+              workspaceId: aff.workspaceId,
+              cwd: aff.cwd,
+              branch: aff.branch,
+              worktreePath: aff.worktreePath,
             }
-          : kind === "file"
+          : kind === "git"
             ? {
-                cwd: ws?.path,
-                items: workspaceFilesList.slice(0, 12),
-                selectedItems: workspaceFilesList[0]
-                  ? [workspaceFilesList[0]]
-                  : [],
-                text: workspaceFilesList[0] ?? "README.md",
-                expanded: true,
+                workspaceId: aff.workspaceId,
+                cwd: aff.cwd,
+                branch: aff.branch,
+                worktreePath: aff.worktreePath,
               }
-            : {}),
+            : kind === "changes"
+              ? {
+                  workspaceId: aff.workspaceId,
+                  cwd: aff.cwd,
+                  changesSessionId: boundAgent?.sessionId,
+                  expanded: true,
+                }
+              : kind === "terminal"
+                ? {
+                    workspaceId: aff.workspaceId,
+                    cwd: aff.cwd,
+                    terminalSessionId: boundAgent?.sessionId,
+                    expanded: true,
+                  }
+                : kind === "file"
+                  ? {
+                      cwd: aff.cwd,
+                      items: workspaceFilesList.slice(0, 12),
+                      selectedItems: workspaceFilesList[0]
+                        ? [workspaceFilesList[0]]
+                        : [],
+                      text: workspaceFilesList[0] ?? "README.md",
+                      expanded: true,
+                    }
+                  : {}),
       };
       edit((d) => {
         /* Place inside group if created inside an expanded group's bounds */
@@ -1010,6 +1208,7 @@ export function CanvasApp({
         if (parentGroup) created.parentId = parentGroup.id;
         d.nodes.push(created);
       });
+      setSelectedStructureId(null);
       selectNode(created.id);
       showToast(t("nodeCreated"));
       return created;
@@ -1017,6 +1216,9 @@ export function CanvasApp({
     [
       isNodeVisible,
       visibleGroups,
+      selectedStructureId,
+      selection.nodes,
+      derivedStructure.cards,
       workspaces,
       activeWorkspaceId,
       workspaceFilesList,
@@ -1092,7 +1294,20 @@ export function CanvasApp({
                     e.kind === "reference",
                 )
               ) {
-                d.edges.push(newEdge(refSourceId, toId, "reference"));
+                const refSrcNode = d.nodes.find((n) => n.id === refSourceId);
+                const snapOnWire =
+                  refSrcNode &&
+                  ["git", "changes", "terminal"].includes(refSrcNode.kind) &&
+                  refSrcNode.text.trim();
+                d.edges.push({
+                  ...newEdge(refSourceId, toId, "reference"),
+                  ...(snapOnWire
+                    ? {
+                        snapshotTitle: refSrcNode.title,
+                        snapshotText: refSrcNode.text,
+                      }
+                    : {}),
+                });
               }
             }
           }
@@ -1282,11 +1497,59 @@ export function CanvasApp({
     [future, history, edit],
   );
 
-  /* Execution & Session Binding */
+  /* Execution & Session Binding (with safe worktree creation for unchecked-out branches, M05) */
   const launchScope = useCallback(
     (req: StartRequest) => {
       void (async () => {
         await flush();
+        if (req.kind === "single" && req.nodeIds.length === 1) {
+          const target = docRef.current.nodes.find(
+            (n) => n.id === req.nodeIds[0],
+          );
+          if (
+            target &&
+            target.kind === "agent" &&
+            !target.sessionId &&
+            target.branch &&
+            !target.worktreePath
+          ) {
+            const proj = projectStructures.find(
+              (p) => p.id === (target.workspaceId || activeWorkspaceId),
+            );
+            const brInfo = proj?.branches.find((b) => b.name === target.branch);
+            if (proj?.isGitRepo && brInfo && !brInfo.worktreePath && !brInfo.current) {
+              setFormModal({
+                title: t("createWorktree"),
+                description: t("createWorktreePrompt"),
+                initialValue: target.branch,
+                onSubmit: (branchName) => {
+                  void (async () => {
+                    const updatedRepo = await bridge.gitAction({
+                      cwd: proj.path,
+                      action: "createWorktree",
+                      branch: branchName,
+                    });
+                    const wt = updatedRepo.worktrees.find(
+                      (w) => w.branch === branchName,
+                    );
+                    if (wt) {
+                      editNode(target.id, {
+                        branch: branchName,
+                        worktreePath: wt.path,
+                        cwd: wt.path,
+                      });
+                    }
+                    refreshProjectStructures();
+                    await flush();
+                    await bridge.start(req);
+                    setBottomOpen(true);
+                  })().catch(reportError);
+                },
+              });
+              return;
+            }
+          }
+        }
         if (req.kind === "global") {
           const plan = await bridge.plan(req);
           setLaunchDialog({ plan, excluded: new Set() });
@@ -1296,7 +1559,15 @@ export function CanvasApp({
         }
       })().catch(reportError);
     },
-    [flush, bridge, reportError],
+    [
+      flush,
+      projectStructures,
+      activeWorkspaceId,
+      bridge,
+      editNode,
+      refreshProjectStructures,
+      reportError,
+    ],
   );
 
   const bindAgentSession = useCallback(
@@ -1568,9 +1839,24 @@ export function CanvasApp({
             void bridge.sessions().then(setSessionModal).catch(reportError),
         },
         {
+          label: t("newGit"),
+          icon: "git",
+          fn: () => createCanvasNode("git", worldPt),
+        },
+        {
+          label: t("newChanges"),
+          icon: "diff",
+          fn: () => createCanvasNode("changes", worldPt),
+        },
+        {
           label: t("newFile"),
           icon: "file",
           fn: () => createCanvasNode("file", worldPt),
+        },
+        {
+          label: t("newTerminal"),
+          icon: "term",
+          fn: () => createCanvasNode("terminal", worldPt),
         },
         {
           label: t("newNote"),
@@ -2732,34 +3018,41 @@ export function CanvasApp({
     return () => vp.removeEventListener("wheel", onWheel);
   }, [prefs.wheel, setViewportDirect]);
 
-  /* Computed Exchanges from Run Tokens (inter-agent continuation deliveries) */
+  /* Computed Read-Only Message Wires strictly from DSH Native Agent Messages (M11) */
   const exchanges = useMemo<ExchangePair[]>(() => {
     const map = new Map<string, ExchangePair>();
-    for (const run of snapshot?.runs ?? []) {
-      for (const tk of run.tokens) {
-        if (!tk.consumed && !tk.ready) continue;
-        const edge = run.graph.edges.find((e) => e.id === tk.edgeId);
-        if (!edge || edge.kind !== "continuation") continue;
-        const [a, b] =
-          edge.source < edge.target
-            ? [edge.source, edge.target]
-            : [edge.target, edge.source];
-        const key = `${a}::${b}`;
-        let entry = map.get(key);
-        if (!entry) {
-          entry = { id: key, from: edge.source, to: edge.target, items: [] };
-          map.set(key, entry);
-        }
-        if (tk.source.text.trim()) {
-          entry.items.push({
-            id: tk.id,
-            fromId: edge.source,
-            toId: edge.target,
-            text: tk.source.text,
-            at: tk.source.capturedAt,
-            seq: tk.source.seq,
-          });
-        }
+    const nodeIdForSession = (sid: string): string | undefined => {
+      const direct = doc.nodes.find((n) => n.sessionId === sid)?.id;
+      if (direct) return direct;
+      const sub = snapshot?.subagents?.find((s) => s.sessionId === sid);
+      if (sub) {
+        return doc.nodes.find((n) => n.sessionId === sub.parentSessionId)?.id;
+      }
+      return undefined;
+    };
+    for (const msg of snapshot?.nativeMessages ?? []) {
+      const fromNodeId = nodeIdForSession(msg.fromSessionId);
+      const toNodeId = nodeIdForSession(msg.toSessionId);
+      if (!fromNodeId || !toNodeId || fromNodeId === toNodeId) continue;
+      const [a, b] =
+        fromNodeId < toNodeId
+          ? [fromNodeId, toNodeId]
+          : [toNodeId, fromNodeId];
+      const key = `${a}::${b}`;
+      let entry = map.get(key);
+      if (!entry) {
+        entry = { id: key, from: fromNodeId, to: toNodeId, items: [] };
+        map.set(key, entry);
+      }
+      if (msg.text.trim()) {
+        entry.items.push({
+          id: msg.id,
+          fromId: fromNodeId,
+          toId: toNodeId,
+          text: msg.text,
+          at: msg.time,
+          seq: msg.seq,
+        });
       }
     }
     return [...map.values()].filter(
@@ -2774,7 +3067,7 @@ export function CanvasApp({
           true,
         ),
     );
-  }, [snapshot?.runs, doc.nodes, isNodeVisible]);
+  }, [snapshot?.nativeMessages, snapshot?.subagents, doc.nodes, isNodeVisible]);
 
   /* Computed SVG Wire Geometry */
   const svgBounds = useMemo(() => {
@@ -2783,6 +3076,7 @@ export function CanvasApp({
         .filter((n) => isNodeVisible(n))
         .map((n) => nodeBox(n, lod, keepExpandedIds.has(n.id))),
       ...visibleGroups.map((g) => groupBox(g)),
+      ...derivedStructure.cards.map((c) => c.box),
       {
         x: -view.x / view.zoom,
         y: -view.y / view.zoom,
@@ -2797,13 +3091,21 @@ export function CanvasApp({
       w: b.w + 512,
       h: b.h + 512,
     };
-  }, [doc.nodes, isNodeVisible, lod, keepExpandedIds, visibleGroups, view, vpSize]);
+  }, [
+    doc.nodes,
+    isNodeVisible,
+    lod,
+    keepExpandedIds,
+    visibleGroups,
+    derivedStructure.cards,
+    view,
+    vpSize,
+  ]);
 
   const edgeVisualState = useCallback(
     (edge: FlowEdge): string => {
       if (edge.kind === "reference") {
-        if (!edge.sentVersion) return "pending";
-        return "sent";
+        return capsuleStateOf(edge, snapshot?.sourceVersions);
       }
       const activeTokens =
         snapshot?.runs
@@ -2858,7 +3160,10 @@ export function CanvasApp({
           "chat",
           () => void bridge.sessions().then(setSessionModal).catch(reportError),
         ],
+        ["newGit", "git", () => createCanvasNode("git")],
+        ["newChanges", "diff", () => createCanvasNode("changes")],
         ["newFile", "file", () => createCanvasNode("file")],
+        ["newTerminal", "term", () => createCanvasNode("terminal")],
         ["newNote", "note", () => createCanvasNode("note")],
         ["newBoard", "board", () => createCanvasNode("board")],
         [
@@ -2948,43 +3253,27 @@ export function CanvasApp({
             );
             if (!targetNode) return;
             edit((d) => {
-              let fileNode = d.nodes.find(
+              /* M04: Only auto-wire if a File node for this path ALREADY exists on the canvas; otherwise keep inline @path without cluttering canvas! */
+              const existingFileNode = d.nodes.find(
                 (n) =>
                   n.kind === "file" &&
                   (n.text === filePath || n.selectedItems?.includes(filePath)),
               );
-              if (!fileNode) {
-                fileNode = {
-                  ...newNode(
-                    "file",
-                    targetNode.x - 320,
-                    targetNode.y + 40,
-                    filePath.split("/").pop() ?? filePath,
-                  ),
-                  cwd: targetNode.cwd || activeWorkspaceCwd,
-                  text: filePath,
-                  items: [
-                    ...new Set([filePath, ...workspaceFilesList.slice(0, 10)]),
-                  ],
-                  selectedItems: [filePath],
-                  expanded: false,
-                };
-                d.nodes.push(fileNode);
-              }
               if (
+                existingFileNode &&
                 !d.edges.some(
                   (e) =>
-                    e.source === fileNode!.id &&
+                    e.source === existingFileNode.id &&
                     e.target === targetId &&
                     e.kind === "reference",
                 )
               ) {
-                d.edges.push(newEdge(fileNode.id, targetId, "reference"));
+                d.edges.push(newEdge(existingFileNode.id, targetId, "reference"));
               }
               const tgt = d.nodes.find((x) => x.id === targetId);
               if (tgt) {
                 tgt.draft = `${tgt.draft ? tgt.draft + " " : ""}@${filePath} `;
-                tgt.task = tgt.draft;
+                if (!tgt.sessionId) tgt.task = tgt.draft;
               }
             });
           },
@@ -3255,6 +3544,40 @@ export function CanvasApp({
           </div>
         );
       }
+      if (node.kind === "git") {
+        const firstLine = node.text.split("\n")[0] || node.branch || "Git";
+        return (
+          <div className="compact-tool">
+            <span className="user-content">{firstLine}</span>
+            <span>{t("git")}</span>
+          </div>
+        );
+      }
+      if (node.kind === "changes") {
+        const turnTag = node.changesTurn
+          ? `Turn #${node.changesTurn}`
+          : node.text.split("\n")[0] || t("changes");
+        return (
+          <div className="compact-tool">
+            <span className="user-content">{turnTag}</span>
+            <span>{t("changes")}</span>
+          </div>
+        );
+      }
+      if (node.kind === "terminal") {
+        const tailLine =
+          node.text
+            .split("\n")
+            .map((l) => l.trim())
+            .filter(Boolean)
+            .at(-1) || t("terminal");
+        return (
+          <div className="compact-tool">
+            <span className="user-content">{tailLine}</span>
+            <span>{t("terminal")}</span>
+          </div>
+        );
+      }
       const count = node.selectedItems?.length || (node.text ? 1 : 0);
       return (
         <div className="compact-tool">
@@ -3265,16 +3588,211 @@ export function CanvasApp({
     };
 
     const renderFullBody = () => {
+      if (node.kind === "git") {
+        return (
+          <GitNodeBody
+            node={node}
+            bridge={bridge}
+            onEditNode={editNode}
+            onPromptForm={setFormModal}
+            onExtractDisplay={(title, text) => {
+              const box = nodeBox(node);
+              const disp: FlowNode = {
+                ...newNode("display", box.x + box.w + 36, box.y, title),
+                sourceNodeId: node.id,
+                text,
+                fixed: true,
+                expanded: true,
+              };
+              edit((d) => d.nodes.push(disp));
+              selectNode(disp.id);
+              showToast(t("nodeCreated"));
+            }}
+            onError={reportError}
+            onRefreshStructure={refreshProjectStructures}
+          />
+        );
+      }
+      if (node.kind === "changes") {
+        return (
+          <ChangesNodeBody
+            node={node}
+            doc={doc}
+            snapshot={snapshot}
+            bridge={bridge}
+            onEditNode={editNode}
+            onExtractDisplay={(title, text) => {
+              const box = nodeBox(node);
+              const disp: FlowNode = {
+                ...newNode("display", box.x + box.w + 36, box.y, title),
+                sourceNodeId: node.id,
+                text,
+                fixed: true,
+                expanded: true,
+              };
+              edit((d) => d.nodes.push(disp));
+              selectNode(disp.id);
+              showToast(t("nodeCreated"));
+            }}
+            onError={reportError}
+          />
+        );
+      }
+      if (node.kind === "terminal") {
+        return (
+          <TerminalNodeBody
+            node={node}
+            doc={doc}
+            bridge={bridge}
+            onEditNode={editNode}
+            onExtractDisplay={(title, text) => {
+              const box = nodeBox(node);
+              const disp: FlowNode = {
+                ...newNode("display", box.x + box.w + 36, box.y, title),
+                sourceNodeId: node.id,
+                text,
+                fixed: true,
+                expanded: true,
+              };
+              edit((d) => d.nodes.push(disp));
+              selectNode(disp.id);
+              showToast(t("nodeCreated"));
+            }}
+            onError={reportError}
+          />
+        );
+      }
+
       if (node.kind === "agent") {
         const wsName =
           workspaces.find((w) => w.id === node.workspaceId)?.name ||
           node.cwd?.split(/[\\/]/).filter(Boolean).pop() ||
           t("currentWorkspace");
+        const affiliationLabel = [
+          wsName,
+          node.branch,
+          node.worktreePath ? node.worktreePath.split(/[\\/]/).pop() : undefined,
+        ]
+          .filter(Boolean)
+          .join(" · ");
         const nativeEnabled =
           node.nativeTrigger === "inherit"
             ? doc.settings.nativeChatTriggers
             : node.nativeTrigger === "enabled";
         const queuedCount = nodeSteps.filter((s) => s.state === "queued").length;
+        const hasActiveInboundContinuation = doc.edges.some(
+          (e) =>
+            e.kind === "continuation" &&
+            e.target === node.id &&
+            e.trigger !== "off",
+        );
+        const childSubs = (snapshot?.subagents ?? []).filter(
+          (s) => s.parentSessionId === node.sessionId,
+        );
+
+        const renderCapsuleTray = () => (
+          <>
+            <div className="context-label">
+              <Icon name="at" />
+              <span>{t("context")}</span>
+              <button
+                type="button"
+                aria-label={t("addContext")}
+                onClick={() =>
+                  setPaletteDialog({
+                    targetNodeId: node.id,
+                    query: "",
+                    index: 0,
+                  })
+                }
+              >
+                <Icon name="plus" />
+              </button>
+            </div>
+            <div className="reference-tray">
+              {incomingRefs.length ? (
+                incomingRefs.map((refEdge) => {
+                  const src = doc.nodes.find((x) => x.id === refEdge.source);
+                  const capState = capsuleStateOf(
+                    refEdge,
+                    snapshot?.sourceVersions,
+                  );
+                  const capLabel =
+                    refEdge.snapshotTitle || src?.title || refEdge.source;
+                  return (
+                    <button
+                      key={refEdge.id}
+                      type="button"
+                      className={`capsule capsule-${capState}`}
+                      title={`${capLabel} · ${t(`${capState}Tip`)}`}
+                      onClick={(ev) =>
+                        openAnchoredMenu(ev.currentTarget, [
+                          {
+                            label: t("viewSource"),
+                            icon: "chev",
+                            fn: () => revealNode(refEdge.source),
+                          },
+                          ...(refEdge.sentVersion && !refEdge.always
+                            ? [
+                                {
+                                  label: t("rearmCapsule"),
+                                  icon: "refresh",
+                                  fn: () =>
+                                    editEdge(refEdge.id, { sentVersion: "" }),
+                                },
+                              ]
+                            : []),
+                          {
+                            label: t("always"),
+                            icon: "pin",
+                            checked: refEdge.always,
+                            fn: () =>
+                              editEdge(refEdge.id, {
+                                always: !refEdge.always,
+                              }),
+                          },
+                          {
+                            label: t("deleteConnection"),
+                            icon: "trash",
+                            danger: true,
+                            fn: () =>
+                              edit((d) => {
+                                d.edges = d.edges.filter(
+                                  (x) => x.id !== refEdge.id,
+                                );
+                              }),
+                          },
+                        ])
+                      }
+                    >
+                      <Icon name={kindIconName(src?.kind ?? "file")} />
+                      <span>{capLabel}</span>
+                      {capState === "updated" && (
+                        <i className="fs-capsule-update-dot" />
+                      )}
+                      {refEdge.always && <Icon name="pin" />}
+                    </button>
+                  );
+                })
+              ) : (
+                <button
+                  type="button"
+                  className="empty-reference"
+                  onClick={() =>
+                    setPaletteDialog({
+                      targetNodeId: node.id,
+                      query: "",
+                      index: 0,
+                    })
+                  }
+                >
+                  <Icon name="plus" />
+                  <span>{t("addContext")}</span>
+                </button>
+              )}
+            </div>
+          </>
+        );
 
         return (
           <div className="agent-body">
@@ -3291,73 +3809,175 @@ export function CanvasApp({
                   {queuedCount}
                 </span>
               )}
-              <span className="agent-workspace-tag" title={node.cwd}>
-                {wsName}
-              </span>
-            </div>
-
-            <div
-              className="node-tabs"
-              role="tablist"
-              aria-label={node.title}
-            >
-              {(["task", "conversation", "execution"] as AgentTab[]).map(
-                (tb) => (
-                  <button
-                    key={tb}
-                    type="button"
-                    role="tab"
-                    aria-selected={activeTab === tb}
-                    onClick={() => editNode(node.id, { tab: tb })}
-                  >
-                    {t(tb === "conversation" ? "conversationTab" : tb)}
-                    {tb === "execution" && nodeSteps.length > 0 && (
+              {!node.sessionId && (
+                <button
+                  type="button"
+                  className={`fs-plan-chip ${node.planMode ? "active" : ""}`}
+                  onClick={() =>
+                    editNode(node.id, { planMode: !node.planMode })
+                  }
+                >
+                  {t("planMode")}
+                </button>
+              )}
+              {node.sessionId && (
+                <>
+                  {childSubs.length > 0 && (
+                    <button
+                      type="button"
+                      className={`fs-plan-chip ${node.subAgentsExpanded ? "active" : ""}`}
+                      onClick={() =>
+                        editNode(node.id, {
+                          subAgentsExpanded: !node.subAgentsExpanded,
+                        })
+                      }
+                      title={t("subagents")}
+                    >
+                      <Icon name="agent" />
+                      <span>{childSubs.length}</span>
+                    </button>
+                  )}
+                  {nodeSteps.length > 0 && (
+                    <button
+                      type="button"
+                      className="fs-plan-chip"
+                      onClick={() => openDetailCard(node.id)}
+                      title={t("executionDetail")}
+                    >
+                      <Icon name="bolt" />
                       <span>{nodeSteps.length}</span>
-                    )}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="icon-button"
+                    style={{ marginLeft: "auto" }}
+                    title={t("openNativeChat")}
+                    onClick={() => bridge.openChat(node.sessionId!)}
+                  >
+                    <Icon name="pop" />
                   </button>
-                ),
+                </>
               )}
             </div>
 
-            {activeTab === "conversation" ? (
-              <div
-                className="agent-embedded-wrap"
-                onMouseUp={() => {
-                  const sel = window.getSelection()?.toString().trim();
-                  if (sel) setQuoteState({ nodeId: node.id, text: sel });
-                }}
-              >
-                {quoteState?.nodeId === node.id && (
-                  <div className="quote-selection-bar">
-                    <span>{t("quoteSelection")}</span>
-                    <div>
-                      <button
-                        type="button"
-                        className="text-button"
-                        onClick={() => {
-                          extractDisplayFrom(
-                            node.id,
-                            quoteState.text,
-                            live?.seq,
-                            true,
-                          );
-                          setQuoteState(null);
-                        }}
-                      >
-                        <Icon name="quote" />
-                        <span>{t("quoteMessage")}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="icon-button"
-                        onClick={() => setQuoteState(null)}
-                      >
-                        <Icon name="x" />
-                      </button>
-                    </div>
+            {waitingGates.map(({ run, token }) => (
+              <div className="approval-box fs-card-top-gate" key={token.id}>
+                <span className="approval-heading">
+                  <Icon name="pause" />
+                  <b>
+                    {t(
+                      token.boundary ? "scopeBoundary" : "waitingConfirmation",
+                    )}
+                  </b>
+                  <span className="user-content">· {token.source.title}</span>
+                </span>
+                {token.source.text && (
+                  <div className="approval-snippet user-content">
+                    {token.source.text.slice(0, 180)}
                   </div>
                 )}
-                {node.sessionId ? (
+                <div className="button-row">
+                  <button
+                    type="button"
+                    className="button button-amber"
+                    onClick={() =>
+                      void bridge
+                        .release(run.id, token.id, true)
+                        .catch(reportError)
+                    }
+                  >
+                    <Icon name="play" />
+                    <span>{t("release")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-quiet"
+                    onClick={() =>
+                      void bridge
+                        .release(run.id, token.id, false)
+                        .catch(reportError)
+                    }
+                  >
+                    <span>{t("dismiss")}</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {/* M02: Single Main View for Live Bound Sessions + Independent Collapsible Continuation Bar */}
+            {node.sessionId ? (
+              <>
+                {hasActiveInboundContinuation && (
+                  <div className="fs-continuation-bar">
+                    <button
+                      type="button"
+                      className="fs-continuation-bar-toggle"
+                      onClick={() =>
+                        editNode(node.id, {
+                          continuationCollapsed: !node.continuationCollapsed,
+                        })
+                      }
+                    >
+                      <Icon name="bolt" />
+                      <span>{t("continuationInstruction")}</span>
+                      <Icon name="chev" />
+                    </button>
+                    {!node.continuationCollapsed && (
+                      <textarea
+                        className="fs-continuation-input"
+                        rows={2}
+                        placeholder={t("continuationPlaceholder")}
+                        value={node.continuationPrompt ?? node.task}
+                        onFocus={() => setEditingNodeId(node.id)}
+                        onBlur={() => setEditingNodeId(null)}
+                        onChange={(e) =>
+                          editNode(node.id, {
+                            continuationPrompt: e.target.value,
+                          })
+                        }
+                      />
+                    )}
+                  </div>
+                )}
+
+                <div
+                  className="agent-embedded-wrap"
+                  onMouseUp={() => {
+                    const sel = window.getSelection()?.toString().trim();
+                    if (sel) setQuoteState({ nodeId: node.id, text: sel });
+                  }}
+                >
+                  {quoteState?.nodeId === node.id && (
+                    <div className="quote-selection-bar">
+                      <span>{t("quoteSelection")}</span>
+                      <div>
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => {
+                            extractDisplayFrom(
+                              node.id,
+                              quoteState.text,
+                              live?.seq,
+                              true,
+                            );
+                            setQuoteState(null);
+                          }}
+                        >
+                          <Icon name="quote" />
+                          <span>{t("quoteMessage")}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-button"
+                          onClick={() => setQuoteState(null)}
+                        >
+                          <Icon name="x" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   <EmbeddedSession
                     node={node}
                     bridge={bridge}
@@ -3365,433 +3985,174 @@ export function CanvasApp({
                     onError={reportError}
                     onPresenceChange={onPresenceChange}
                   />
-                ) : (
-                  <div className="node-empty">
-                    <Icon name="chat" />
-                    <p>
-                      {hasForkInbound ? t("forkDraftHint") : t("noMessages")}
-                    </p>
-                    {!hasForkInbound && (
-                      <button
-                        type="button"
-                        className="button button-primary"
-                        onClick={() => bindAgentSession(node)}
-                      >
-                        <Icon name="plus" />
-                        <span>{t("bindConversation")}</span>
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            ) : activeTab === "execution" ? (
-              <div className="node-scroll">
-                {nodeSteps.length ? (
-                  [...nodeSteps].reverse().map((step) => (
-                    <div
-                      key={step.id}
-                      className={`event-row event-${step.state}`}
-                    >
-                      <i className="event-dot">
-                        <Icon
-                          name={
-                            step.state === "completed"
-                              ? "check"
-                              : step.state === "queued"
-                                ? "clock"
-                                : "bolt"
-                          }
-                        />
-                      </i>
-                      <div>
-                        <b>
-                          {t(step.state)} ·{" "}
-                          {t("roundBadge", { round: step.iteration })}
-                        </b>
-                        {step.error && <p className="danger">{step.error}</p>}
-                        {step.output && (
-                          <p className="user-content">
-                            {step.output.slice(0, 180)}
-                            {step.output.length > 180 ? "…" : ""}
-                          </p>
-                        )}
-                      </div>
-                      {step.output && (
-                        <button
-                          type="button"
-                          className="icon-button"
-                          title={t("quoteMessage")}
-                          onClick={() =>
-                            extractDisplayFrom(
-                              node.id,
-                              step.output,
-                              step.endSeq,
-                              true,
-                            )
-                          }
-                        >
-                          <Icon name="quote" />
-                        </button>
-                      )}
-                      <time>{formatTime(step.createdAt)}</time>
-                    </div>
-                  ))
-                ) : (
-                  <div className="node-empty">
-                    <Icon name="bolt" />
-                    <p>{t("noEvents")}</p>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="node-scroll task-content">
-                {live?.pendingInput.length ? (
-                  <div className="approval-box">
-                    <span className="approval-heading">
-                      <Icon name="pause" />
-                      <b>{t("approvalNeeded")}</b>
-                    </span>
-                    <p>{t("approvalDescription")}</p>
-                    <div className="button-row">
-                      <button
-                        type="button"
-                        className="button button-amber"
-                        onClick={() =>
-                          editNode(node.id, { tab: "conversation" })
-                        }
-                      >
-                        <Icon name="chat" />
-                        <span>{t("openApprovalTab")}</span>
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-
-                {waitingGates.map(({ run, token }) => (
-                  <div className="approval-box" key={token.id}>
-                    <span className="approval-heading">
-                      <Icon name="pause" />
-                      <b>
-                        {t(
-                          token.boundary
-                            ? "scopeBoundary"
-                            : "waitingConfirmation",
-                        )}
-                      </b>
-                    </span>
-                    <p className="user-content">
-                      <b>{token.source.title}</b>
-                    </p>
-                    {token.source.text && (
-                      <div className="approval-snippet user-content">
-                        {token.source.text.slice(0, 220)}
-                      </div>
-                    )}
-                    <div className="button-row">
-                      <button
-                        type="button"
-                        className="button button-amber"
-                        onClick={() =>
-                          void bridge
-                            .release(run.id, token.id, true)
-                            .catch(reportError)
-                        }
-                      >
-                        <Icon name="play" />
-                        <span>{t("release")}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="button button-quiet"
-                        onClick={() =>
-                          void bridge
-                            .release(run.id, token.id, false)
-                            .catch(reportError)
-                        }
-                      >
-                        <span>{t("dismiss")}</span>
-                      </button>
-                    </div>
-                  </div>
-                ))}
-
-                <div className="task-label">
-                  {t(node.sessionId ? "savedTask" : "task")}
                 </div>
-                <textarea
-                  className="task-editor"
-                  aria-label={`${node.title} · ${t("task")}`}
-                  placeholder={t("taskPlaceholder")}
-                  value={node.draft || node.task}
-                  onFocus={() => setEditingNodeId(node.id)}
-                  onBlur={() => setEditingNodeId(null)}
-                  onChange={(e) =>
-                    editNode(node.id, {
-                      draft: e.target.value,
-                      task: e.target.value,
-                    })
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "@" && !e.nativeEvent.isComposing) {
-                      e.preventDefault();
-                      setPaletteDialog({
-                        targetNodeId: node.id,
-                        query: "",
-                        index: 0,
-                      });
-                    } else if (
-                      e.key === "Enter" &&
-                      !e.shiftKey &&
-                      !e.nativeEvent.isComposing
-                    ) {
-                      e.preventDefault();
-                      launchScope({ kind: "single", nodeIds: [node.id] });
-                    }
-                  }}
-                />
-
-                {latestOutput && (
-                  <div className="latest-output-preview user-content">
-                    {latestOutput.slice(0, 240)}
-                    {latestOutput.length > 240 ? "…" : ""}
-                  </div>
-                )}
-
-                <div className="context-label">
-                  <Icon name="at" />
-                  <span>{t("context")}</span>
-                  <button
-                    type="button"
-                    aria-label={t("addContext")}
-                    onClick={() =>
-                      setPaletteDialog({
-                        targetNodeId: node.id,
-                        query: "",
-                        index: 0,
+              </>
+            ) : (
+              /* M02: Unbound Draft Stage */
+              <>
+                <div className="node-scroll task-content">
+                  {hasForkInbound && (
+                    <p className="muted">{t("forkDraftHint")}</p>
+                  )}
+                  <div className="task-label">{t("task")}</div>
+                  <textarea
+                    className="task-editor"
+                    aria-label={`${node.title} · ${t("task")}`}
+                    placeholder={t("taskPlaceholder")}
+                    spellCheck={false}
+                    value={node.draft || node.task}
+                    onFocus={() => setEditingNodeId(node.id)}
+                    onBlur={() => setEditingNodeId(null)}
+                    onChange={(e) =>
+                      editNode(node.id, {
+                        draft: e.target.value,
+                        task: e.target.value,
                       })
                     }
-                  >
-                    <Icon name="plus" />
-                  </button>
-                </div>
-
-                <div className="reference-tray">
-                  {incomingRefs.length ? (
-                    incomingRefs.map((refEdge) => {
-                      const src = doc.nodes.find(
-                        (x) => x.id === refEdge.source,
-                      );
-                      const capState = refEdge.always
-                        ? "always"
-                        : refEdge.sentVersion
-                          ? "sent"
-                          : "pending";
-                      return (
-                        <button
-                          key={refEdge.id}
-                          type="button"
-                          className={`capsule capsule-${capState}`}
-                          title={t(`${capState}Tip`)}
-                          onClick={(ev) =>
-                            openAnchoredMenu(ev.currentTarget, [
-                              {
-                                label: t("viewSource"),
-                                icon: "chev",
-                                fn: () => revealNode(refEdge.source),
-                              },
-                              {
-                                label: t("always"),
-                                icon: "pin",
-                                checked: refEdge.always,
-                                fn: () =>
-                                  editEdge(refEdge.id, {
-                                    always: !refEdge.always,
-                                  }),
-                              },
-                              {
-                                label: t("deleteConnection"),
-                                icon: "trash",
-                                danger: true,
-                                fn: () =>
-                                  edit((d) => {
-                                    d.edges = d.edges.filter(
-                                      (x) => x.id !== refEdge.id,
-                                    );
-                                  }),
-                              },
-                            ])
-                          }
-                        >
-                          <Icon name={kindIconName(src?.kind ?? "file")} />
-                          <span>{src?.title ?? refEdge.source}</span>
-                          {refEdge.always && <Icon name="pin" />}
-                        </button>
-                      );
-                    })
-                  ) : (
-                    <button
-                      type="button"
-                      className="empty-reference"
-                      onClick={() =>
+                    onKeyDown={(e) => {
+                      if (e.key === "@" && !e.nativeEvent.isComposing) {
+                        e.preventDefault();
                         setPaletteDialog({
                           targetNodeId: node.id,
                           query: "",
                           index: 0,
-                        })
+                        });
+                      } else if (
+                        e.key === "Enter" &&
+                        !e.shiftKey &&
+                        !e.nativeEvent.isComposing
+                      ) {
+                        e.preventDefault();
+                        launchScope({ kind: "single", nodeIds: [node.id] });
                       }
-                    >
-                      <Icon name="plus" />
-                      <span>{t("addContext")}</span>
-                    </button>
-                  )}
+                    }}
+                  />
+                  {renderCapsuleTray()}
                 </div>
-              </div>
-            )}
 
-            {!(activeTab === "conversation" && node.sessionId) && (
-              <footer className="agent-footer">
-                <button
-                  type="button"
-                  className="model-picker"
-                  disabled={!!node.sessionId}
-                  onClick={(ev) =>
-                    openAnchoredMenu(ev.currentTarget, [
-                      {
-                        label: t("currentWorkspace"),
-                        icon: "project",
-                        checked: !node.workspaceId,
-                        fn: () =>
-                          editNode(node.id, {
-                            workspaceId: undefined,
-                            cwd: undefined,
-                          }),
-                      },
-                      ...workspaces.map((w) => ({
-                        label: w.name,
-                        description: w.path,
-                        icon: "project",
-                        checked: node.workspaceId === w.id,
-                        fn: () =>
-                          editNode(node.id, {
-                            workspaceId: w.id,
-                            cwd: w.path,
-                          }),
-                      })),
-                    ])
-                  }
-                >
-                  <Icon name="project" />
-                  <span>{wsName}</span>
-                </button>
-                <button
-                  type="button"
-                  className="mode-picker"
-                  title={t("nativeTriggerLabel")}
-                  onClick={(ev) =>
-                    openAnchoredMenu(
-                      ev.currentTarget,
-                      (
-                        [
-                          [
-                            "inherit",
-                            t("inheritGlobal", {
-                              state: doc.settings.nativeChatTriggers
-                                ? t("enabled")
-                                : t("disabled"),
+                <footer className="agent-footer">
+                  <button
+                    type="button"
+                    className="model-picker"
+                    onClick={(ev) => {
+                      const proj = projectStructures.find(
+                        (p) =>
+                          p.id === (node.workspaceId || activeWorkspaceId),
+                      );
+                      openAnchoredMenu(ev.currentTarget, [
+                        {
+                          label: t("currentWorkspace"),
+                          icon: "project",
+                          checked: !node.workspaceId && !node.branch,
+                          fn: () =>
+                            editNode(node.id, {
+                              workspaceId: undefined,
+                              cwd: undefined,
+                              branch: undefined,
+                              worktreePath: undefined,
                             }),
-                          ],
-                          ["enabled", t("enabled")],
-                          ["disabled", t("disabled")],
-                        ] as const
-                      ).map(([val, label]) => ({
-                        label,
-                        icon: "bolt",
-                        checked: node.nativeTrigger === val,
-                        fn: () => editNode(node.id, { nativeTrigger: val }),
-                      })),
-                    )
-                  }
-                >
-                  <Icon name="bolt" />
-                  <span>{nativeEnabled ? t("enabled") : t("disabled")}</span>
-                </button>
-                <div className="agent-controls">
-                  {waitingGates.length > 0 ? (
+                        },
+                        ...workspaces.map((w) => ({
+                          label: w.name,
+                          description: w.path,
+                          icon: "project",
+                          checked:
+                            node.workspaceId === w.id && !node.branch,
+                          fn: () =>
+                            editNode(node.id, {
+                              workspaceId: w.id,
+                              cwd: w.path,
+                              branch: undefined,
+                              worktreePath: undefined,
+                            }),
+                        })),
+                        ...(proj?.branches.length
+                          ? [
+                              { divider: true },
+                              { heading: t("showBranches") },
+                              ...proj.branches.slice(0, 8).map((br) => ({
+                                label: br.name,
+                                description:
+                                  br.worktreePath || t("createWorktree"),
+                                icon: "branch",
+                                checked: node.branch === br.name,
+                                fn: () =>
+                                  editNode(node.id, {
+                                    workspaceId: proj.id,
+                                    branch: br.name,
+                                    worktreePath: br.worktreePath,
+                                    cwd: br.worktreePath || proj.path,
+                                  }),
+                              })),
+                            ]
+                          : []),
+                      ]);
+                    }}
+                  >
+                    <Icon name={node.branch ? "branch" : "project"} />
+                    <span>{affiliationLabel}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="mode-picker"
+                    title={t("nativeTriggerLabel")}
+                    onClick={(ev) =>
+                      openAnchoredMenu(
+                        ev.currentTarget,
+                        (
+                          [
+                            [
+                              "inherit",
+                              t("inheritGlobal", {
+                                state: doc.settings.nativeChatTriggers
+                                  ? t("enabled")
+                                  : t("disabled"),
+                              }),
+                            ],
+                            ["enabled", t("enabled")],
+                            ["disabled", t("disabled")],
+                          ] as const
+                        ).map(([val, label]) => ({
+                          label,
+                          icon: "bolt",
+                          checked: node.nativeTrigger === val,
+                          fn: () => editNode(node.id, { nativeTrigger: val }),
+                        })),
+                      )
+                    }
+                  >
+                    <Icon name="bolt" />
+                    <span>
+                      {nativeEnabled
+                        ? t("nativeTriggerOn")
+                        : t("nativeTriggerOff")}
+                    </span>
+                  </button>
+                  <div className="agent-controls">
+                    {!hasForkInbound && (
+                      <button
+                        type="button"
+                        className="icon-button"
+                        title={t("bindConversation")}
+                        onClick={() => bindAgentSession(node)}
+                      >
+                        <Icon name="chat" />
+                      </button>
+                    )}
                     <button
                       type="button"
-                      className="button button-amber"
+                      className="button button-primary"
+                      disabled={!(node.draft.trim() || node.task.trim())}
                       onClick={() =>
-                        void bridge
-                          .release(
-                            waitingGates[0].run.id,
-                            waitingGates[0].token.id,
-                            true,
-                          )
-                          .catch(reportError)
+                        launchScope({ kind: "single", nodeIds: [node.id] })
                       }
                     >
                       <Icon name="play" />
-                      <span>{t("release")}</span>
+                      <span>{t("run")}</span>
                     </button>
-                  ) : state === "running" ? (
-                    <>
-                      <button
-                        type="button"
-                        className="icon-button danger"
-                        title={t("stop")}
-                        onClick={() =>
-                          void bridge.stopNode(node.id).catch(reportError)
-                        }
-                      >
-                        <Icon name="stop" />
-                      </button>
-                      <button
-                        type="button"
-                        className="button button-primary"
-                        disabled={!node.draft.trim()}
-                        onClick={() =>
-                          launchScope({ kind: "single", nodeIds: [node.id] })
-                        }
-                      >
-                        <Icon name="plus" />
-                        <span>{t("queueSend")}</span>
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      {node.sessionId && (
-                        <button
-                          type="button"
-                          className="icon-button"
-                          title={t("openNativeChat")}
-                          onClick={() => bridge.openChat(node.sessionId!)}
-                        >
-                          <Icon name="pop" />
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="button button-primary"
-                        disabled={!(node.draft.trim() || node.task.trim())}
-                        onClick={() =>
-                          launchScope({ kind: "single", nodeIds: [node.id] })
-                        }
-                      >
-                        <Icon name={state === "draft" ? "play" : "send"} />
-                        <span>
-                          {t(
-                            state === "draft"
-                              ? "run"
-                              : node.draft.trim()
-                                ? "send"
-                                : "rerun",
-                          )}
-                        </span>
-                      </button>
-                    </>
-                  )}
-                </div>
-              </footer>
+                  </div>
+                </footer>
+              </>
             )}
 
             <div
@@ -4453,24 +4814,93 @@ export function CanvasApp({
       data-theme={effectiveTheme}
       data-perf-tier={reducedMotion ? "L1" : "L3"}
     >
+      {/* ---------- Left Navigation Icon Rail ---------- */}
+      <nav className="fs-rail" aria-label="FlowSpace">
+        <button
+          type="button"
+          className="rail-brand"
+          onClick={() => setRouteName("canvas")}
+          title="FlowSpace"
+          aria-label="FlowSpace"
+        >
+          <BrandMark />
+        </button>
+
+        <div className="rail-main">
+          {(
+            [
+              ["canvas", "canvas"],
+              ["conversation", "chat"],
+              ["workflows", "box"],
+              ["activity", "bolt"],
+            ] as const
+          ).map(([id, glyph]) => (
+            <button
+              key={id}
+              type="button"
+              className={`rail-button ${routeName === id ? "active" : ""}`}
+              title={t(id)}
+              aria-label={t(id)}
+              onClick={() => setRouteName(id)}
+            >
+              <Icon name={glyph} />
+              {id === "canvas" && waitingAgentNodes.length > 0 && (
+                <span className="rail-badge">{waitingAgentNodes.length}</span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        <div className="rail-bottom">
+          <button
+            type="button"
+            className="rail-button"
+            title={t("command")}
+            aria-label={t("command")}
+            onClick={() =>
+              setPaletteDialog({ targetNodeId: null, query: "", index: 0 })
+            }
+          >
+            <Icon name="search" />
+          </button>
+          <button
+            type="button"
+            className="rail-button"
+            title={t("help")}
+            aria-label={t("help")}
+            onClick={() => setHelpModal(true)}
+          >
+            <Icon name="help" />
+          </button>
+          <button
+            type="button"
+            className={`rail-button ${routeName === "settings" ? "active" : ""}`}
+            title={t("settings")}
+            aria-label={t("settings")}
+            onClick={() => setRouteName("settings")}
+          >
+            <Icon name="gear" />
+          </button>
+          <button
+            type="button"
+            className="rail-language"
+            title={t("language")}
+            aria-label={t("language")}
+            onClick={() => setLanguage(getLanguage() === "zh" ? "en" : "zh")}
+          >
+            {getLanguage() === "zh" ? "EN" : "中"}
+          </button>
+        </div>
+      </nav>
+
       {/* ---------- Left Explorer Sidebar ---------- */}
       <aside
         className={`fs-side ${!sidebarOpen ? "collapsed" : ""} ${mobileSidebar ? "mobile-open" : ""}`}
       >
         <header className="fs-side-head">
-          <div className="brand-row">
-            <button
-              type="button"
-              className="rail-brand"
-              onClick={() => setRouteName("canvas")}
-              title="FlowSpace"
-            >
-              <BrandMark />
-            </button>
-            <div className="brand-name">
-              Flow<b>Space</b>
-              <span>CANVAS</span>
-            </div>
+          <div className="brand-name">
+            Flow<b>Space</b>
+            <span>CANVAS</span>
           </div>
           <button
             type="button"
@@ -4624,10 +5054,10 @@ export function CanvasApp({
           <button
             type="button"
             className="icon-button"
-            title={t("settings")}
-            onClick={() => setRouteName("settings")}
+            title={t("exportCanvas")}
+            onClick={handleExportJson}
           >
-            <Icon name="gear" />
+            <Icon name="download" />
           </button>
         </footer>
       </aside>
@@ -4642,7 +5072,7 @@ export function CanvasApp({
               className={`icon-button ${sidebarOpen ? "active" : ""}`}
               title={t("projectSessions")}
               onClick={() => {
-                if ((rootRef.current?.clientWidth ?? 1000) <= 700) {
+                if ((rootRef.current?.clientWidth ?? 1000) <= 720) {
                   setMobileSidebar((v) => !v);
                 } else {
                   setSidebarOpen((v) => !v);
@@ -4651,7 +5081,7 @@ export function CanvasApp({
             >
               <Icon name="sidebarLeft" />
             </button>
-            <span>FlowSpace</span>
+            <span>{t("workbench")}</span>
             <i>/</i>
             <button
               type="button"
@@ -4670,33 +5100,6 @@ export function CanvasApp({
               {routeName === "canvas" ? doc.title : t(routeName)}
             </button>
           </div>
-
-          <nav className="route-nav" aria-label="FlowSpace Views">
-            {(
-              [
-                ["canvas", "canvas"],
-                ["conversation", "chat"],
-                ["workflows", "box"],
-                ["activity", "bolt"],
-                ["settings", "gear"],
-              ] as const
-            ).map(([id, glyph]) => (
-              <button
-                key={id}
-                type="button"
-                className={routeName === id ? "active" : ""}
-                onClick={() => setRouteName(id)}
-              >
-                <Icon name={glyph} />
-                <span>{t(id)}</span>
-                {id === "canvas" && waitingAgentNodes.length > 0 && (
-                  <span className="route-badge">
-                    {waitingAgentNodes.length}
-                  </span>
-                )}
-              </button>
-            ))}
-          </nav>
 
           <div className="header-actions">
             {workspaces.length > 0 && (
@@ -4755,17 +5158,6 @@ export function CanvasApp({
                 </span>
               </button>
             )}
-
-            <button
-              type="button"
-              className="rail-language"
-              title={t("language")}
-              onClick={() =>
-                setLanguage(getLanguage() === "zh" ? "en" : "zh")
-              }
-            >
-              {getLanguage() === "zh" ? "EN" : "中"}
-            </button>
 
             <button
               type="button"
@@ -4851,15 +5243,49 @@ export function CanvasApp({
                     <Icon name="canvas" />
                   </span>
                   <b className="user-content">{doc.title}</b>
-                  <span className="canvas-save-pill">
-                    <span
-                      className={`local-save-dot ${saved ? "" : "saving"}`}
-                    />
-                    {t(saved ? "hostSaved" : "saving")}
-                  </span>
                 </div>
 
                 <div className="toolbar-actions">
+                  <button
+                    type="button"
+                    className={`toolbar-button ${prefs.showBranches ? "active" : ""}`}
+                    title={t("showBranches")}
+                    onClick={() =>
+                      edit(
+                        (d) => {
+                          d.prefs = {
+                            ...d.prefs,
+                            showBranches: !prefs.showBranches,
+                          };
+                        },
+                        { remember: false },
+                      )
+                    }
+                  >
+                    <Icon name="branch" />
+                    <span>{t("showBranches")}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`toolbar-button ${prefs.showWorktrees ? "active" : ""}`}
+                    title={t("showWorktrees")}
+                    onClick={() =>
+                      edit(
+                        (d) => {
+                          d.prefs = {
+                            ...d.prefs,
+                            showWorktrees: !prefs.showWorktrees,
+                          };
+                        },
+                        { remember: false },
+                      )
+                    }
+                  >
+                    <Icon name="worktree" />
+                    <span>{t("showWorktrees")}</span>
+                  </button>
+
                   <button
                     type="button"
                     className="toolbar-button"
@@ -4868,8 +5294,11 @@ export function CanvasApp({
                         ev.currentTarget,
                         (
                           [
-                            ["all", "all"],
+                            ["auto", "auto"],
                             ["running", "onlyRunning"],
+                            ["3d", "filter3d"],
+                            ["7d", "filter7d"],
+                            ["all", "all"],
                           ] as const
                         ).map(([val, labelKey]) => ({
                           label: t(labelKey),
@@ -4888,7 +5317,17 @@ export function CanvasApp({
                   >
                     <Icon name="eye" />
                     <span>
-                      {t(prefs.filter === "running" ? "onlyRunning" : "all")}
+                      {t(
+                        prefs.filter === "running"
+                          ? "onlyRunning"
+                          : prefs.filter === "3d"
+                            ? "filter3d"
+                            : prefs.filter === "7d"
+                              ? "filter7d"
+                              : prefs.filter === "auto"
+                                ? "auto"
+                                : "all",
+                      )}
                     </span>
                   </button>
 
@@ -4995,10 +5434,16 @@ export function CanvasApp({
                   if (ev.button === 2) return;
                   if (
                     target.closest(
-                      ".node, .group-header, .composite, .edge-tag, .exchange-tag, .waypoint, .fs-canvas-controls, .fs-minimap, .offscreen-indicator, .fs-welcome-card",
+                      ".node, .fs-struct-card, .group-header, .composite, .edge-tag, .exchange-tag, .waypoint, .fs-canvas-controls, .fs-minimap, .offscreen-indicator, .fs-welcome-card",
                     )
                   ) {
                     return;
+                  }
+                  if (ev.detail === 1) {
+                    preClickSelectionRef.current = {
+                      nodes: [...selection.nodes],
+                      structureId: selectedStructureId,
+                    };
                   }
                   if (ev.button === 1 || spacePressed || tool === "hand") {
                     startPan(ev);
@@ -5012,7 +5457,7 @@ export function CanvasApp({
                   const target = ev.target as HTMLElement;
                   if (
                     target.closest(
-                      ".node, .workflow-group, .edge-hit, .edge-tag, .fs-canvas-controls, .fs-minimap, .fs-welcome-card",
+                      ".node, .fs-struct-card, .workflow-group, .edge-hit, .edge-tag, .fs-canvas-controls, .fs-minimap, .fs-welcome-card",
                     )
                   )
                     return;
@@ -5026,6 +5471,8 @@ export function CanvasApp({
                       ev.clientX,
                       ev.clientY,
                     ),
+                    undefined,
+                    true,
                   );
                 }}
                 onContextMenu={(ev) => {
@@ -5070,10 +5517,31 @@ export function CanvasApp({
                         ports.filter((p) => p.direction === "in").length,
                         ports.filter((p) => p.direction === "out").length,
                       );
-                      const box = groupBox(grp, rows);
+                      const rawBox = groupBox(grp, rows);
                       const memberNodes = members(doc, grp.id)
                         .map((id) => doc.nodes.find((n) => n.id === id))
                         .filter((n): n is FlowNode => !!n);
+                      const box =
+                        lod && !grp.collapsed && memberNodes.length > 0
+                          ? {
+                              ...rawBox,
+                              h: Math.max(
+                                180,
+                                Math.max(
+                                  ...memberNodes.map((mn) => {
+                                    const mb = nodeBox(
+                                      mn,
+                                      lod,
+                                      keepExpandedIds.has(mn.id),
+                                    );
+                                    return mb.y + mb.h;
+                                  }),
+                                ) -
+                                  rawBox.y +
+                                  24,
+                              ),
+                            }
+                          : rawBox;
                       const runningCnt = memberNodes.filter(
                         (n) => nodeStatusOf(snapshot, n.id) === "running",
                       ).length;
@@ -5354,6 +5822,7 @@ export function CanvasApp({
                         const evState = edgeVisualState(edge);
                         if (
                           lod &&
+                          edge.kind !== "continuation" &&
                           !selection.nodes.includes(edge.source) &&
                           !selection.nodes.includes(edge.target) &&
                           !["active", "queued", "waiting", "boundary"].includes(
@@ -5507,6 +5976,25 @@ export function CanvasApp({
                           );
                         })}
 
+                      {/* 4-Tier Derived Structure Skeleton Links (M06) */}
+                      {derivedStructure.links.map((slink) => {
+                        const p1 = {
+                          x: slink.fromBox.x + slink.fromBox.w,
+                          y: slink.fromBox.y + slink.fromBox.h / 2,
+                        };
+                        const p2 = {
+                          x: slink.toBox.x,
+                          y: slink.toBox.y + slink.toBox.h / 2,
+                        };
+                        return (
+                          <path
+                            key={slink.id}
+                            className={`edge-path fs-structure-edge ${slink.active ? "is-active" : ""}`}
+                            d={route(p1, p2).path}
+                          />
+                        );
+                      })}
+
                       {/* Live Temporary Drag Wire */}
                       {connecting && (
                         <path
@@ -5521,6 +6009,80 @@ export function CanvasApp({
 
                   {/* Nodes Layer */}
                   <div className="fs-nodes-layer">
+                    {/* 4-Tier Derived Structure Cards (Project -> Branch -> Worktree -> SubAgent) */}
+                    {derivedStructure.cards.map((sc) => (
+                      <div
+                        key={sc.id}
+                        className={`fs-struct-card fs-struct-${sc.kind} ${selectedStructureId === sc.id ? "selected" : ""}`}
+                        style={{
+                          left: sc.box.x,
+                          top: sc.box.y,
+                          width: sc.box.w,
+                          height: sc.box.h,
+                        }}
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          setSelectedStructureId(sc.id);
+                          setSelection({ nodes: [], groups: [], edge: null });
+                        }}
+                        onDoubleClick={(ev) => {
+                          ev.stopPropagation();
+                          if (sc.kind === "subagent" && sc.sessionId) {
+                            bridge.openChat(sc.sessionId);
+                            return;
+                          }
+                          if (sc.kind === "branch" || sc.kind === "worktree") {
+                            createCanvasNode(
+                              "git",
+                              { x: sc.box.x + sc.box.w + 200, y: sc.box.y + 80 },
+                              {
+                                workspaceId: sc.workspaceId,
+                                cwd: sc.worktreePath || sc.cwd,
+                                branch: sc.branch,
+                                worktreePath: sc.worktreePath,
+                              },
+                            );
+                          }
+                        }}
+                      >
+                        <div className="fs-struct-head">
+                          <Icon name={kindIconName(sc.kind)} />
+                          <strong className="user-content">{sc.title}</strong>
+                          {sc.badge && (
+                            <span className="fs-struct-badge">{sc.badge}</span>
+                          )}
+                          {sc.kind !== "subagent" && (
+                            <button
+                              type="button"
+                              className="icon-button"
+                              title={t("newAgent")}
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                createCanvasNode(
+                                  "agent",
+                                  {
+                                    x: sc.box.x + sc.box.w + 220,
+                                    y: sc.box.y + 80,
+                                  },
+                                  {
+                                    workspaceId: sc.workspaceId,
+                                    cwd: sc.worktreePath || sc.cwd,
+                                    branch: sc.branch,
+                                    worktreePath: sc.worktreePath,
+                                  },
+                                );
+                              }}
+                            >
+                              <Icon name="plus" />
+                            </button>
+                          )}
+                        </div>
+                        <small className="fs-struct-sub user-content">
+                          {sc.subtitle}
+                        </small>
+                      </div>
+                    ))}
+
                     {doc.nodes
                       .filter((n) => isNodeVisible(n))
                       .map((n) => {
@@ -5812,13 +6374,18 @@ export function CanvasApp({
                           edit((d) =>
                             Object.assign(
                               d,
-                              sample(d, "review", {
-                                workspaceId: activeWorkspaceId || undefined,
-                                cwd: activeWorkspaceCwd,
-                              }),
+                              sample(
+                                d,
+                                "review",
+                                {
+                                  workspaceId: activeWorkspaceId || undefined,
+                                  cwd: activeWorkspaceCwd,
+                                },
+                                workspaceFilesList,
+                              ),
                             ),
                           );
-                          setTimeout(() => fitView(true), 50);
+                          requestAnimationFrame(() => fitView(true, true));
                         }}
                       >
                         <Icon name="play" />
@@ -6165,6 +6732,9 @@ export function CanvasApp({
                   onRunCommand={(runId, action) =>
                     void bridge.command(runId, action).catch(reportError)
                   }
+                  onRerunFailed={(runId) =>
+                    void bridge.rerunFailed(runId).catch(reportError)
+                  }
                   onReleaseToken={(runId, tokenId, accept) =>
                     void bridge
                       .release(runId, tokenId, accept)
@@ -6173,6 +6743,40 @@ export function CanvasApp({
                   onExtractStep={(nodeId, text, seq) =>
                     extractDisplayFrom(nodeId, text, seq, true)
                   }
+                  onPinDeliverable={(path, nodeId) => {
+                    const src = docRef.current.nodes.find(
+                      (n) => n.id === nodeId,
+                    );
+                    let targetId = "";
+                    edit((d) => {
+                      const existing = d.nodes.find(
+                        (n) =>
+                          n.kind === "file" &&
+                          (n.text === path || n.selectedItems?.includes(path)),
+                      );
+                      if (existing) {
+                        targetId = existing.id;
+                        return;
+                      }
+                      const fn = {
+                        ...newNode(
+                          "file",
+                          (src?.x ?? 120) + 340,
+                          (src?.y ?? 120) + 60,
+                          path.split(/[\\/]/).pop() ?? path,
+                        ),
+                        cwd: src?.worktreePath || src?.cwd || activeWorkspaceCwd,
+                        text: path,
+                        items: [path],
+                        selectedItems: [path],
+                        expanded: true,
+                      };
+                      targetId = fn.id;
+                      d.nodes.push(fn);
+                    });
+                    setRouteName("canvas");
+                    if (targetId) setTimeout(() => revealNode(targetId), 50);
+                  }}
                   onReturnCanvas={() => setRouteName("canvas")}
                 />
               )}
@@ -6207,10 +6811,15 @@ export function CanvasApp({
                     edit((d) =>
                       Object.assign(
                         d,
-                        sample(d, "review", {
-                          workspaceId: activeWorkspaceId || undefined,
-                          cwd: activeWorkspaceCwd,
-                        }),
+                        sample(
+                          d,
+                          "review",
+                          {
+                            workspaceId: activeWorkspaceId || undefined,
+                            cwd: activeWorkspaceCwd,
+                          },
+                          workspaceFilesList,
+                        ),
                       ),
                     );
                     setRouteName("canvas");
@@ -7364,8 +7973,8 @@ export function CanvasApp({
           >
             <header className="dialog-header">
               <div>
-                <h2>{t("exchange")}</h2>
-                <p>{t("exchangeReadOnly")}</p>
+                <h2>{t("nativeExchange")}</h2>
+                <p>{t("nativeExchangeReadOnly")}</p>
               </div>
               <button
                 type="button"

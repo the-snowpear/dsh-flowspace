@@ -102,7 +102,7 @@ export function launchPlan(
       ? "正在运行"
       : waiting.has(n.id)
         ? "等待确认"
-        : !n.draft.trim() && !n.task.trim()
+        : !n.draft.trim() && !n.task.trim() && !(n.continuationPrompt ?? "").trim()
           ? "尚未填写任务"
           : n.participation === "paused"
             ? "暂停参与"
@@ -118,7 +118,9 @@ export function launchPlan(
                       (e) =>
                         e.kind === "reference" &&
                         e.target === n.id &&
-                        !e.sentVersion,
+                        (!e.sentVersion ||
+                          (!!e.currentVersion &&
+                            e.sentVersion !== e.currentVersion)),
                     )
                   )
                 ? "没有新输入"

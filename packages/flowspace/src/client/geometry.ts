@@ -26,22 +26,41 @@ export const LOD_ZOOM = 0.7;
 export const COMPACT_SIZE: Record<FlowNode["kind"], [number, number]> = {
   agent: [280, 118],
   note: [276, 98],
-  file: [264, 86],
+  file: [256, 82],
   display: [280, 126],
   board: [280, 100],
   detail: [280, 112],
   group: [312, 152],
+  git: [280, 108],
+  changes: [276, 104],
+  terminal: [280, 108],
 };
 
 export const FULL_SIZE: Record<FlowNode["kind"], [number, number]> = {
-  agent: [336, 412],
+  agent: [312, 392],
   note: [276, 200],
   file: [300, 286],
   display: [300, 252],
   board: [520, 310],
   detail: [340, 362],
   group: [1152, 474],
+  git: [420, 410],
+  changes: [360, 340],
+  terminal: [380, 320],
 };
+
+export type CapsuleState = "pending" | "sent" | "updated" | "always";
+
+export function capsuleStateOf(
+  edge: FlowEdge,
+  sourceVersions?: Record<string, string>,
+): CapsuleState {
+  if (edge.always) return "always";
+  if (!edge.sentVersion) return "pending";
+  const current = edge.currentVersion ?? sourceVersions?.[edge.source];
+  if (current && current !== edge.sentVersion) return "updated";
+  return "sent";
+}
 
 export interface Box {
   x: number;
@@ -76,14 +95,8 @@ export function nodeBox(
     return { x: node.x, y: node.y, w: cw, h: ch, compact: true };
   }
   const [fw, fh] = FULL_SIZE[node.kind] ?? [320, 280];
-  const minW =
-    node.kind === "agent" && node.tab === "conversation" && node.sessionId
-      ? 420
-      : fw;
-  const minH =
-    node.kind === "agent" && node.tab === "conversation" && node.sessionId
-      ? 490
-      : fh;
+  const minW = node.kind === "agent" && node.sessionId ? 420 : fw;
+  const minH = node.kind === "agent" && node.sessionId ? 490 : fh;
   return {
     x: node.x,
     y: node.y,
@@ -460,18 +473,20 @@ export function fit(
   boxes: Box[],
   maxZoom = 1,
 ): { x: number; y: number; zoom: number } {
+  const topInset = 64;
+  const bottomInset = 58;
+  const sideInset = 44;
+  const availW = Math.max(120, viewport.width - sideInset * 2);
+  const availH = Math.max(120, viewport.height - topInset - bottomInset);
   const box = bounds(boxes);
   const zoom = clamp(
-    Math.min(
-      (viewport.width - 72) / Math.max(box.w, 1),
-      (viewport.height - 156) / Math.max(box.h, 1),
-    ),
+    Math.min(availW / Math.max(box.w, 1), availH / Math.max(box.h, 1)),
     0.2,
     maxZoom,
   );
   return {
-    x: (viewport.width - box.w * zoom) / 2 - box.x * zoom,
-    y: (viewport.height - box.h * zoom) / 2 - box.y * zoom + 6,
+    x: sideInset + (availW - box.w * zoom) / 2 - box.x * zoom,
+    y: topInset + (availH - box.h * zoom) / 2 - box.y * zoom,
     zoom,
   };
 }

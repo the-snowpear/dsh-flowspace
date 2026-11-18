@@ -1,4 +1,4 @@
-import { tr } from "./i18n.ts";
+import { t, tr } from "./i18n.ts";
 import type { Context } from "@deepseek-ai/cordis";
 import type {} from "@deepseek-ai/dsh-api-remotes/client";
 import type {} from "@deepseek-ai/dsh-api-session-controller/client";
@@ -15,12 +15,12 @@ import type {
   PropsRenderSlots,
 } from "@deepseek-ai/dsh-client-ui-slots";
 import type { SessionId } from "@deepseek-ai/dsh-session/types";
-import type { SessionReference } from "@deepseek-ai/dsh-api-session-controller/client";
 import { useEffect, useState } from "react";
-import { Workflow } from "lucide-react";
+import { Pin, Quote, Workflow } from "lucide-react";
 import { TYPERT_REMOTE } from "../../lib/typert.remote-client.js";
 import { CanvasApp } from "./CanvasApp.tsx";
 import { FlowClient, type CanvasBridge } from "./bridge.ts";
+import { capsuleStateOf } from "./geometry.ts";
 import "./style.css";
 
 declare module "@deepseek-ai/dsh-api-session-controller/client" {
@@ -103,6 +103,17 @@ function mountUi(ctx: Context): void {
       ChatBadge,
     ),
   );
+  ctx.slots.inject("conversation.composer.dock", () =>
+    ctx.slots.register(
+      {
+        name: "conversation.composer.dock",
+        id: "flowspace-composer-dock",
+        order: 40,
+        inject: () => ({ bridge }),
+      },
+      FlowspaceComposerDock,
+    ),
+  );
 }
 type MainProps = PropsRuntime<"main"> &
   PropsRenderSlots<"flowspace.conversation"> & { bridge: CanvasBridge };
@@ -138,6 +149,63 @@ function Conversation({
     </div>
   );
 }
+
+/** Shared reference capsule tray inside native DSH composer.dock (main chat & embedded cards, M03). */
+function FlowspaceComposerDock({
+  bridge,
+  sessionId,
+}: PropsRuntime<"conversation.composer.dock"> & {
+  bridge: CanvasBridge;
+}) {
+  const snapshot = bridge.useSnapshot();
+  const doc = snapshot?.document;
+  const node = doc?.nodes.find((n) => n.sessionId === sessionId);
+  if (!doc || !node) return null;
+  const incomingRefs = doc.edges.filter(
+    (e) => e.kind === "reference" && e.target === node.id,
+  );
+  if (!incomingRefs.length) return null;
+
+  const toggleCapsule = (edgeId: string, shiftKey: boolean) => {
+    const next = structuredClone(doc);
+    const target = next.edges.find((e) => e.id === edgeId);
+    if (!target) return;
+    if (shiftKey) {
+      target.always = !target.always;
+    } else if (target.sentVersion && !target.always) {
+      // Re-arm sent capsule back to pending (M03)
+      target.sentVersion = "";
+    } else {
+      target.always = !target.always;
+    }
+    void bridge.save(next).catch(() => {});
+  };
+
+  return (
+    <div className="fs-native-dock-tray" aria-label={t("context")}>
+      {incomingRefs.map((refEdge) => {
+        const src = doc.nodes.find((x) => x.id === refEdge.source);
+        const state = capsuleStateOf(refEdge, snapshot?.sourceVersions);
+        const label = refEdge.snapshotTitle || src?.title || refEdge.source;
+        return (
+          <button
+            key={refEdge.id}
+            type="button"
+            className={`fs-dock-capsule fs-dock-${state}`}
+            title={`${label} · ${t(state)} (${t(`${state}Tip`)})`}
+            onClick={(ev) => toggleCapsule(refEdge.id, ev.shiftKey)}
+            onDoubleClick={() => bridge.openCanvas(refEdge.source)}
+          >
+            <span className="fs-dock-dot" />
+            <span className="fs-dock-label">{label}</span>
+            {refEdge.always && <Pin size={10} />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function ChatBadge({
   bridge,
   sessionId,
@@ -145,6 +213,17 @@ function ChatBadge({
   bridge: CanvasBridge;
 }) {
   const snapshot = bridge.useSnapshot();
+  const [selectedText, setSelectedText] = useState("");
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const sel = window.getSelection()?.toString().trim() ?? "";
+      setSelectedText(sel.length > 1 ? sel : "");
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () =>
+      document.removeEventListener("selectionchange", onSelectionChange);
+  }, []);
+
   const node = snapshot?.document.nodes.find((n) => n.sessionId === sessionId);
   if (!node) return null;
   const enabled =
@@ -152,14 +231,38 @@ function ChatBadge({
       ? snapshot!.document.settings.nativeChatTriggers
       : node.nativeTrigger === "enabled";
   return (
-    <button
-      className={"fs-chat-badge " + (enabled ? "on" : "")}
-      onClick={() => bridge.openCanvas(node.id)}
-      title={tr("在 FlowSpace 中查看和设置接续")}
-    >
-      <Workflow size={13} />
-      {tr("接续")}
-      {enabled ? tr("开启") : tr("关闭")}
-    </button>
+    <span className="fs-chat-actions">
+      <button
+        className={"fs-chat-badge " + (enabled ? "on" : "")}
+        onClick={() => bridge.openCanvas(node.id)}
+        title={tr("在 FlowSpace 中查看和设置接续")}
+      >
+        <Workflow size={13} />
+        {tr("接续")}
+        {enabled ? tr("开启") : tr("关闭")}
+      </button>
+      {selectedText && (
+        <button
+          className="fs-chat-badge on"
+          onClick={() => {
+            const captured = selectedText;
+            window.getSelection()?.removeAllRanges();
+            setSelectedText("");
+            void bridge
+              .display({
+                nodeId: node.id,
+                text: captured,
+                fixed: true,
+              })
+              .then((created) => bridge.openCanvas(created.id))
+              .catch(() => {});
+          }}
+          title={t("quoteToCanvas")}
+        >
+          <Quote size={12} />
+          {t("quoteToCanvas")}
+        </button>
+      )}
+    </span>
   );
 }

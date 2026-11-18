@@ -4,41 +4,27 @@
    Migrated from omp-studio agent-canvas prototype (shell.css)
    ============================================================ */
 
-/* ---------- Left Explorer Sidebar ---------- */
-.fs-root .fs-side {
-  width: 224px;
+/* ---------- Left Icon Rail & Explorer Sidebar ---------- */
+.fs-root .fs-rail {
+  width: 52px;
   flex: none;
-  background: var(--bg);
   border-right: 1px solid var(--border);
+  background: var(--rail);
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  overflow: hidden;
-  transition: width var(--dur-slow) var(--ease-nav);
-  z-index: 22;
-}
-.fs-root .fs-side.collapsed {
-  width: 0;
-  border-right: 0;
-}
-.fs-root .fs-side-head,
-.fs-root .fs-side-list,
-.fs-root .fs-side-footer {
-  width: 224px;
-}
-.fs-root .fs-side-head {
-  padding: 12px 12px 6px;
-}
-.fs-root .brand-row {
-  display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 2px;
+  padding: 10px 0;
+  gap: 14px;
+  z-index: 30;
+  transition: padding-top var(--dur-slow) var(--ease-nav);
+}
+[data-sidebar-drawer][data-sidebar-collapsed] .fs-root .fs-rail {
+  padding-top: 48px;
 }
 .fs-root .rail-brand {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
   overflow: hidden;
   flex: none;
   box-shadow:
@@ -57,13 +43,112 @@
   height: 100%;
   display: block;
 }
+.fs-root .rail-main,
+.fs-root .rail-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+.fs-root .rail-bottom {
+  margin-top: auto;
+}
+.fs-root .rail-button {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: var(--text-3);
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.fs-root .rail-button .ic {
+  width: 18px;
+  height: 18px;
+  transition: scale var(--dur) var(--ease-spring);
+}
+.fs-root .rail-button:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.fs-root .rail-button:hover .ic {
+  scale: 1.1;
+}
+.fs-root .rail-button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.fs-root .rail-button.active::before {
+  content: "";
+  position: absolute;
+  width: 3px;
+  height: 16px;
+  background: var(--accent);
+  left: -8px;
+  border-radius: 0 3px 3px 0;
+  box-shadow: 0 0 10px var(--accent);
+  animation: cv-mark-in var(--dur-slow) var(--ease-spring) backwards;
+}
+.fs-root .rail-badge {
+  position: absolute;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  top: -3px;
+  right: -4px;
+  font: 700 10px/16px var(--font-ui);
+  background: var(--amber);
+  color: var(--surface);
+  border-radius: 8px;
+  box-shadow: 0 0 0 2px var(--rail);
+  animation: cv-mark-in var(--dur) var(--ease-spring) backwards;
+}
+.fs-root .rail-language {
+  width: 30px;
+  height: 24px;
+  margin-top: 4px;
+  color: var(--text-3);
+  font: 600 10px/1 var(--font-mono);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  display: inline-grid;
+  place-items: center;
+}
+.fs-root .rail-language:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.fs-root .fs-side {
+  width: 232px;
+  flex: none;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  transition: width var(--dur-slow) var(--ease-nav);
+  z-index: 22;
+}
+.fs-root .fs-side.collapsed {
+  width: 0;
+  border-right: 0;
+}
+.fs-root .fs-side-head,
+.fs-root .fs-side-list,
+.fs-root .fs-side-footer {
+  width: 232px;
+}
+.fs-root .fs-side-head {
+  padding: 14px 12px 6px;
+}
 .fs-root .brand-name {
   display: flex;
   align-items: baseline;
-  gap: 3px;
-  flex: 1;
-  min-width: 0;
-  font: 400 16px/1.2 var(--font-display);
+  gap: 5px;
+  padding: 0 4px;
+  font: 300 17px/1.2 var(--font-display);
   letter-spacing: -0.4px;
 }
 .fs-root .brand-name b {
@@ -80,8 +165,8 @@
 }
 .fs-root .brand-name > span {
   margin-left: auto;
-  font: 600 8.5px/1 var(--font-mono);
-  letter-spacing: 0.14em;
+  font: 600 9px/1 var(--font-mono);
+  letter-spacing: 0.16em;
   color: var(--text-faint);
 }
 .fs-root .side-search {
@@ -89,7 +174,7 @@
   gap: 8px;
   align-items: center;
   width: 100%;
-  margin-top: 10px;
+  margin-top: 12px;
   height: 32px;
   padding: 0 8px 0 10px;
   color: var(--text-faint);
@@ -327,14 +412,14 @@
   background: var(--surface);
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 10px 0 10px;
+  gap: 10px;
+  padding: 0 10px 0 12px;
   z-index: 20;
 }
 .fs-root .workspace-breadcrumb {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   min-width: 0;
   font-size: 12.5px;
 }
@@ -352,74 +437,26 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
-  max-width: 180px;
-  padding: 2px 6px;
+  max-width: 240px;
+  padding: 3px 6px;
+  margin: 0 -4px;
   border-radius: 6px;
 }
 .fs-root .breadcrumb-title-btn:hover {
   background: var(--hover);
-}
-.fs-root .route-nav {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  margin-left: 6px;
-  border-radius: 9px;
-  background: var(--surface-2);
-  box-shadow: inset 0 0 0 1px var(--border);
-}
-.fs-root .route-nav button {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 7px;
-  font-size: 12px;
-  color: var(--text-3);
-  white-space: nowrap;
-}
-.fs-root .route-nav button .ic {
-  width: 13px;
-  height: 13px;
-}
-.fs-root .route-nav button:hover {
-  color: var(--text);
-}
-.fs-root .route-nav button.active {
-  background: var(--surface);
-  color: var(--text);
-  font-weight: 600;
-  box-shadow:
-    0 0 0 1px var(--border-strong),
-    0 1px 3px var(--shadow);
-}
-.fs-root .route-nav button.active .ic {
-  color: var(--accent);
-}
-.fs-root .route-badge {
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  font: 700 10px/16px var(--font-ui);
-  background: var(--amber);
-  color: var(--surface);
-  border-radius: 8px;
 }
 
 .fs-root .header-actions {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   white-space: nowrap;
 }
 .fs-root .workspace-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   height: 28px;
   padding: 0 9px;
   border-radius: 8px;
@@ -427,7 +464,7 @@
   background: var(--bg);
   color: var(--text-2);
   font-size: 11.5px;
-  max-width: 160px;
+  max-width: 170px;
 }
 .fs-root .workspace-chip:hover {
   border-color: var(--border-strong);
@@ -442,21 +479,6 @@
   width: 13px;
   height: 13px;
   color: var(--k-project);
-}
-.fs-root .rail-language {
-  min-width: 30px;
-  height: 26px;
-  padding: 0 6px;
-  color: var(--text-3);
-  font: 600 10px/1 var(--font-mono);
-  border: 1px solid var(--border-strong);
-  border-radius: 7px;
-  display: inline-grid;
-  place-items: center;
-}
-.fs-root .rail-language:hover {
-  color: var(--accent);
-  border-color: var(--accent-border);
 }
 .fs-root .header-save {
   display: inline-flex;
@@ -477,7 +499,7 @@
   color: var(--text);
 }
 .fs-root .header-run {
-  padding: 0 13px;
+  padding: 0 14px;
   min-height: 30px;
 }
 .fs-root .waiting-button {
@@ -555,11 +577,11 @@
   gap: 8px;
   align-items: center;
   min-width: 0;
-  height: 34px;
+  height: 36px;
   padding: 0 12px 0 10px;
   animation: var(--motion-reveal);
 }
-.fs-root .canvas-title > span {
+.fs-root .canvas-title > span:first-child {
   color: var(--accent);
   display: grid;
 }
@@ -573,15 +595,6 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
-}
-.fs-root .canvas-save-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10.5px;
-  color: var(--text-faint);
-  padding-left: 6px;
-  border-left: 1px solid var(--border);
 }
 .fs-root .toolbar-actions {
   display: flex;
@@ -1270,7 +1283,7 @@
 
 /* ---------- Bottom Execution Drawer ---------- */
 .fs-root .fs-bottom-toggle {
-  height: 26px;
+  height: 24px;
   flex: none;
   padding: 0 14px;
   color: var(--text-faint);
@@ -1278,7 +1291,7 @@
   background: var(--bg);
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   font-size: 11px;
   text-align: left;
   width: 100%;

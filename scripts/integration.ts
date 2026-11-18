@@ -202,8 +202,95 @@ try {
   const currentDoc = service.snapshot().document;
   currentDoc.nodes[0].draft = "Persisted draft";
   currentDoc.nodes[0].x = 713;
+  currentDoc.nodes[1].continuationPrompt = "DEDICATED_CONTINUATION_PROMPT_99";
+  currentDoc.nodes[1].draft = "UNSENT_CHAT_DRAFT_KEEP";
+  currentDoc.nodes.push(
+    {
+      ...newNode("git", -260, 120, "Repo Git"),
+      cwd: workspace,
+      text: "Branch: main",
+    },
+    {
+      ...newNode("changes", -260, 320, "Turn Changes"),
+      cwd: workspace,
+      changesSessionId: session,
+      text: "Turn #1 (+4 / -1)",
+    },
+    {
+      ...newNode("terminal", -260, 520, "Session Term"),
+      cwd: workspace,
+      terminalSessionId: session,
+      text: "$ pnpm check\nPASS",
+    },
+  );
+  currentDoc.templates = [
+    {
+      id: "tpl-custom-1",
+      title: "Custom Review",
+      description: "Saved in templates table",
+      revision: 1,
+      w: 800,
+      h: 400,
+      nodes: [],
+      edges: [],
+      ports: [],
+    },
+  ];
+  currentDoc.snapshots = [
+    {
+      id: "snap-1",
+      title: "Checkpoint 1",
+      createdAt: Date.now(),
+      nodes: [],
+      edges: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+    },
+  ];
   await service.save(currentDoc);
+  const structures = await service.projectStructures();
+  assert.ok(Array.isArray(structures), "projectStructures returns workspace array");
+  const gitStatus = await service.gitInspect({ cwd: workspace });
+  assert.equal(typeof gitStatus.isGitRepo, "boolean");
+  report.push({
+    name: "4-table storageDomain (templates/snapshots), tool nodes, and Host Git/structure RPCs",
+    passed: true,
+  });
+
+  // Verify M02: upstream continuation uses continuationPrompt and preserves live chat draft
+  const contDoc = service.snapshot().document;
+  contDoc.nodes[0].draft = "Trigger upstream for M02 check";
+  contDoc.edges = [
+    newEdge(contDoc.nodes[0].id, contDoc.nodes[1].id, "continuation"),
+  ];
+  await service.save(contDoc);
+  const m02Run = await service.start({
+    kind: "single",
+    nodeIds: [contDoc.nodes[0].id],
+  });
+  await until(
+    () =>
+      service.snapshot().runs.find((r) => r.id === m02Run.id)?.state ===
+      "completed",
+    "M02 continuation chain completes",
+  );
+  const m02Steps = service
+    .snapshot()
+    .runs.find((r) => r.id === m02Run.id)!.steps;
+  assert.equal(m02Steps[1].task, "DEDICATED_CONTINUATION_PROMPT_99");
+  assert.equal(
+    service.snapshot().document.nodes[1].draft,
+    "UNSENT_CHAT_DRAFT_KEEP",
+  );
+  report.push({
+    name: "M02 independent continuationPrompt preserves live session chat draft",
+    passed: true,
+  });
+
   const countBeforeRestart = service.snapshot().runs.length;
+  const finalDocBeforeRestart = service.snapshot().document;
+  finalDocBeforeRestart.nodes[0].draft = "Persisted draft";
+  finalDocBeforeRestart.nodes[0].x = 713;
+  await service.save(finalDocBeforeRestart);
   const patch = join(profile, "cordis.patch.yml");
   await copyFile(patch, patch + ".before-lifecycle-test");
   await writeFile(patch, "- id: flowspace\n  disabled: true\n");
@@ -236,6 +323,14 @@ try {
     assert.equal(
       restored.ctx.flowspace.snapshot().runs.length,
       countBeforeRestart,
+    );
+    assert.equal(
+      restored.ctx.flowspace.snapshot().document.templates?.length,
+      1,
+    );
+    assert.equal(
+      restored.ctx.flowspace.snapshot().document.snapshots?.length,
+      1,
     );
     assert.ok(
       restored.ctx.flowspace

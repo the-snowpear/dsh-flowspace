@@ -89,8 +89,9 @@ var __callDispose = (stack, error, hasError) => {
 };
 
 // packages/flowspace/src/index.ts
+import { createHash as createHash3 } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
-import { resolve, relative, isAbsolute } from "node:path";
+import { resolve as resolve2, relative as relative2, isAbsolute as isAbsolute2 } from "node:path";
 import { Service } from "@deepseek-ai/cordis";
 import { TypertRemoteService, Remote } from "@deepseek-ai/dsh-typert-protocol";
 
@@ -114,7 +115,10 @@ var DEFAULT_DIMS = {
   display: [300, 252],
   group: [1152, 474],
   board: [520, 310],
-  detail: [340, 362]
+  detail: [340, 362],
+  git: [380, 376],
+  changes: [340, 318],
+  terminal: [360, 300]
 };
 function boardSummaryText(columns, selectedIds) {
   const chosen = selectedIds?.length ? new Set(selectedIds) : null;
@@ -126,6 +130,11 @@ function boardSummaryText(columns, selectedIds) {
     for (const card of cards) lines.push(`- ${card.text}`);
   }
   return lines.join("\n");
+}
+function deriveDraftTitle(prompt, fallback = "\u65B0 Agent") {
+  const first = prompt.split(/\r?\n/).map((line) => line.replace(/^[#>*\-\s]+/, "").trim()).find(Boolean);
+  if (!first) return fallback;
+  return first.length > 36 ? `${first.slice(0, 36)}\u2026` : first;
 }
 function newNode(kind, x, y, title) {
   const [width, height] = DEFAULT_DIMS[kind] ?? [312, 260];
@@ -148,13 +157,16 @@ function newNode(kind, x, y, title) {
       display: "\u5C55\u793A\u7ED3\u679C",
       group: "\u5DE5\u4F5C\u6D41",
       board: "\u4EFB\u52A1\u770B\u677F",
-      detail: "\u6267\u884C\u8BE6\u60C5"
+      detail: "\u6267\u884C\u8BE6\u60C5",
+      git: "Git \u4ED3\u5E93",
+      changes: "\u8F6E\u6B21\u6539\u52A8",
+      terminal: "\u7EC8\u7AEF\u5FEB\u7167"
     }[kind],
     x,
     y,
     width,
     height,
-    expanded: kind === "agent" || kind === "board" || kind === "detail",
+    expanded: kind === "agent" || kind === "board" || kind === "detail" || kind === "git",
     task: "",
     draft: "",
     nativeTrigger: "inherit",
@@ -162,7 +174,9 @@ function newNode(kind, x, y, title) {
     text: columns ? boardSummaryText(columns) : "",
     fixed: kind !== "detail",
     collapsed: false,
-    ...kind === "agent" ? { tab: "task", rerun: "change" } : {},
+    ...title ? { customTitle: true } : {},
+    ...kind === "agent" ? { tab: "conversation", rerun: "change" } : {},
+    ...kind === "git" ? { gitTab: "changes" } : {},
     ...kind === "group" ? { color: "violet", ports: [] } : {},
     ...columns ? { columns, selectedItems: [] } : {}
   };
@@ -233,8 +247,8 @@ function launchPlan(doc, request, busy, waiting) {
   );
   const skipped = [];
   const eligible = pool.filter((n) => {
-    const why = busy.has(n.id) ? "\u6B63\u5728\u8FD0\u884C" : waiting.has(n.id) ? "\u7B49\u5F85\u786E\u8BA4" : !n.draft.trim() && !n.task.trim() ? "\u5C1A\u672A\u586B\u5199\u4EFB\u52A1" : n.participation === "paused" ? "\u6682\u505C\u53C2\u4E0E" : request.kind !== "single" && n.participation === "manual" ? "\u4EC5\u624B\u52A8\u542F\u52A8" : request.kind !== "single" && !n.draft.trim() && n.lastSubmittedTask === n.task && n.rerun !== "always" && !(n.rerun === "update" && doc.edges.some(
-      (e) => e.kind === "reference" && e.target === n.id && !e.sentVersion
+    const why = busy.has(n.id) ? "\u6B63\u5728\u8FD0\u884C" : waiting.has(n.id) ? "\u7B49\u5F85\u786E\u8BA4" : !n.draft.trim() && !n.task.trim() && !(n.continuationPrompt ?? "").trim() ? "\u5C1A\u672A\u586B\u5199\u4EFB\u52A1" : n.participation === "paused" ? "\u6682\u505C\u53C2\u4E0E" : request.kind !== "single" && n.participation === "manual" ? "\u4EC5\u624B\u52A8\u542F\u52A8" : request.kind !== "single" && !n.draft.trim() && n.lastSubmittedTask === n.task && n.rerun !== "always" && !(n.rerun === "update" && doc.edges.some(
+      (e) => e.kind === "reference" && e.target === n.id && (!e.sentVersion || !!e.currentVersion && e.sentVersion !== e.currentVersion)
     )) ? "\u6CA1\u6709\u65B0\u8F93\u5165" : "";
     if (why) skipped.push({ nodeId: n.id, reason: why });
     return !why;
@@ -345,7 +359,36 @@ var Scheduler = class {
             continue;
           }
         }
-        await this.enqueue(run, id, sources);
+        await this.enqueue(run, id, sources, false);
+      }
+      this.settle(run);
+      await this.store.changed();
+      return structuredClone(run);
+    });
+  }
+  /** Rerun failed/interrupted nodes of a run and their affected downstream while reusing completed upstream snapshots (R5). */
+  async rerunFailed(runId) {
+    return this.transact(async () => {
+      const prev = this.requireRun(runId);
+      const latestByNode = /* @__PURE__ */ new Map();
+      for (const step of prev.steps) latestByNode.set(step.nodeId, step);
+      const failedRoots = [...latestByNode.entries()].filter(
+        ([, step]) => ["error", "aborted", "interrupted"].includes(step.state)
+      ).map(([nodeId]) => nodeId).filter(
+        (nodeId) => this.store.document().nodes.some((n) => n.id === nodeId && n.kind === "agent")
+      );
+      if (!failedRoots.length) throw new Error("\u8BE5\u6B21\u8FD0\u884C\u6CA1\u6709\u53EF\u91CD\u8DD1\u7684\u5931\u8D25\u6216\u4E2D\u65AD\u8282\u70B9");
+      const doc = this.store.document();
+      const scope = prev.scope ? [.../* @__PURE__ */ new Set([...prev.scope, ...reachable(failedRoots, doc.edges)])] : null;
+      const run = this.create(failedRoots, scope, "canvas");
+      run.notes.push(`\u81EA\u8FD0\u884C ${prev.title} \u5C40\u90E8\u91CD\u8DD1\u5931\u8D25\u8282\u70B9\u53CA\u4E0B\u6E38`);
+      await this.store.changed();
+      for (const id of run.roots) {
+        const failedStep = latestByNode.get(id);
+        const preservedSources = failedStep?.sources.filter(
+          (s) => ["conclusion", "session", "fork"].includes(s.kind)
+        ) ?? [];
+        await this.enqueue(run, id, preservedSources, preservedSources.length > 0);
       }
       this.settle(run);
       await this.store.changed();
@@ -366,7 +409,8 @@ var Scheduler = class {
       graph: structuredClone({ nodes: doc.nodes, edges: doc.edges }),
       steps: [],
       tokens: [],
-      notes: []
+      notes: [],
+      deliverables: []
     };
     this.runs.push(run);
     return run;
@@ -393,7 +437,7 @@ var Scheduler = class {
         sources,
         createdAt: Date.now()
       });
-      await this.store.submitted(node2.id, task);
+      await this.store.submitted(node2.id, task, false);
       await this.store.changed();
     });
   }
@@ -414,6 +458,33 @@ var Scheduler = class {
       }
       step.turn = turn;
       step.state = "running";
+      await this.store.changed();
+    });
+  }
+  deliverable(sessionId, turn, seq, time, files) {
+    return this.transact(async () => {
+      const run = [...this.runs].reverse().find(
+        (r) => r.steps.some(
+          (s) => s.sessionId === sessionId && (s.turn === turn || !s.endedAt && s.turn === void 0)
+        )
+      );
+      const node2 = this.store.document().nodes.find((n) => n.sessionId === sessionId);
+      if (!run || !node2) return;
+      run.deliverables ??= [];
+      for (const file of files) {
+        const id = `${sessionId}:${seq}:${file.path}`;
+        if (run.deliverables.some((d) => d.id === id)) continue;
+        run.deliverables.push({
+          id,
+          nodeId: node2.id,
+          sessionId,
+          turn,
+          seq,
+          time,
+          path: file.path,
+          description: file.description
+        });
+      }
       await this.store.changed();
     });
   }
@@ -523,13 +594,19 @@ var Scheduler = class {
       await this.enqueue(
         run,
         nodeId,
-        chosen.map((t) => t.source)
+        chosen.map((t) => t.source),
+        true
       );
     }
   }
-  async enqueue(run, nodeId, sources) {
+  async enqueue(run, nodeId, sources, isContinuation = false) {
+    const liveDoc = this.store.document();
+    const liveNode = liveDoc.nodes.find((n) => n.id === nodeId);
     const node2 = run.graph.nodes.find((n) => n.id === nodeId);
-    const task = node2.draft.trim() || node2.task.trim();
+    if (liveNode?.continuationPrompt !== void 0) {
+      node2.continuationPrompt = liveNode.continuationPrompt;
+    }
+    const task = isContinuation ? (node2.continuationPrompt ?? "").trim() || (node2.sessionId ? node2.task.trim() || node2.draft.trim() : node2.draft.trim() || node2.task.trim()) : node2.draft.trim() || node2.task.trim() || (node2.continuationPrompt ?? "").trim();
     if (!task) {
       run.notes.push(`${node2.title}\uFF1A\u5C1A\u672A\u586B\u5199\u4EFB\u52A1`);
       run.state = "error";
@@ -551,8 +628,9 @@ var Scheduler = class {
         (e) => e.target === nodeId && (e.kind === "reference" || e.trigger === "off")
       )) {
         const source = run.graph.nodes.find((n) => n.id === edge2.source);
-        const captured = source.kind === "agent" ? await this.runtime.capture(source, edge2.mode) : await this.runtime.reference(source);
+        const captured = source.kind === "agent" ? await this.runtime.capture(source, edge2.mode) : await this.runtime.reference(source, edge2);
         const version = `${captured.sourceSessionId ?? captured.sourceNodeId}:${captured.version ?? captured.seq ?? captured.text}`;
+        edge2.currentVersion = version;
         if (edge2.kind === "reference" && !edge2.always && edge2.sentVersion === version)
           continue;
         if (source.kind === "display" && source.sourceNodeId)
@@ -561,15 +639,18 @@ var Scheduler = class {
           );
         step.sources.push(captured);
         edge2.sentVersion = version;
-        const live = this.store.document().edges.find((e) => e.id === edge2.id);
-        if (live) live.sentVersion = version;
+        const live = liveDoc.edges.find((e) => e.id === edge2.id);
+        if (live) {
+          live.sentVersion = version;
+          live.currentVersion = version;
+        }
       }
       if (new Set(
         step.sources.filter((s) => s.kind === "session").map((s) => s.sourceSessionId)
       ).size > 3)
         throw new Error("\u4E00\u6B21\u4F1A\u8BDD\u5F15\u7528\u6700\u591A\u5305\u542B\u4E09\u4E2A\u6765\u6E90\uFF1B\u66F4\u591A\u6765\u6E90\u53EF\u6539\u7528\u7ED3\u8BBA");
       const fork = step.sources.find((s) => s.kind === "fork");
-      const current = this.store.document().nodes.find((n) => n.id === nodeId);
+      const current = liveDoc.nodes.find((n) => n.id === nodeId);
       if (current?.sessionId) node2.sessionId = current.sessionId;
       step.sessionId = await this.runtime.ensure(
         node2,
@@ -586,7 +667,7 @@ var Scheduler = class {
         }
       await this.store.changed();
       await this.runtime.send(step);
-      await this.store.submitted(nodeId, task);
+      await this.store.submitted(nodeId, task, isContinuation);
     } catch (e) {
       step.state = "error";
       step.error = String(e);
@@ -722,8 +803,521 @@ var Scheduler = class {
 };
 
 // packages/flowspace/src/host/runtime.ts
+import { createHash as createHash2 } from "node:crypto";
 import { foldSurface } from "@deepseek-ai/dsh-session";
 import { isCompactCheckpointSource } from "@deepseek-ai/dsh-compaction";
+
+// packages/flowspace/src/host/git.ts
+import { execFile as execFileCb } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdir } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { promisify } from "node:util";
+var execFile = promisify(execFileCb);
+function normPath(p) {
+  const resolved = resolve(p).replaceAll("\\", "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+function sameFsPath(a, b) {
+  if (!a || !b) return false;
+  return normPath(a) === normPath(b);
+}
+function isSubPath(root, target) {
+  const r = resolve(root);
+  const t = resolve(target);
+  const rel = relative(r, t);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute(rel);
+}
+function parseUnifiedDiff(raw) {
+  const hunks = [];
+  const lines = raw.split(/\r?\n/);
+  let current = null;
+  const headerRe = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@(.*)$/;
+  for (const line of lines) {
+    const m = headerRe.exec(line);
+    if (m) {
+      current = {
+        oldStart: Number(m[1]),
+        oldLines: m[2] === void 0 ? 1 : Number(m[2]),
+        newStart: Number(m[3]),
+        newLines: m[4] === void 0 ? 1 : Number(m[4]),
+        lines: m[5]?.trim() ? [` ${m[5].trim()}`] : []
+      };
+      hunks.push(current);
+      continue;
+    }
+    if (!current) continue;
+    if (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) {
+      current.lines.push(line);
+    }
+  }
+  return hunks;
+}
+var HostGitService = class {
+  queues = /* @__PURE__ */ new Map();
+  async runGit(args, opts) {
+    const env = {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: "0",
+      ...opts.write ? {} : { GIT_OPTIONAL_LOCKS: "0" }
+    };
+    try {
+      const { stdout, stderr } = await execFile("git", args, {
+        cwd: opts.cwd,
+        env,
+        timeout: opts.timeoutMs ?? 2e4,
+        maxBuffer: 8 * 1024 * 1024,
+        windowsHide: true
+      });
+      return { stdout, stderr, code: 0 };
+    } catch (err) {
+      const e = err;
+      if (opts.allowNonZero && typeof e.stdout === "string") {
+        return {
+          stdout: e.stdout,
+          stderr: e.stderr ?? "",
+          code: typeof e.code === "number" ? e.code : 1
+        };
+      }
+      const detail = (e.stderr || e.message || String(err)).trim();
+      throw new Error(detail || `git ${args[0]} \u6267\u884C\u5931\u8D25`);
+    }
+  }
+  enqueueWrite(repoKey, fn) {
+    const prev = this.queues.get(repoKey) ?? Promise.resolve();
+    const next = prev.then(fn);
+    this.queues.set(
+      repoKey,
+      next.then(
+        () => void 0,
+        () => void 0
+      )
+    );
+    return next;
+  }
+  async inspect(cwd) {
+    const targetCwd = resolve(cwd);
+    const revRes = await this.runGit(
+      ["rev-parse", "--show-toplevel", "--git-common-dir", "HEAD"],
+      { cwd: targetCwd, allowNonZero: true }
+    );
+    if (revRes.code !== 0 && !revRes.stdout.trim()) {
+      return {
+        isGitRepo: false,
+        cwd: targetCwd,
+        branch: "",
+        detached: false,
+        ahead: 0,
+        behind: 0,
+        revision: "none",
+        staged: [],
+        unstaged: [],
+        branches: [],
+        worktrees: [],
+        commits: []
+      };
+    }
+    const topRes = await this.runGit(
+      ["rev-parse", "--show-toplevel", "--git-common-dir"],
+      { cwd: targetCwd, allowNonZero: true }
+    );
+    if (topRes.code !== 0) {
+      return {
+        isGitRepo: false,
+        cwd: targetCwd,
+        branch: "",
+        detached: false,
+        ahead: 0,
+        behind: 0,
+        revision: "none",
+        staged: [],
+        unstaged: [],
+        branches: [],
+        worktrees: [],
+        commits: []
+      };
+    }
+    const [rawTop, rawCommon] = topRes.stdout.trim().split(/\r?\n/);
+    const topLevel = resolve(targetCwd, rawTop.trim());
+    const commonDir = resolve(targetCwd, (rawCommon ?? ".git").trim());
+    const [statusRes, wtRes, branchRes, logRes] = await Promise.all([
+      this.runGit(["status", "--porcelain=v1", "-b"], {
+        cwd: topLevel,
+        allowNonZero: true
+      }),
+      this.runGit(["worktree", "list", "--porcelain"], {
+        cwd: topLevel,
+        allowNonZero: true
+      }),
+      this.runGit(
+        [
+          "for-each-ref",
+          "--format=%(HEAD)	%(refname:short)	%(upstream:short)	%(upstream:track)	%(objectname:short)",
+          "refs/heads"
+        ],
+        { cwd: topLevel, allowNonZero: true }
+      ),
+      this.runGit(
+        [
+          "log",
+          "-n",
+          "30",
+          "--date=relative",
+          "--format=%H%x09%h%x09%P%x09%an%x09%ar%x09%ct%x09%D%x09%s"
+        ],
+        { cwd: topLevel, allowNonZero: true }
+      )
+    ]);
+    let branch = "HEAD";
+    let detached = false;
+    let upstream;
+    let ahead = 0;
+    let behind = 0;
+    const staged = [];
+    const unstaged = [];
+    const statusLines = statusRes.stdout.split(/\r?\n/).filter(Boolean);
+    for (const line of statusLines) {
+      if (line.startsWith("## ")) {
+        const headInfo = line.slice(3).trim();
+        if (headInfo.startsWith("HEAD (no branch)") || headInfo.includes("detached")) {
+          detached = true;
+          branch = "HEAD";
+        } else {
+          const trackMatch = /^(.*?)(?:\.\.\.([^\s[]+))?(?:\s+\[(.*)\])?$/.exec(
+            headInfo
+          );
+          if (trackMatch) {
+            branch = trackMatch[1].replace(/^No commits yet on /, "").replace(/^Initial commit on /, "").trim();
+            upstream = trackMatch[2]?.trim() || void 0;
+            const track = trackMatch[3] ?? "";
+            const a = /ahead\s+(\d+)/.exec(track);
+            const b = /behind\s+(\d+)/.exec(track);
+            if (a) ahead = Number(a[1]);
+            if (b) behind = Number(b[1]);
+          }
+        }
+        continue;
+      }
+      if (line.length < 3) continue;
+      const x = line[0];
+      const y = line[1];
+      const rest = line.slice(3);
+      let path = rest;
+      let origPath;
+      if (rest.includes(" -> ")) {
+        const parts = rest.split(" -> ");
+        origPath = parts[0];
+        path = parts[1];
+      }
+      if (x === "?" && y === "?") {
+        unstaged.push({ path, status: "?", staged: false });
+        continue;
+      }
+      const toStatus = (ch) => ch === "A" ? "A" : ch === "D" ? "D" : ch === "R" ? "R" : ch === "U" ? "U" : "M";
+      if (x !== " " && x !== "?") {
+        staged.push({ path, origPath, status: toStatus(x), staged: true });
+      }
+      if (y !== " " && y !== "?") {
+        unstaged.push({ path, origPath, status: toStatus(y), staged: false });
+      }
+    }
+    const worktrees = parsePorcelainWorktrees(wtRes.stdout);
+    const wtByBranch = /* @__PURE__ */ new Map();
+    for (const wt of worktrees) {
+      if (wt.branch) wtByBranch.set(wt.branch, wt.path);
+    }
+    const branches = branchRes.stdout.split(/\r?\n/).filter(Boolean).map((line) => {
+      const [headMark, name, up, track, oid] = line.split("	");
+      const a = /ahead\s+(\d+)/.exec(track ?? "");
+      const b = /behind\s+(\d+)/.exec(track ?? "");
+      return {
+        name: name ?? "",
+        current: headMark === "*" || name === branch,
+        upstream: up || void 0,
+        ahead: a ? Number(a[1]) : 0,
+        behind: b ? Number(b[1]) : 0,
+        commitOid: oid ?? "",
+        worktreePath: name ? wtByBranch.get(name) : void 0
+      };
+    }).filter((b) => Boolean(b.name));
+    if (branch && !detached && !branches.some((b) => b.name === branch)) {
+      branches.unshift({
+        name: branch,
+        current: true,
+        ahead,
+        behind,
+        commitOid: "",
+        worktreePath: topLevel
+      });
+    }
+    const commits = logRes.code === 0 ? logRes.stdout.split(/\r?\n/).filter(Boolean).map((line) => {
+      const [
+        oid = "",
+        shortOid = "",
+        parentsRaw = "",
+        author = "",
+        relativeTime = "",
+        ts = "0",
+        refsRaw = "",
+        ...subjectParts
+      ] = line.split("	");
+      return {
+        oid,
+        shortOid,
+        parents: parentsRaw.split(" ").filter(Boolean),
+        author,
+        relativeTime,
+        timestamp: Number(ts) * 1e3,
+        refs: refsRaw.split(",").map((r) => r.trim()).filter(Boolean),
+        subject: subjectParts.join("	")
+      };
+    }) : [];
+    const revision = createHash("sha1").update(
+      JSON.stringify({
+        topLevel,
+        branch,
+        head: commits[0]?.oid ?? "",
+        status: statusRes.stdout,
+        wtCount: worktrees.length
+      })
+    ).digest("hex").slice(0, 16);
+    return {
+      isGitRepo: true,
+      cwd: targetCwd,
+      topLevel,
+      commonDir,
+      branch,
+      detached,
+      upstream,
+      ahead,
+      behind,
+      revision,
+      staged,
+      unstaged,
+      branches,
+      worktrees,
+      commits
+    };
+  }
+  async diff(cwd, req) {
+    const targetCwd = resolve(cwd);
+    let args;
+    let title;
+    if (req.target === "commit" && req.commitOid) {
+      args = ["show", "--format=medium", "--patch", req.commitOid];
+      if (req.path) args.push("--", req.path);
+      title = `Commit ${req.commitOid.slice(0, 7)}${req.path ? ` \xB7 ${req.path}` : ""}`;
+    } else if (req.target === "staged") {
+      args = ["diff", "--cached"];
+      if (req.path) args.push("--", req.path);
+      title = `Staged${req.path ? ` \xB7 ${req.path}` : ""}`;
+    } else if (req.target === "all") {
+      args = ["diff", "HEAD"];
+      if (req.path) args.push("--", req.path);
+      title = `HEAD Diff${req.path ? ` \xB7 ${req.path}` : ""}`;
+    } else {
+      args = ["diff"];
+      if (req.path) args.push("--", req.path);
+      title = `Working${req.path ? ` \xB7 ${req.path}` : ""}`;
+    }
+    const res = await this.runGit(args, {
+      cwd: targetCwd,
+      allowNonZero: true
+    });
+    const raw = res.stdout;
+    const maxLen = 96e3;
+    const truncated = raw.length > maxLen;
+    const text = truncated ? raw.slice(0, maxLen) : raw;
+    return {
+      title,
+      text,
+      hunks: parseUnifiedDiff(text),
+      truncated
+    };
+  }
+  async act(cwd, req) {
+    const initial = await this.inspect(cwd);
+    if (!initial.isGitRepo || !initial.topLevel || !initial.commonDir) {
+      throw new Error("\u5F53\u524D\u76EE\u5F55\u4E0D\u662F Git \u4ED3\u5E93");
+    }
+    const repoTop = initial.topLevel;
+    const repoKey = normPath(initial.commonDir);
+    return this.enqueueWrite(repoKey, async () => {
+      if (req.expectedRevision) {
+        const fresh = await this.inspect(repoTop);
+        if (fresh.revision !== req.expectedRevision) {
+          throw new Error("Git \u4ED3\u5E93\u72B6\u6001\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u518D\u6267\u884C\u64CD\u4F5C");
+        }
+      }
+      const cleanPaths = (req.paths ?? []).map((p) => p.trim()).filter((p) => p && !p.startsWith("-"));
+      switch (req.action) {
+        case "stage": {
+          if (!cleanPaths.length) throw new Error("\u672A\u6307\u5B9A\u8981\u6682\u5B58\u7684\u6587\u4EF6");
+          await this.runGit(["add", "--", ...cleanPaths], {
+            cwd: repoTop,
+            write: true
+          });
+          break;
+        }
+        case "unstage": {
+          if (!cleanPaths.length) throw new Error("\u672A\u6307\u5B9A\u8981\u53D6\u6D88\u6682\u5B58\u7684\u6587\u4EF6");
+          await this.runGit(["reset", "HEAD", "--", ...cleanPaths], {
+            cwd: repoTop,
+            write: true,
+            allowNonZero: true
+          });
+          break;
+        }
+        case "stageAll": {
+          await this.runGit(["add", "-A"], { cwd: repoTop, write: true });
+          break;
+        }
+        case "unstageAll": {
+          await this.runGit(["reset"], {
+            cwd: repoTop,
+            write: true,
+            allowNonZero: true
+          });
+          break;
+        }
+        case "discard": {
+          if (!cleanPaths.length) throw new Error("\u672A\u6307\u5B9A\u8981\u653E\u5F03\u4FEE\u6539\u7684\u6587\u4EF6");
+          await this.runGit(["checkout", "--", ...cleanPaths], {
+            cwd: repoTop,
+            write: true
+          });
+          break;
+        }
+        case "commit": {
+          const msg = (req.message ?? "").trim();
+          if (!msg) throw new Error("\u63D0\u4EA4\u8BF4\u660E\u4E0D\u80FD\u4E3A\u7A7A");
+          await this.runGit(["commit", "-m", msg], {
+            cwd: repoTop,
+            write: true
+          });
+          break;
+        }
+        case "createBranch": {
+          const name = sanitizeBranchName(req.branch);
+          const args = ["branch", name];
+          if (req.baseRef?.trim()) args.push(req.baseRef.trim());
+          await this.runGit(args, { cwd: repoTop, write: true });
+          break;
+        }
+        case "checkoutBranch": {
+          const name = sanitizeBranchName(req.branch);
+          await this.runGit(["checkout", name], { cwd: repoTop, write: true });
+          break;
+        }
+        case "fetch": {
+          await this.runGit(["fetch", "--all", "--prune"], {
+            cwd: repoTop,
+            write: true,
+            timeoutMs: 45e3
+          });
+          break;
+        }
+        case "pull": {
+          await this.runGit(["pull", "--ff-only"], {
+            cwd: repoTop,
+            write: true,
+            timeoutMs: 45e3
+          });
+          break;
+        }
+        case "push": {
+          await this.runGit(["push"], {
+            cwd: repoTop,
+            write: true,
+            timeoutMs: 45e3
+          });
+          break;
+        }
+        case "createWorktree": {
+          const branch = sanitizeBranchName(req.branch);
+          const slug = branch.replace(/[^a-zA-Z0-9._-]+/g, "-");
+          const defaultWtRoot = join(
+            dirname(repoTop),
+            `${basename(repoTop)}-worktrees`
+          );
+          const wtPath = req.worktreePath?.trim() ? resolve(repoTop, req.worktreePath.trim()) : join(defaultWtRoot, slug);
+          await mkdir(dirname(wtPath), { recursive: true });
+          const existsBranch = initial.branches.some((b) => b.name === branch);
+          const args = existsBranch ? ["worktree", "add", wtPath, branch] : [
+            "worktree",
+            "add",
+            "-b",
+            branch,
+            wtPath,
+            ...req.baseRef?.trim() ? [req.baseRef.trim()] : []
+          ];
+          await this.runGit(args, { cwd: repoTop, write: true });
+          break;
+        }
+        case "removeWorktree": {
+          const target = req.worktreePath?.trim();
+          if (!target) throw new Error("\u672A\u6307\u5B9A\u8981\u79FB\u9664\u7684 worktree \u8DEF\u5F84");
+          const resolvedWt = resolve(repoTop, target);
+          if (sameFsPath(resolvedWt, repoTop)) {
+            throw new Error("\u4E0D\u80FD\u79FB\u9664\u4E3B\u5DE5\u4F5C\u6811\u76EE\u5F55");
+          }
+          await this.runGit(["worktree", "remove", resolvedWt], {
+            cwd: repoTop,
+            write: true
+          });
+          break;
+        }
+      }
+      return this.inspect(repoTop);
+    });
+  }
+};
+function sanitizeBranchName(raw) {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed || trimmed.startsWith("-") || /\s|~|\^|:|\?|\*|\[|\\/.test(trimmed)) {
+    throw new Error("\u65E0\u6548\u7684\u5206\u652F\u540D\u79F0");
+  }
+  return trimmed;
+}
+function parsePorcelainWorktrees(stdout) {
+  const blocks = stdout.trim().split(/\r?\n\r?\n/).map((b) => b.trim()).filter(Boolean);
+  return blocks.map((block, index) => {
+    let path = "";
+    let head = "";
+    let branch;
+    let bare = false;
+    let detached = false;
+    let locked = false;
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith("worktree ")) {
+        path = resolve(line.slice("worktree ".length).trim());
+      } else if (line.startsWith("HEAD ")) {
+        head = line.slice(5).trim();
+      } else if (line.startsWith("branch ")) {
+        const ref = line.slice(7).trim();
+        branch = ref.replace(/^refs\/heads\//, "");
+      } else if (line === "bare") {
+        bare = true;
+      } else if (line === "detached") {
+        detached = true;
+      } else if (line === "locked" || line.startsWith("locked ")) {
+        locked = true;
+      }
+    }
+    return {
+      path,
+      head,
+      branch,
+      bare,
+      detached,
+      locked,
+      isMain: index === 0
+    };
+  });
+}
+
+// packages/flowspace/src/host/runtime.ts
+var shortHash = (value) => createHash2("sha1").update(value).digest("hex").slice(0, 12);
 var plainText = (blocks) => blocks.filter((b) => b.type === "text").map((b) => b.text).join("\n");
 var DshRuntime = class {
   constructor(ctx, findNode) {
@@ -735,17 +1329,47 @@ var DshRuntime = class {
   }
   async ensure(node2, fork) {
     if (node2.sessionId) return node2.sessionId;
+    const defaultTitles = /* @__PURE__ */ new Set(["\u65B0 Agent", "New Agent", ""]);
+    if (!node2.customTitle && defaultTitles.has(node2.title.trim())) {
+      const promptSeed = node2.draft.trim() || node2.task.trim() || (node2.continuationPrompt ?? "").trim();
+      if (promptSeed) node2.title = deriveDraftTitle(promptSeed, node2.title);
+    }
+    const ws = node2.workspaceId ? this.ctx.workspaceRegistry.list().find((w) => w.id === node2.workspaceId) : void 0;
     const result = fork?.sourceSessionId ? await this.ctx.sessionController.fork({
       sessionId: fork.sourceSessionId,
       atSeq: fork.seq
     }) : await this.ctx.sessionController.create({
-      ...node2.workspaceId ? { workspaceId: node2.workspaceId } : { cwd: node2.cwd },
+      ...ws ? { workspaceId: ws.id } : node2.cwd || node2.worktreePath ? { cwd: node2.worktreePath ?? node2.cwd } : {},
       ...node2.agentPreset ? { agentPreset: node2.agentPreset } : {}
     });
     await this.ctx.sessionController.rename({
       sessionId: result.sessionId,
       title: node2.title
     });
+    const targetDir = node2.worktreePath || node2.cwd;
+    const needsWorkdirSet = !fork && Boolean(targetDir && ws && !sameFsPath(targetDir, ws.path));
+    if (needsWorkdirSet || node2.planMode) {
+      const resolved = await this.ctx.sessionController.resolveAgent(
+        result.sessionId
+      );
+      if (!("error" in resolved)) {
+        if (needsWorkdirSet && targetDir) {
+          const wd = this.ctx.get("workingDirectory");
+          if (wd) {
+            await wd.set(resolved.agent, targetDir).catch((err) => {
+              this.ctx.logger.warn(
+                "FlowSpace worktree workingDirectory.set failed: %s",
+                err
+              );
+            });
+          }
+        }
+        if (node2.planMode) {
+          const pm = this.ctx.get("planMode");
+          pm?.set?.(resolved.agent, true);
+        }
+      }
+    }
     return result.sessionId;
   }
   async send(step) {
@@ -893,6 +1517,7 @@ ${text}`
         seq: cut,
         title: node2.title,
         text: text ?? "",
+        version: String(cut),
         capturedAt: Date.now()
       };
     } catch (_) {
@@ -901,7 +1526,18 @@ ${text}`
       __callDispose(_stack, _error, _hasError);
     }
   }
-  async reference(node2) {
+  async reference(node2, edge2) {
+    if (edge2?.snapshotText !== void 0 && edge2.snapshotText.length > 0) {
+      return {
+        id: uid(),
+        kind: "text",
+        sourceNodeId: node2.id,
+        title: edge2.snapshotTitle || node2.title,
+        text: edge2.snapshotText,
+        version: shortHash(edge2.snapshotText),
+        capturedAt: Date.now()
+      };
+    }
     if ((node2.kind === "display" || node2.kind === "detail") && !node2.fixed && !node2.pinned && node2.sourceNodeId) {
       const source = this.findNode(node2.sourceNodeId);
       if (source) return this.capture(source, "conclusion");
@@ -911,8 +1547,9 @@ ${text}`
       if (!paths.length) throw new Error(`\u6587\u4EF6\u4E0D\u5B58\u5728\uFF1A${node2.text}`);
       const resolved = [];
       const versions = [];
+      const baseCwd = node2.worktreePath ?? node2.cwd;
       for (const p of paths) {
-        const target = await this.ctx.fs.resolve(p, { cwd: node2.cwd });
+        const target = await this.ctx.fs.resolve(p, { cwd: baseCwd });
         const info = await this.ctx.fs.stat(target);
         if (!info) throw new Error(`\u6587\u4EF6\u4E0D\u5B58\u5728\uFF1A${p}`);
         resolved.push(target.displayPath);
@@ -928,6 +1565,60 @@ ${text}`
         capturedAt: Date.now()
       };
     }
+    if (node2.kind === "changes") {
+      let text2 = node2.text;
+      if (!text2 && node2.changesSessionId && node2.changesSeq !== void 0) {
+        const wc = this.ctx.get("workspaceChanges");
+        const sum = wc?.summary(
+          node2.changesSessionId,
+          node2.changesSeq
+        );
+        if (sum) {
+          text2 = `Turn #${sum.turn} (${sum.total} files, +${sum.added} / -${sum.deleted})
+` + sum.files.map((f) => `- ${f.display} (+${f.added} / -${f.deleted})`).join("\n");
+        }
+      }
+      return {
+        id: uid(),
+        kind: "text",
+        sourceNodeId: node2.id,
+        sourceSessionId: node2.changesSessionId,
+        seq: node2.changesSeq,
+        title: node2.title,
+        text: text2,
+        version: shortHash(text2),
+        capturedAt: Date.now()
+      };
+    }
+    if (node2.kind === "terminal") {
+      let text2 = node2.text;
+      if (node2.terminalSessionId) {
+        const tc = this.ctx.get("terminalController");
+        const list = tc?.list(node2.terminalSessionId) ?? [];
+        const term = (node2.terminalId ? list.find((item) => item.id === node2.terminalId) : void 0) ?? list[0];
+        if (tc && term) {
+          const resolved = await this.ctx.sessionController.resolveAgent(node2.terminalSessionId).catch(() => null);
+          if (resolved && !("error" in resolved)) {
+            const page = await tc.readScreen(resolved.agent, term.id, {
+              offset: 0,
+              count: 140,
+              maxBytes: 49152
+            }).catch(() => null);
+            if (page?.text) text2 = page.text;
+          }
+        }
+      }
+      return {
+        id: uid(),
+        kind: "text",
+        sourceNodeId: node2.id,
+        sourceSessionId: node2.terminalSessionId,
+        title: node2.title,
+        text: text2,
+        version: shortHash(text2),
+        capturedAt: Date.now()
+      };
+    }
     const text = node2.kind === "board" && node2.columns ? boardSummaryText(node2.columns, node2.selectedItems) || node2.text : node2.text;
     return {
       id: uid(),
@@ -936,6 +1627,7 @@ ${text}`
       title: node2.title,
       text,
       seq: node2.sourceSeq,
+      version: shortHash(text),
       capturedAt: Date.now()
     };
   }
@@ -979,7 +1671,10 @@ var node = z.object({
     "display",
     "group",
     "board",
-    "detail"
+    "detail",
+    "git",
+    "changes",
+    "terminal"
   ]),
   title: z.string(),
   x: z.number().finite(),
@@ -991,9 +1686,16 @@ var node = z.object({
   sessionId: z.string().optional(),
   workspaceId: z.string().optional(),
   cwd: z.string().optional(),
+  branch: z.string().optional(),
+  worktreePath: z.string().optional(),
   agentPreset: z.string().optional(),
+  planMode: z.boolean().optional(),
+  customTitle: z.boolean().optional(),
+  subAgentsExpanded: z.boolean().optional(),
   task: z.string(),
   draft: z.string(),
+  continuationPrompt: z.string().optional(),
+  continuationCollapsed: z.boolean().optional(),
   nativeTrigger: z.enum(["inherit", "enabled", "disabled"]),
   participation: z.enum(["global", "manual", "paused"]),
   text: z.string(),
@@ -1020,7 +1722,14 @@ var node = z.object({
     by: z.string(),
     origY: z.number().finite().optional(),
     origH: z.number().positive().optional()
-  }).optional()
+  }).optional(),
+  gitTab: z.enum(["changes", "history", "branches"]).optional(),
+  gitCommitOid: z.string().optional(),
+  changesSessionId: z.string().optional(),
+  changesSeq: z.number().optional(),
+  changesTurn: z.number().optional(),
+  terminalSessionId: z.string().optional(),
+  terminalId: z.string().optional()
 });
 var waypoint = z.object({
   x: z.number().finite(),
@@ -1036,11 +1745,15 @@ var edge = z.object({
   maxRounds: z.number().int().positive(),
   always: z.boolean(),
   sentVersion: z.string().optional(),
+  currentVersion: z.string().optional(),
+  sourceItemKey: z.string().optional(),
+  snapshotTitle: z.string().optional(),
+  snapshotText: z.string().optional(),
   originMode: z.enum(["conclusion", "session", "fork"]).optional(),
   waypoints: z.array(waypoint).optional(),
   placedCapsules: z.array(z.string()).optional()
 });
-var workflowTemplate = z.object({
+var workflowTemplateSchema = z.object({
   id: z.string(),
   title: z.string(),
   description: z.string(),
@@ -1053,7 +1766,7 @@ var workflowTemplate = z.object({
   edges: z.array(edge),
   ports: z.array(groupPort)
 });
-var canvasSnapshot = z.object({
+var canvasSnapshotSchema = z.object({
   id: z.string(),
   title: z.string(),
   createdAt: z.number(),
@@ -1096,11 +1809,13 @@ var documentSchema = z.object({
     theme: z.enum(["dark", "light", "auto"]).optional(),
     wheel: z.enum(["zoom", "pan"]).optional(),
     snap: z.boolean().optional(),
-    filter: z.enum(["auto", "running", "all"]).optional(),
-    hiddenWorkspaces: z.array(z.string()).optional()
+    filter: z.enum(["auto", "running", "3d", "7d", "all"]).optional(),
+    hiddenWorkspaces: z.array(z.string()).optional(),
+    showBranches: z.boolean().optional(),
+    showWorktrees: z.boolean().optional()
   }).optional(),
-  templates: z.array(workflowTemplate).optional(),
-  snapshots: z.array(canvasSnapshot).optional()
+  templates: z.array(workflowTemplateSchema).optional(),
+  snapshots: z.array(canvasSnapshotSchema).optional()
 });
 var flowspaceDomain = defineDomain({
   name: "flowspace",
@@ -1111,7 +1826,9 @@ var flowspaceDomain = defineDomain({
       z.custom(
         (v) => typeof v === "object" && v !== null && "id" in v && "steps" in v
       )
-    )
+    ),
+    templates: domainTable(workflowTemplateSchema),
+    snapshots: domainTable(canvasSnapshotSchema)
   }
 });
 function checkDocument(doc) {
@@ -1141,7 +1858,8 @@ function checkDocument(doc) {
 }
 
 // packages/flowspace/src/index.ts
-var _follow_dec, _stopNode_dec, _canvasPresence_dec, _readWorkspaceFile_dec, _workspaceFiles_dec, _workspaces_dec, _sessions_dec, _display_dec, _bind_dec, _release_dec, _command_dec, _start_dec, _plan_dec, _draft_dec, _save_dec, _snapshot_dec, _a, _init, _b;
+var shortHash2 = (value) => createHash3("sha1").update(value).digest("hex").slice(0, 12);
+var _follow_dec, _stopNode_dec, _canvasPresence_dec, _readWorkspaceFile_dec, _workspaceFiles_dec, _readTerminalScreen_dec, _openSessionTerminal_dec, _sessionTerminals_dec, _sessionChangeDiff_dec, _sessionChanges_dec, _gitAction_dec, _gitDiff_dec, _gitInspect_dec, _projectStructures_dec, _workspaces_dec, _sessions_dec, _display_dec, _bind_dec, _release_dec, _command_dec, _rerunFailed_dec, _start_dec, _plan_dec, _draft_dec, _save_dec, _snapshot_dec, _a, _init, _b;
 var FlowspaceService = class extends (_b = TypertRemoteService) {
   constructor(ctx) {
     super(ctx, "flowspace");
@@ -1150,6 +1868,8 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
       doc: emptyDocument(),
       runs: [],
       live: /* @__PURE__ */ new Map(),
+      nativeMessages: /* @__PURE__ */ new Map(),
+      subagents: /* @__PURE__ */ new Map(),
       listeners: /* @__PURE__ */ new Set(),
       turnOutput: /* @__PURE__ */ new Map(),
       canvasSessions: /* @__PURE__ */ new Set()
@@ -1157,13 +1877,33 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
     __publicField(this, "domain");
     __publicField(this, "scheduler");
     __publicField(this, "runtime");
+    __publicField(this, "git", new HostGitService());
     __publicField(this, "inputContexts", /* @__PURE__ */ new Map());
   }
-  async [(_a = Service.init, _snapshot_dec = [Remote], _save_dec = [Remote], _draft_dec = [Remote], _plan_dec = [Remote], _start_dec = [Remote], _command_dec = [Remote], _release_dec = [Remote], _bind_dec = [Remote], _display_dec = [Remote], _sessions_dec = [Remote], _workspaces_dec = [Remote], _workspaceFiles_dec = [Remote], _readWorkspaceFile_dec = [Remote], _canvasPresence_dec = [Remote], _stopNode_dec = [Remote], _follow_dec = [Remote({ mode: "stream" })], _a)]() {
+  async [(_a = Service.init, _snapshot_dec = [Remote], _save_dec = [Remote], _draft_dec = [Remote], _plan_dec = [Remote], _start_dec = [Remote], _rerunFailed_dec = [Remote], _command_dec = [Remote], _release_dec = [Remote], _bind_dec = [Remote], _display_dec = [Remote], _sessions_dec = [Remote], _workspaces_dec = [Remote], _projectStructures_dec = [Remote], _gitInspect_dec = [Remote], _gitDiff_dec = [Remote], _gitAction_dec = [Remote], _sessionChanges_dec = [Remote], _sessionChangeDiff_dec = [Remote], _sessionTerminals_dec = [Remote], _openSessionTerminal_dec = [Remote], _readTerminalScreen_dec = [Remote], _workspaceFiles_dec = [Remote], _readWorkspaceFile_dec = [Remote], _canvasPresence_dec = [Remote], _stopNode_dec = [Remote], _follow_dec = [Remote({ mode: "stream" })], _a)]() {
     this.domain = await this.ctx.storageDomain.open(flowspaceDomain);
-    this.state.doc = structuredClone(
+    const storedDoc = structuredClone(
       this.domain.table("documents").get("main") ?? emptyDocument()
     );
+    const storedTemplates = [...this.domain.table("templates").entries()].map(
+      ([, tpl]) => structuredClone(tpl)
+    );
+    const storedSnapshots = [...this.domain.table("snapshots").entries()].map(([, snap]) => structuredClone(snap)).sort((a, b) => b.createdAt - a.createdAt);
+    if (storedTemplates.length) {
+      storedDoc.templates = storedTemplates;
+    } else if (storedDoc.templates?.length) {
+      for (const tpl of storedDoc.templates) {
+        await this.domain.table("templates").put(tpl.id, structuredClone(tpl));
+      }
+    }
+    if (storedSnapshots.length) {
+      storedDoc.snapshots = storedSnapshots;
+    } else if (storedDoc.snapshots?.length) {
+      for (const snap of storedDoc.snapshots) {
+        await this.domain.table("snapshots").put(snap.id, structuredClone(snap));
+      }
+    }
+    this.state.doc = storedDoc;
     this.state.runs = [...this.domain.table("runs").entries()].map(([, r]) => structuredClone(r)).sort((a, b) => a.createdAt - b.createdAt);
     this.runtime = new DshRuntime(
       this.ctx,
@@ -1178,12 +1918,17 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
           const node2 = this.state.doc.nodes.find((n) => n.id === nodeId);
           if (!node2) return;
           node2.sessionId = sessionId;
+          if (node2.continuationPrompt === void 0 && node2.task.trim()) {
+            node2.continuationPrompt = node2.task;
+          }
           if (fork) {
             const source = this.state.doc.nodes.find(
               (n) => n.id === fork.sourceNodeId
             );
             node2.workspaceId = source?.workspaceId;
             node2.cwd = source?.cwd;
+            node2.branch = source?.branch;
+            node2.worktreePath = source?.worktreePath;
             for (const edge2 of this.state.doc.edges.filter(
               (e) => e.target === nodeId && e.mode === "fork"
             )) {
@@ -1192,17 +1937,20 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
             }
           }
         },
-        submitted: async (id, task) => {
+        submitted: async (id, task, isContinuation) => {
           const n = this.state.doc.nodes.find((n2) => n2.id === id);
           if (n) {
-            n.lastSubmittedTask = n.task;
-            if (n.draft === task) n.draft = "";
+            n.lastSubmittedTask = isContinuation ? task : n.task || task;
+            if (!isContinuation && n.draft === task) n.draft = "";
           }
         }
       },
       this.state.runs
     );
     await this.scheduler.recover();
+    await this.hydrateBoundSessions().catch(
+      (e) => this.ctx.logger.warn("FlowSpace session hydration: %s", e)
+    );
     const report = (promise) => {
       void promise.catch((e) => this.ctx.logger.error("FlowSpace: %s", e));
     };
@@ -1243,6 +1991,8 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
           if (step && sources.length) {
             step.sources.push(...sources);
             await this.persist();
+          } else if (sources.length) {
+            await this.persist();
           }
           this.inputContexts.delete(message.id);
           return text ? {
@@ -1275,13 +2025,25 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
           running: status === "running",
           output: old?.output ?? "",
           seq: old?.seq ?? -1,
-          pendingInput: []
+          pendingInput: [],
+          updatedAt: Date.now(),
+          effectiveCwd: old?.effectiveCwd,
+          changesTurns: old?.changesTurns
+        });
+        this.publish();
+      }
+      const sub = this.state.subagents.get(agent.id);
+      if (sub) {
+        this.state.subagents.set(agent.id, {
+          ...sub,
+          running: status === "running",
+          updatedAt: Date.now()
         });
         this.publish();
       }
     });
     this.ctx.on("session/event", (session, event) => {
-      this.event(session.id, event, report);
+      this.event(session.id, event, report, session.header);
     });
     this.ctx.effect(() => async () => {
       await this.scheduler.dispose();
@@ -1289,9 +2051,223 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
       await this.domain.close();
     });
   }
-  event(sessionId, event, report) {
+  async hydrateBoundSessions() {
+    const listed = await this.ctx.sessionController.list(
+      {},
+      new AbortController().signal
+    );
+    const subRows = listed.items.filter((s) => s.origin === "subagent");
+    if (subRows.length) {
+      const titles = await this.ctx.sessionQuery.readTitleSnapshots(
+        subRows.map((s) => s.sessionId)
+      );
+      subRows.forEach((row, idx) => {
+        const parentId = row.parentSessionId;
+        if (parentId) {
+          this.state.subagents.set(row.sessionId, {
+            sessionId: row.sessionId,
+            parentSessionId: parentId,
+            title: titles[idx]?.status === "fulfilled" ? titles[idx].value.title?.title ?? row.sessionId : row.sessionId,
+            running: row.running
+          });
+        }
+      });
+    }
+    for (const node2 of this.state.doc.nodes) {
+      if (node2.kind !== "agent" || !node2.sessionId) continue;
+      try {
+        var _stack = [];
+        try {
+          const obs = __using(_stack, await this.ctx.sessionQuery.observeSession(
+            node2.sessionId,
+            { projectionMode: "none" }
+          ));
+          const lastAssistant = obs.events.findLast(
+            (e) => e.type === "assistant/message"
+          );
+          const lastWorkdir = obs.events.findLast(
+            (e) => e.type === "working-directory/change"
+          );
+          const lastTime = obs.events.at(-1)?.time;
+          for (const ev of obs.events) {
+            this.recordNativeMessage(node2.sessionId, ev);
+          }
+          const turns = this.collectSessionChangesFromEvents(
+            node2.sessionId,
+            obs.events
+          );
+          this.state.live.set(node2.id, {
+            nodeId: node2.id,
+            sessionId: node2.sessionId,
+            running: this.runtime.running().includes(node2.sessionId),
+            output: lastAssistant?.type === "assistant/message" ? plainText(lastAssistant.data.message.content) : "",
+            seq: lastAssistant?.seq ?? obs.cursor,
+            pendingInput: [],
+            updatedAt: lastTime,
+            effectiveCwd: lastWorkdir?.data?.cwd ?? node2.worktreePath ?? node2.cwd,
+            changesTurns: turns
+          });
+        } catch (_) {
+          var _error = _, _hasError = true;
+        } finally {
+          __callDispose(_stack, _error, _hasError);
+        }
+      } catch {
+      }
+    }
+  }
+  recordNativeMessage(sessionId, event) {
+    if (event.type !== "user/message") return false;
+    const src = event.data.source;
+    if ((src.kind === "agent-message" || src.kind === "subagent-settled") && typeof src.senderSessionId === "string") {
+      const msgId = `${sessionId}:${event.seq}`;
+      if (this.state.nativeMessages.has(msgId)) return false;
+      const bodyText = plainText(event.data.content).trim() || src.summary || "";
+      this.state.nativeMessages.set(msgId, {
+        id: msgId,
+        fromSessionId: src.senderSessionId,
+        toSessionId: sessionId,
+        kind: src.kind,
+        text: bodyText,
+        summary: src.summary,
+        seq: event.seq,
+        time: event.time
+      });
+      if (src.kind === "subagent-settled") {
+        const existingSub = this.state.subagents.get(src.senderSessionId);
+        this.state.subagents.set(src.senderSessionId, {
+          sessionId: src.senderSessionId,
+          parentSessionId: existingSub?.parentSessionId ?? sessionId,
+          title: existingSub?.title ?? src.senderSessionId.slice(0, 8),
+          running: false,
+          updatedAt: event.time
+        });
+      }
+      return true;
+    }
+    return false;
+  }
+  collectSessionChangesFromEvents(sessionId, events) {
+    const wc = this.ctx.get("workspaceChanges");
+    if (!wc) return [];
+    const byTurn = /* @__PURE__ */ new Map();
+    for (const ev of events) {
+      if (ev.type !== "workspace/changes") continue;
+      const sum = wc.summary(sessionId, ev.seq);
+      if (!sum) continue;
+      byTurn.set(sum.turn, {
+        sessionId,
+        turn: sum.turn,
+        seq: ev.seq,
+        cwd: sum.cwd,
+        total: sum.total,
+        added: sum.added,
+        deleted: sum.deleted,
+        files: sum.files.map((f) => ({
+          path: f.path,
+          display: f.display,
+          added: f.added,
+          deleted: f.deleted,
+          binary: f.binary,
+          oversized: f.oversized
+        }))
+      });
+    }
+    return [...byTurn.values()].sort((a, b) => b.turn - a.turn);
+  }
+  event(sessionId, event, report, header) {
+    if (this.recordNativeMessage(sessionId, event)) {
+      this.publish();
+    }
+    if (header?.origin === "subagent") {
+      const prev = this.state.subagents.get(sessionId);
+      if (prev) {
+        this.state.subagents.set(sessionId, {
+          ...prev,
+          updatedAt: event.time
+        });
+      }
+    }
     const node2 = this.state.doc.nodes.find((n) => n.sessionId === sessionId);
     if (!node2) return;
+    const evAny = event;
+    if (evAny.type === "working-directory/change" && evAny.data?.cwd) {
+      const old = this.state.live.get(node2.id);
+      this.state.live.set(node2.id, {
+        nodeId: node2.id,
+        sessionId,
+        running: old?.running ?? false,
+        output: old?.output ?? "",
+        seq: event.seq,
+        pendingInput: old?.pendingInput ?? [],
+        updatedAt: event.time,
+        effectiveCwd: String(evAny.data.cwd),
+        changesTurns: old?.changesTurns
+      });
+      this.publish();
+    }
+    if (evAny.type === "deliverables/presented" && evAny.data) {
+      const turn = Number(evAny.data.turn ?? 0);
+      const files = Array.isArray(evAny.data.files) ? evAny.data.files : [];
+      if (files.length) {
+        report(
+          this.scheduler.deliverable(
+            sessionId,
+            turn,
+            event.seq,
+            event.time,
+            files
+          )
+        );
+      }
+    }
+    if (evAny.type === "workspace/changes") {
+      const wc = this.ctx.get("workspaceChanges");
+      const sum = wc?.summary(sessionId, event.seq);
+      if (sum) {
+        const turnEntry = {
+          sessionId,
+          turn: sum.turn,
+          seq: event.seq,
+          cwd: sum.cwd,
+          total: sum.total,
+          added: sum.added,
+          deleted: sum.deleted,
+          files: sum.files.map((f) => ({
+            path: f.path,
+            display: f.display,
+            added: f.added,
+            deleted: f.deleted,
+            binary: f.binary,
+            oversized: f.oversized
+          }))
+        };
+        const old = this.state.live.get(node2.id);
+        const existing = (old?.changesTurns ?? []).filter(
+          (c) => c.turn !== sum.turn
+        );
+        this.state.live.set(node2.id, {
+          nodeId: node2.id,
+          sessionId,
+          running: old?.running ?? false,
+          output: old?.output ?? "",
+          seq: event.seq,
+          pendingInput: old?.pendingInput ?? [],
+          updatedAt: event.time,
+          effectiveCwd: old?.effectiveCwd,
+          changesTurns: [turnEntry, ...existing]
+        });
+        for (const chNode of this.state.doc.nodes) {
+          if (chNode.kind === "changes" && !chNode.fixed && chNode.changesSessionId === sessionId) {
+            chNode.changesSeq = event.seq;
+            chNode.changesTurn = sum.turn;
+            chNode.text = `Turn #${sum.turn} (${sum.total} files, +${sum.added} / -${sum.deleted})
+` + sum.files.map((f) => `- ${f.display} (+${f.added} / -${f.deleted})`).join("\n");
+          }
+        }
+        this.publish();
+      }
+    }
     if (event.type === "assistant/message") {
       const text = plainText(event.data.message.content);
       this.state.turnOutput.set(sessionId, text);
@@ -1302,7 +2278,10 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
         running: old?.running ?? true,
         output: text,
         seq: event.seq,
-        pendingInput: []
+        pendingInput: [],
+        updatedAt: event.time,
+        effectiveCwd: old?.effectiveCwd,
+        changesTurns: old?.changesTurns
       });
       for (const display of this.state.doc.nodes.filter(
         (n) => (n.kind === "display" && !n.fixed || n.kind === "detail" && !n.pinned) && n.sourceNodeId === node2.id
@@ -1328,6 +2307,27 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
   publish() {
     this.state.listeners.forEach((fn) => fn());
   }
+  computeSourceVersions() {
+    const out = {};
+    for (const n of this.state.doc.nodes) {
+      if (n.kind === "agent") {
+        const live = this.state.live.get(n.id);
+        if (n.sessionId && live && live.seq >= 0) {
+          out[n.id] = `${n.sessionId}:${live.seq}`;
+        }
+        continue;
+      }
+      if (n.kind === "board" && n.columns) {
+        const txt = boardSummaryText(n.columns, n.selectedItems) || n.text;
+        out[n.id] = `${n.id}:${shortHash2(txt)}`;
+        continue;
+      }
+      if (n.kind === "note" || n.kind === "display" || n.kind === "git" || n.kind === "changes" || n.kind === "terminal") {
+        out[n.id] = `${n.id}:${shortHash2(n.text)}`;
+      }
+    }
+    return out;
+  }
   async prepareReferences(sessionId) {
     const node2 = this.state.doc.nodes.find((n) => n.sessionId === sessionId);
     if (!node2) return [];
@@ -1336,8 +2336,10 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
       (e) => e.target === node2.id && (e.kind === "reference" || e.trigger === "off")
     )) {
       const source = this.state.doc.nodes.find((n) => n.id === edge2.source);
-      const captured = source.kind === "agent" ? await this.runtime.capture(source, edge2.mode) : await this.runtime.reference(source);
+      if (!source) continue;
+      const captured = source.kind === "agent" ? await this.runtime.capture(source, edge2.mode) : await this.runtime.reference(source, edge2);
       const version = `${captured.sourceSessionId ?? captured.sourceNodeId}:${captured.version ?? captured.seq ?? captured.text}`;
+      edge2.currentVersion = version;
       if (edge2.kind === "reference" && !edge2.always && edge2.sentVersion === version)
         continue;
       sources.push(captured);
@@ -1350,10 +2352,36 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
     return sources;
   }
   async persist() {
+    const sourceVersions = this.computeSourceVersions();
+    for (const edge2 of this.state.doc.edges) {
+      if (edge2.kind === "reference") {
+        if (edge2.snapshotText) {
+          edge2.currentVersion = `${edge2.source}:${shortHash2(edge2.snapshotText)}`;
+        } else if (sourceVersions[edge2.source]) {
+          edge2.currentVersion = sourceVersions[edge2.source];
+        }
+      }
+    }
     await this.domain.table("documents").put("main", structuredClone(this.state.doc));
-    const retained = new Set(this.state.runs.map((r) => r.id));
+    const retainedTemplates = new Set(
+      (this.state.doc.templates ?? []).map((t) => t.id)
+    );
+    for (const id of this.domain.table("templates").keys())
+      if (!retainedTemplates.has(id))
+        await this.domain.table("templates").delete(id);
+    for (const tpl of this.state.doc.templates ?? [])
+      await this.domain.table("templates").put(tpl.id, structuredClone(tpl));
+    const retainedSnapshots = new Set(
+      (this.state.doc.snapshots ?? []).map((s) => s.id)
+    );
+    for (const id of this.domain.table("snapshots").keys())
+      if (!retainedSnapshots.has(id))
+        await this.domain.table("snapshots").delete(id);
+    for (const snap of this.state.doc.snapshots ?? [])
+      await this.domain.table("snapshots").put(snap.id, structuredClone(snap));
+    const retainedRuns = new Set(this.state.runs.map((r) => r.id));
     for (const id of this.domain.table("runs").keys())
-      if (!retained.has(id)) await this.domain.table("runs").delete(id);
+      if (!retainedRuns.has(id)) await this.domain.table("runs").delete(id);
     for (const run of this.state.runs)
       await this.domain.table("runs").put(run.id, structuredClone(run));
     this.publish();
@@ -1362,7 +2390,12 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
     return {
       document: structuredClone(this.state.doc),
       runs: structuredClone(this.state.runs),
-      live: [...this.state.live.values()]
+      live: [...this.state.live.values()],
+      nativeMessages: [...this.state.nativeMessages.values()].sort(
+        (a, b) => a.time - b.time || a.seq - b.seq
+      ),
+      subagents: [...this.state.subagents.values()],
+      sourceVersions: this.computeSourceVersions()
     };
   }
   async save(document) {
@@ -1374,6 +2407,8 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
           node2.sessionId = old.sessionId;
           node2.cwd = old.cwd;
           node2.workspaceId = old.workspaceId;
+          node2.branch = old.branch;
+          node2.worktreePath = old.worktreePath;
         }
         if (old) node2.lastSubmittedTask = old.lastSubmittedTask;
       }
@@ -1383,7 +2418,11 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
           edge2.originMode = "fork";
           edge2.mode = old.mode;
         }
-        if (old) edge2.sentVersion = old.sentVersion;
+        if (old && edge2.sentVersion === void 0 && old.sentVersion) {
+          edge2.sentVersion = old.sentVersion;
+        } else if (edge2.sentVersion === "") {
+          delete edge2.sentVersion;
+        }
       }
       checkDocument(next);
       this.state.doc = next;
@@ -1402,6 +2441,9 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
   }
   start(request) {
     return this.scheduler.start(request);
+  }
+  rerunFailed(request) {
+    return this.scheduler.rerunFailed(request.runId);
   }
   command(request) {
     return this.scheduler.command(request.runId, request.action);
@@ -1425,6 +2467,8 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
         throw new Error("\u8BE5\u4F1A\u8BDD\u5DF2\u5728\u753B\u5E03\u4E2D");
       node2.workspaceId = request.workspaceId ?? node2.workspaceId;
       node2.cwd = request.cwd ?? node2.cwd;
+      node2.branch = request.branch ?? node2.branch;
+      node2.worktreePath = request.worktreePath ?? node2.worktreePath;
       if (request.sessionId) {
         var _stack = [];
         try {
@@ -1433,19 +2477,26 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
           ));
           node2.sessionId = request.sessionId;
           node2.cwd = observation.header.cwd;
+          for (const ev of observation.events) {
+            this.recordNativeMessage(request.sessionId, ev);
+          }
         } catch (_) {
           var _error = _, _hasError = true;
         } finally {
           __callDispose(_stack, _error, _hasError);
         }
       } else node2.sessionId = await this.runtime.ensure(node2);
+      if (node2.continuationPrompt === void 0 && node2.task.trim()) {
+        node2.continuationPrompt = node2.task;
+      }
       await this.persist();
       return structuredClone(node2);
     });
   }
   async display(request) {
-    const source = this.node(request.nodeId);
-    const captured = request.text === void 0 ? await this.runtime.capture(source, "conclusion", request.seq) : void 0;
+    const source = this.state.doc.nodes.find((n) => n.id === request.nodeId);
+    if (!source) throw new Error("\u6765\u6E90\u8282\u70B9\u4E0D\u5B58\u5728");
+    const captured = request.text === void 0 ? source.kind === "agent" ? await this.runtime.capture(source, "conclusion", request.seq) : await this.runtime.reference(source) : void 0;
     const node2 = {
       ...newNode(
         "display",
@@ -1475,11 +2526,197 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
       sessionId: s.sessionId,
       title: titles[i]?.status === "fulfilled" ? titles[i].value.title?.title ?? s.sessionId : s.sessionId,
       cwd: s.cwd,
-      running: s.running
+      running: s.running,
+      updatedAt: s.updatedAt
     }));
   }
   workspaces() {
     return this.ctx.workspaceRegistry.list().map((w) => ({ id: w.id, name: w.title, path: w.path }));
+  }
+  async projectStructures() {
+    const list = this.ctx.workspaceRegistry.list();
+    return Promise.all(
+      list.map(async (w) => {
+        const status = await this.git.inspect(w.path).catch(() => null);
+        return {
+          id: w.id,
+          name: w.title,
+          path: w.path,
+          isGitRepo: Boolean(status?.isGitRepo),
+          currentBranch: status?.branch || void 0,
+          branches: status?.branches ?? [],
+          worktrees: status?.worktrees ?? []
+        };
+      })
+    );
+  }
+  async gitInspect(request) {
+    const base = this.resolveWorkspaceRoot(request.cwd);
+    return this.git.inspect(base);
+  }
+  async gitDiff(request) {
+    const base = this.resolveWorkspaceRoot(request.cwd);
+    return this.git.diff(base, request);
+  }
+  async gitAction(request) {
+    const base = this.resolveWorkspaceRoot(request.cwd);
+    return this.git.act(base, request);
+  }
+  async sessionChanges(request) {
+    var _stack = [];
+    try {
+      const sessionId = request.sessionId.trim();
+      if (!sessionId) return [];
+      const obs = __using(_stack, await this.ctx.sessionQuery.observeSession(
+        sessionId,
+        { projectionMode: "none" }
+      ));
+      return this.collectSessionChangesFromEvents(sessionId, obs.events);
+    } catch (_) {
+      var _error = _, _hasError = true;
+    } finally {
+      __callDispose(_stack, _error, _hasError);
+    }
+  }
+  async sessionChangeDiff(request) {
+    const wc = this.ctx.get("workspaceChanges");
+    if (!wc) {
+      throw new Error("\u5F53\u524D Host \u672A\u6302\u8F7D workspace-changes \u670D\u52A1");
+    }
+    const sid = request.sessionId;
+    const sum = wc.summary(sid, request.seq);
+    if (!sum) {
+      throw new Error("\u8BE5\u8F6E\u6539\u52A8\u4E34\u65F6\u5FEB\u7167\u5DF2\u8FC7\u671F\u6216\u4E0D\u5B58\u5728");
+    }
+    const signal = new AbortController().signal;
+    if (request.fileIndex !== void 0) {
+      const diff = await wc.diff(sid, request.seq, request.fileIndex, signal);
+      if (!diff) throw new Error("\u672A\u627E\u5230\u6307\u5B9A\u6587\u4EF6\u6539\u52A8\u5BF9\u6BD4");
+      if (diff.kind !== "text") {
+        return {
+          path: diff.path,
+          display: diff.display,
+          kind: diff.kind,
+          hunks: [],
+          formatted: `[${diff.kind.toUpperCase()}] ${diff.display}`
+        };
+      }
+      const formatted2 = [
+        `--- a/${diff.display}`,
+        `+++ b/${diff.display}`,
+        ...diff.hunks.flatMap((h) => [
+          `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`,
+          ...h.lines
+        ])
+      ].join("\n");
+      return {
+        path: diff.path,
+        display: diff.display,
+        kind: "text",
+        hunks: diff.hunks,
+        formatted: formatted2
+      };
+    }
+    const parts = [
+      `Turn #${sum.turn} (${sum.total} files, +${sum.added} / -${sum.deleted})`
+    ];
+    const allHunks = [];
+    for (let i = 0; i < Math.min(sum.files.length, 20); i++) {
+      const diff = await wc.diff(sid, request.seq, i, signal).catch(() => void 0);
+      if (!diff) continue;
+      if (diff.kind !== "text") {
+        parts.push(`
+[${diff.kind.toUpperCase()}] ${diff.display}`);
+        continue;
+      }
+      parts.push(`
+--- a/${diff.display}
++++ b/${diff.display}`);
+      for (const h of diff.hunks) {
+        allHunks.push(h);
+        parts.push(
+          `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`,
+          ...h.lines
+        );
+      }
+    }
+    const formatted = parts.join("\n");
+    return {
+      path: sum.cwd,
+      display: `Turn #${sum.turn}`,
+      kind: "text",
+      hunks: allHunks.slice(0, 60),
+      formatted
+    };
+  }
+  sessionTerminals(request) {
+    const tc = this.ctx.get("terminalController");
+    if (!tc || !request.sessionId) return [];
+    return tc.list(request.sessionId).map((t) => ({
+      id: t.id,
+      sessionId: request.sessionId,
+      title: t.title,
+      cwd: t.cwd,
+      state: t.state,
+      exitCode: t.exitCode,
+      origin: t.origin
+    }));
+  }
+  async openSessionTerminal(request) {
+    const tc = this.ctx.get("terminalController");
+    if (!tc) throw new Error("\u5F53\u524D\u73AF\u5883\u672A\u542F\u7528 terminalController");
+    const resolved = await this.ctx.sessionController.resolveAgent(
+      request.sessionId
+    );
+    if ("error" in resolved) throw resolved.error;
+    const created = await tc.create(
+      resolved.agent,
+      { id: uid(), cols: 100, rows: 28 },
+      new AbortController().signal
+    );
+    return {
+      id: created.id,
+      sessionId: request.sessionId,
+      title: created.title,
+      cwd: created.cwd,
+      state: created.state,
+      exitCode: created.exitCode,
+      origin: created.origin
+    };
+  }
+  async readTerminalScreen(request) {
+    const tc = this.ctx.get("terminalController");
+    if (!tc) throw new Error("\u5F53\u524D\u73AF\u5883\u672A\u542F\u7528 terminalController");
+    const sid = request.sessionId;
+    const list = tc.list(sid);
+    const chosen = (request.terminalId ? list.find((t) => t.id === request.terminalId) : void 0) ?? list[0];
+    if (!chosen) {
+      return {
+        sessionId: request.sessionId,
+        terminalId: "",
+        title: "\u65E0\u6D3B\u52A8\u7EC8\u7AEF",
+        state: "exited",
+        text: "",
+        totalLines: 0,
+        truncated: false
+      };
+    }
+    const resolved = await this.ctx.sessionController.resolveAgent(sid);
+    if ("error" in resolved) throw resolved.error;
+    const page = await tc.readScreen(resolved.agent, chosen.id, {
+      offset: 0,
+      count: Math.min(400, Math.max(20, request.lines ?? 140)),
+      maxBytes: 65536
+    });
+    return {
+      sessionId: request.sessionId,
+      terminalId: chosen.id,
+      title: chosen.title,
+      state: chosen.state,
+      text: page.text,
+      totalLines: page.totalLines,
+      truncated: page.truncated
+    };
   }
   async workspaceFiles(request) {
     const base = this.resolveWorkspaceRoot(request.cwd);
@@ -1505,10 +2742,10 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
       for (const entry of entries) {
         if (out.length >= 60) break;
         if (skip.has(entry.name)) continue;
-        const full = resolve(dir, entry.name);
+        const full = resolve2(dir, entry.name);
         if (entry.isDirectory()) await walk(full, depth + 1);
         else if (entry.isFile())
-          out.push(relative(base, full).replaceAll("\\", "/"));
+          out.push(relative2(base, full).replaceAll("\\", "/"));
       }
     };
     await walk(base, 0);
@@ -1518,9 +2755,9 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
     const base = this.resolveWorkspaceRoot(request.cwd);
     const raw = request.path.trim();
     if (!raw) throw new Error("\u672A\u6307\u5B9A\u6587\u4EF6\u8DEF\u5F84");
-    const full = resolve(base, raw);
-    const rel = relative(base, full);
-    if (rel.startsWith("..") || isAbsolute(rel))
+    const full = resolve2(base, raw);
+    const rel = relative2(base, full);
+    if (rel.startsWith("..") || isAbsolute2(rel))
       throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
     const info = await stat(full).catch(() => null);
     if (!info || !info.isFile()) throw new Error(`\u6587\u4EF6\u4E0D\u5B58\u5728\uFF1A${raw}`);
@@ -1535,14 +2772,14 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
   resolveWorkspaceRoot(cwd) {
     const list = this.ctx.workspaceRegistry.list();
     if (cwd) {
-      const candidate = resolve(cwd);
-      if (list.some((w) => {
-        const r = relative(resolve(w.path), candidate);
-        return !r.startsWith("..") && !isAbsolute(r);
-      }) || candidate === resolve(process.cwd()))
+      const candidate = resolve2(cwd);
+      if (list.some(
+        (w) => isSubPath(w.path, candidate) || isSubPath(resolve2(w.path, ".."), candidate)
+      ) || candidate === resolve2(process.cwd())) {
         return candidate;
+      }
     }
-    return resolve(list[0]?.path ?? process.cwd());
+    return resolve2(list[0]?.path ?? process.cwd());
   }
   canvasPresence(sessionIds) {
     this.state.canvasSessions = new Set(sessionIds);
@@ -1565,8 +2802,8 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
     try {
       while (!signal.aborted) {
         if (!changed)
-          await new Promise((resolve2) => {
-            wake = resolve2;
+          await new Promise((resolve3) => {
+            wake = resolve3;
           });
         if (signal.aborted) break;
         changed = false;
@@ -1590,12 +2827,22 @@ __decorateElement(_init, 1, "save", _save_dec, FlowspaceService);
 __decorateElement(_init, 1, "draft", _draft_dec, FlowspaceService);
 __decorateElement(_init, 1, "plan", _plan_dec, FlowspaceService);
 __decorateElement(_init, 1, "start", _start_dec, FlowspaceService);
+__decorateElement(_init, 1, "rerunFailed", _rerunFailed_dec, FlowspaceService);
 __decorateElement(_init, 1, "command", _command_dec, FlowspaceService);
 __decorateElement(_init, 1, "release", _release_dec, FlowspaceService);
 __decorateElement(_init, 1, "bind", _bind_dec, FlowspaceService);
 __decorateElement(_init, 1, "display", _display_dec, FlowspaceService);
 __decorateElement(_init, 1, "sessions", _sessions_dec, FlowspaceService);
 __decorateElement(_init, 1, "workspaces", _workspaces_dec, FlowspaceService);
+__decorateElement(_init, 1, "projectStructures", _projectStructures_dec, FlowspaceService);
+__decorateElement(_init, 1, "gitInspect", _gitInspect_dec, FlowspaceService);
+__decorateElement(_init, 1, "gitDiff", _gitDiff_dec, FlowspaceService);
+__decorateElement(_init, 1, "gitAction", _gitAction_dec, FlowspaceService);
+__decorateElement(_init, 1, "sessionChanges", _sessionChanges_dec, FlowspaceService);
+__decorateElement(_init, 1, "sessionChangeDiff", _sessionChangeDiff_dec, FlowspaceService);
+__decorateElement(_init, 1, "sessionTerminals", _sessionTerminals_dec, FlowspaceService);
+__decorateElement(_init, 1, "openSessionTerminal", _openSessionTerminal_dec, FlowspaceService);
+__decorateElement(_init, 1, "readTerminalScreen", _readTerminalScreen_dec, FlowspaceService);
 __decorateElement(_init, 1, "workspaceFiles", _workspaceFiles_dec, FlowspaceService);
 __decorateElement(_init, 1, "readWorkspaceFile", _readWorkspaceFile_dec, FlowspaceService);
 __decorateElement(_init, 1, "canvasPresence", _canvasPresence_dec, FlowspaceService);

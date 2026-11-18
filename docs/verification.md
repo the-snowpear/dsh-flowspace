@@ -1,10 +1,10 @@
-# FlowSpace 0.1 verification
+# FlowSpace 0.2 verification
 
-Date: 2026-11-17, Asia/Shanghai. Runtime: published DeepSeek Harness **0.2.2-rc.3**, Node **24.13.0**, Windows. All runs used project-local DSH homes and test workspaces. The user's global DSH installation and daily web profile were not upgraded or edited.
+Date: 2026-11-18, Asia/Shanghai. Runtime: published DeepSeek Harness **0.2.2-rc.3**, Node **24.13.0**, Windows. All runs used project-local DSH homes and test workspaces. The user's global DSH installation and daily web profile were not upgraded or edited.
 
 ## Automated checks
 
-`pnpm check` passes Host/Client TypeScript checks, the DSH client/Host/Remote build, and **15 scheduler behavior tests**:
+`pnpm check` passes Host/Client TypeScript checks, the DSH client/Host/Remote build, and **21 unit & behavior tests**:
 
 - Sequential roots and exactly-once successor dispatch.
 - Parallel fan-in with explicit confirmation.
@@ -15,8 +15,13 @@ Date: 2026-11-17, Asia/Shanghai. Runtime: published DeepSeek Harness **0.2.2-rc.
 - Pause and resume, native-chat defaults and node overrides.
 - Duplicate completion events and multiple steering inputs in one turn.
 - Restart without replay, fork identity, manual busy-node queuing, excluded roots and manually started fork drafts.
+- **M02**: Independent `continuationPrompt` isolation preserving live chat `draft` during upstream auto-continuations.
+- **R5**: `rerunFailed` re-executing only failed/interrupted steps and downstream while reusing completed upstream snapshots, plus `deliverables/presented` run attachment.
+- **M03 & D18**: Four-state reference capsules (`pending` / `sent` / `updated` / `always`) and `rerun: "update"` admission.
+- **D38, M05 & M06**: Draft auto-naming, three-tier manual draft affiliation (`Explicit > Pre-click Selected Structure/Agent > Nearest Structure`), and four-tier derived structure bridging.
+- **M08**: `HostGitService` inspecting repositories, staging/committing, parsing unified diff hunks, guarding `expectedRevision`, and creating/removing isolated Git worktrees.
 
-`pnpm test:integration` boots the complete rc.3 Host with a clearly marked deterministic model. **Nine scenarios pass**:
+`pnpm test:integration` boots the complete rc.3 Host with a clearly marked deterministic model. **Eleven scenarios pass**:
 
 1. Real DSH Sessions, model streaming and serial continuation.
 2. Persisted confirmation and stable run ownership.
@@ -25,10 +30,12 @@ Date: 2026-11-17, Asia/Shanghai. Runtime: published DeepSeek Harness **0.2.2-rc.
 5. Native fork at the captured event prefix.
 6. Native/embedded composer receives canvas references.
 7. Conversation text snapshot and native spill for a reference larger than 64 KiB.
-8. Profile disable/re-enable preserves saved data.
-9. Host restart preserves draft, layout and run identity, without automatically replaying work.
+8. Four-table `storageDomain` (`documents`, `runs`, `templates`, `snapshots`), tool nodes (`git`, `changes`, `terminal`), and Host Git/structure RPCs.
+9. M02 independent `continuationPrompt` preserving live session chat draft across upstream continuation.
+10. Profile disable/re-enable preserves saved data.
+11. Host restart preserves draft, layout, templates, snapshots and run identity, without automatically replaying work.
 
-`node scripts/package-smoke.mjs` extracts the actual tarball, loads the extracted plugin with the locked runtime dependencies, and verifies the Host service and generated `flowspace/start` endpoint. It passes. The archive contains compiled Host, Client and Typert artifacts, source declarations, the bundle patch and licenses; it excludes credentials, profiles, caches and test logs.
+`node scripts/package-smoke.mjs` extracts `artifacts/dsh-flowspace-0.2.0.tgz`, loads the extracted plugin with the locked runtime dependencies, and verifies the Host service and generated `flowspace/start`, `flowspace/gitInspect`, and `flowspace/rerunFailed` endpoints. It passes.
 
 ## Real model
 
@@ -59,9 +66,11 @@ Local visual evidence:
 
 The initial dependency-injection, stylesheet loading and React Flow measurement issues found in browser testing were fixed and retested. The screenshots use the labelled integration model.
 
-## First-release boundaries
+## Current release boundaries
 
-The plugin delivers one persistent canvas, basic two-level grouping and the agreed conclusion/conversation/fork modes. It does not implement summary handoff, editable composite ports, template synchronization, floating-window docking, automatic worktree management or Team communication.
+The plugin delivers persistent multi-session orchestration, single-main-view live Agent cards with collapsible continuation prompt bars, `conversation.composer.dock` 4-state reference capsules, four-tier derived project/branch/worktree/subagent skeleton, three-tier draft affiliation with dual-directory worktree binding, OMP-migrated Git workbench nodes, native `workspace-changes` nodes, Phase 1 `terminalController.screen()` snapshot nodes, read-only native inter-agent message wires, floating window split-docking, slot-based template synchronization, state snapshots, and failed-step downstream rerun.
+
+Summary handoff (`compaction`) and Web `iframe` tool nodes are intentionally excluded per product decisions (`M01`, `M10`). Phase 2 interactive `xterm` streaming inside Terminal cards (`terminalController.attach`) remains a future enhancement (`M09`).
 
 Canvas persistence covers text drafts, connections, layout and run records. Browser-owned unsent native attachments retain DSH's existing lifecycle. Recovery does not reconstruct an interrupted provider request: completed results are preserved, remaining captured continuations can be resumed, and interrupted nodes are explicitly rerun by the user.
 

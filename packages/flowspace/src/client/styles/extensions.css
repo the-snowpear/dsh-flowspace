@@ -1,0 +1,502 @@
+/* ============================================================
+   FlowSpace · Phase 1–3 Extensions
+   - Native composer.dock capsule tray (main chat + embedded cards)
+   - Single-main-view Agent continuation instruction bar & Plan chip
+   - 4-tier derived structure cards & read-only structural links
+   - OMP-migrated Git workbench, Changes diff hunks & Terminal screen
+   ============================================================ */
+
+/* Native composer.dock shared capsule tray (works inside & outside .fs-root) */
+.fs-chat-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fs-native-dock-tray {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  padding: 2px 0;
+}
+
+.fs-dock-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(158, 140, 252, 0.35);
+  background: rgba(158, 140, 252, 0.12);
+  color: inherit;
+  font-size: 11.5px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    opacity 120ms ease;
+}
+.fs-dock-capsule:hover {
+  background: rgba(158, 140, 252, 0.22);
+}
+.fs-dock-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #9e8cfc;
+}
+.fs-dock-capsule.fs-dock-sent {
+  opacity: 0.65;
+  border-color: rgba(142, 148, 160, 0.32);
+  background: rgba(142, 148, 160, 0.1);
+}
+.fs-dock-capsule.fs-dock-sent .fs-dock-dot {
+  background: #8e94a0;
+}
+.fs-dock-capsule.fs-dock-updated {
+  border-color: rgba(230, 166, 64, 0.55);
+  background: rgba(230, 166, 64, 0.15);
+}
+.fs-dock-capsule.fs-dock-updated .fs-dock-dot {
+  background: #e6a640;
+}
+.fs-dock-capsule.fs-dock-always {
+  border-color: rgba(76, 195, 138, 0.45);
+  background: rgba(76, 195, 138, 0.13);
+}
+.fs-dock-capsule.fs-dock-always .fs-dock-dot {
+  background: #4cc38a;
+}
+.fs-dock-label {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 4th Capsule state ("updated" / 来源已更新) inside Canvas cards */
+.fs-root .capsule.capsule-updated {
+  border-color: rgba(230, 166, 64, 0.52);
+  background: var(--amber-soft);
+  color: var(--text);
+}
+.fs-root .fs-capsule-update-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* Toolbar active toggle state (Branches / Worktrees) */
+.fs-root .toolbar-button.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--text);
+}
+
+/* Plan & Subagent pill chips in Agent status row */
+.fs-root .fs-plan-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 21px;
+  padding: 0 7px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease);
+}
+.fs-root .fs-plan-chip:hover {
+  border-color: var(--accent-border);
+  color: var(--text);
+}
+.fs-root .fs-plan-chip.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-hover);
+}
+
+.fs-root .fs-card-top-gate {
+  margin: 6px 10px 0;
+  flex-shrink: 0;
+}
+
+/* Collapsible Continuation Instruction Bar (M02) */
+.fs-root .fs-continuation-bar {
+  margin: 6px 10px 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  flex-shrink: 0;
+}
+.fs-root .fs-continuation-bar-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.fs-root .fs-continuation-bar-toggle span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-root .fs-continuation-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 6px 8px;
+  resize: vertical;
+  min-height: 44px;
+  max-height: 110px;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+}
+.fs-root .fs-continuation-input:focus {
+  outline: none;
+  background: var(--bg);
+}
+
+/* 4-Tier Derived Structure Cards & Skeleton Edges (M06) */
+.fs-root .fs-structure-edge {
+  stroke: var(--border-strong);
+  stroke-width: 1.35;
+  stroke-dasharray: 4 4;
+  opacity: 0.72;
+  pointer-events: none;
+}
+.fs-root .fs-structure-edge.is-active {
+  stroke: var(--accent);
+  opacity: 0.95;
+}
+
+.fs-root .fs-struct-card {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 11px;
+  border-radius: var(--r-8);
+  border: 1px dashed var(--border-strong);
+  background: var(--glass);
+  backdrop-filter: blur(8px);
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.fs-root .fs-struct-card:hover {
+  border-color: var(--border-float);
+  background: var(--surface-2);
+}
+.fs-root .fs-struct-card.selected {
+  border-style: solid;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.fs-root .fs-struct-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.fs-root .fs-struct-head strong {
+  flex: 1;
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-root .fs-struct-badge {
+  padding: 1px 6px;
+  border-radius: var(--r-full);
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+}
+.fs-root .fs-struct-sub {
+  color: var(--text-3);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Git / Changes / Terminal Tool Node Bodies (M07, M08, M09) */
+.fs-root .fs-tool-body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.fs-root .fs-git-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.fs-root .fs-git-branch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  font-size: 11.5px;
+  min-width: 0;
+}
+.fs-root .fs-git-branch-chip b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+.fs-root .fs-git-branch-chip small {
+  color: var(--accent-2);
+  font-family: var(--font-mono);
+}
+.fs-root .fs-git-sync-btns {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.fs-root .fs-compact-select {
+  height: 26px;
+  max-width: 145px;
+  padding: 0 6px;
+  border-radius: var(--r-4);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 11.5px;
+}
+.fs-root .fs-tool-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fs-root .fs-git-commit-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.fs-root .fs-git-commit-row .text-field {
+  flex: 1;
+  min-width: 0;
+}
+.fs-root .fs-git-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.fs-root .fs-git-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: var(--r-4);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.fs-root .fs-git-file-btn {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.fs-root .fs-git-file-btn:hover {
+  color: var(--accent-hover);
+}
+.fs-root .fs-git-badge {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  background: var(--surface-3);
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+.fs-root .fs-git-badge.st-A {
+  color: var(--green);
+  background: var(--green-soft);
+}
+.fs-root .fs-git-badge.st-D {
+  color: var(--red);
+  background: var(--red-soft);
+}
+.fs-root .fs-git-badge.st-M {
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
+.fs-root .fs-diff-stat .add {
+  color: var(--green);
+  font-family: var(--font-mono);
+}
+.fs-root .fs-diff-stat .del {
+  color: var(--red);
+  font-family: var(--font-mono);
+}
+
+.fs-root .fs-git-patch-box {
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  padding: 6px;
+}
+.fs-root .fs-diff-view {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.42;
+  max-height: 190px;
+  overflow: auto;
+}
+.fs-root .fs-diff-hunk-head {
+  color: var(--accent-2);
+  background: var(--surface-2);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.fs-root .fs-diff-line {
+  white-space: pre;
+  padding: 0 6px;
+}
+.fs-root .fs-diff-line.add {
+  color: var(--green);
+  background: rgba(76, 195, 138, 0.1);
+}
+.fs-root .fs-diff-line.del {
+  color: var(--red);
+  background: rgba(242, 102, 105, 0.1);
+}
+.fs-root .fs-diff-line.ctx {
+  color: var(--text-2);
+}
+
+.fs-root .fs-commit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fs-root .fs-commit-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: var(--r-4);
+}
+.fs-root .fs-commit-row.selected,
+.fs-root .fs-commit-row:hover {
+  background: var(--hover);
+}
+.fs-root .fs-commit-lane {
+  width: 18px;
+  height: 28px;
+  flex-shrink: 0;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  fill: var(--accent);
+}
+.fs-root .fs-commit-main {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  cursor: pointer;
+}
+.fs-root .fs-commit-main b {
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-root .fs-commit-main small {
+  color: var(--text-3);
+  font-size: 10.5px;
+}
+
+.fs-root .fs-terminal-pre {
+  margin: 0;
+  max-height: 190px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* Presented deliverables in Run Overview (R5) */
+.fs-root .fs-run-deliverables {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fs-root .fs-deliverable-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

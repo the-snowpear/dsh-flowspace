@@ -289,13 +289,16 @@
   font: 13px/1.5 var(--font-ui);
   color: var(--text);
   background: var(--bg);
+  overflow-wrap: normal;
   width: 100%;
   height: 100%;
+  flex: 1 1 0%;
   min-height: 0;
   min-width: 0;
   display: flex;
   overflow: hidden;
   position: relative;
+  corner-shape: round;
   container: flowspace / inline-size;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -320,12 +323,12 @@
   --text-faint: #6c7380;
   --glyph: #8b929d;
   --on-accent: #fff;
-  --accent: #6a50d3;
+  --accent: #6e56cf;
   --accent-2: #0b8ba3;
-  --accent-hover: #5b42c2;
-  --accent-soft: rgba(106, 80, 211, 0.1);
-  --accent-softer: rgba(106, 80, 211, 0.055);
-  --accent-border: rgba(106, 80, 211, 0.36);
+  --accent-hover: #5f48c0;
+  --accent-soft: rgba(110, 86, 207, 0.1);
+  --accent-softer: rgba(110, 86, 207, 0.055);
+  --accent-border: rgba(110, 86, 207, 0.36);
   --green: #127a51;
   --green-soft: rgba(18, 122, 81, 0.11);
   --amber: #8f5a05;
@@ -367,27 +370,34 @@
 .fs-root *::after {
   box-sizing: border-box;
 }
+.fs-root :where(*:not(.fs-embedded *)),
+.fs-root :where(*:not(.fs-embedded *))::before,
+.fs-root :where(*:not(.fs-embedded *))::after {
+  corner-shape: round;
+}
+.fs-root :where(h1, h2, h3, h4, p, ul, ol, figure, pre):where(:not(.fs-embedded *)) {
+  margin: 0;
+}
 
-.fs-root :is(button, input, textarea, select):not(.fs-embedded *) {
+.fs-root :where(button, input, textarea, select):where(:not(.fs-embedded *)) {
   font: inherit;
   color: inherit;
 }
-.fs-root button:not(.fs-embedded *) {
+.fs-root :where(button):where(:not(.fs-embedded *)) {
   border: 0;
   background: none;
   padding: 0;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.fs-root button:not(.fs-embedded *):disabled {
+.fs-root :where(button):where(:not(.fs-embedded *)):disabled {
   opacity: 0.42;
   cursor: default;
 }
-.fs-root button:not(.fs-embedded *):not(:disabled):active {
+.fs-root :where(button):where(:not(.fs-embedded *)):not(:disabled):active {
   scale: 0.96;
 }
-.fs-root button:not(.fs-embedded *),
-.fs-root a:not(.fs-embedded *),
+.fs-root :where(button, a):where(:not(.fs-embedded *)),
 .fs-root .capsule,
 .fs-root .board-card {
   transition:
@@ -398,16 +408,14 @@
     box-shadow var(--dur-fast) var(--ease),
     scale var(--dur-tactile) var(--ease);
 }
-.fs-root button:not(.fs-embedded *):focus-visible,
-.fs-root a:not(.fs-embedded *):focus-visible,
-.fs-root [tabindex]:not(.fs-embedded *):focus-visible {
+.fs-root :where(button, a, [tabindex]):where(:not(.fs-embedded *)):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.fs-root :is(input, textarea):not(.fs-embedded *) {
+.fs-root :where(input, textarea):where(:not(.fs-embedded *)) {
   outline: none;
 }
-.fs-root textarea:not(.fs-embedded *) {
+.fs-root :where(textarea):where(:not(.fs-embedded *)) {
   resize: none;
 }
 .fs-root ::selection {
@@ -451,12 +459,10 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.fs-root code:not(.fs-embedded *),
-.fs-root pre:not(.fs-embedded *),
-.fs-root kbd:not(.fs-embedded *) {
+.fs-root :where(code, pre, kbd):where(:not(.fs-embedded *)) {
   font-family: var(--font-mono);
 }
-.fs-root kbd:not(.fs-embedded *) {
+.fs-root :where(kbd):where(:not(.fs-embedded *)) {
   display: inline-flex;
   align-items: center;
   height: 18px;
@@ -519,17 +525,17 @@
 .fs-root .button-primary {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(
-    135deg,
-    var(--accent),
-    color-mix(in srgb, var(--accent) 72%, var(--accent-2))
-  );
+  background: var(--accent);
   color: var(--on-accent);
   border-color: transparent;
   font-weight: 600;
   box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent),
-    0 6px 18px -6px color-mix(in srgb, var(--accent) calc(70% * var(--glow)), transparent);
+    0 1px 0 rgba(255, 255, 255, 0.16) inset,
+    0 6px 18px -6px color-mix(in srgb, var(--accent) calc(72% * var(--glow)), transparent);
+}
+.fs-root .button-primary > * {
+  position: relative;
+  z-index: 1;
 }
 .fs-root .button-primary::after {
   content: "";
@@ -543,13 +549,10 @@
   );
   translate: -100% 0;
   transition: translate var(--dur-hero) var(--ease-out);
+  pointer-events: none;
 }
 .fs-root .button-primary:not(:disabled):hover {
-  background: linear-gradient(
-    135deg,
-    var(--accent-hover),
-    color-mix(in srgb, var(--accent-hover) 70%, var(--accent-2))
-  );
+  background: var(--accent-hover);
   border-color: transparent;
 }
 .fs-root .button-primary:not(:disabled):hover::after {

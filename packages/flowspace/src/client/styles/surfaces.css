@@ -16,11 +16,13 @@
   position: sticky;
   display: block;
   top: 0;
-  height: 0;
+  height: 340px;
+  margin-bottom: -340px;
   pointer-events: none;
-  box-shadow:
-    220px 60px 260px 120px var(--aurora-a),
-    680px 40px 240px 100px var(--aurora-b);
+  background:
+    radial-gradient(60% 100% at 30% 0%, var(--aurora-a), transparent 70%),
+    radial-gradient(40% 80% at 80% 0%, var(--aurora-b), transparent 70%);
+  opacity: 0.9;
 }
 .fs-root .surface-page {
   position: relative;
@@ -1433,8 +1435,7 @@
 @container flowspace (max-width: 860px) {
   .fs-root .workspace-chip > span,
   .fs-root .waiting-button > span,
-  .fs-root .toolbar-button > span,
-  .fs-root .route-nav button > span:not(.route-badge) {
+  .fs-root .toolbar-button > span {
     display: none;
   }
   .fs-root .fs-inspector.open {
@@ -1459,16 +1460,16 @@
   }
 }
 
-@container flowspace (max-width: 700px) {
+@container flowspace (max-width: 720px) {
   .fs-root .fs-side {
     position: absolute;
-    left: 0;
+    left: 52px;
     top: 46px;
     bottom: 0;
-    width: 224px;
+    width: 232px;
     z-index: 60;
     background: var(--surface);
-    transform: translateX(-105%);
+    transform: translateX(-125%);
     visibility: hidden;
     pointer-events: none;
     transition:
@@ -1476,7 +1477,7 @@
       visibility var(--dur-slow) var(--ease);
   }
   .fs-root .fs-side.mobile-open {
-    width: 224px;
+    width: 232px;
     transform: translateX(0);
     visibility: visible;
     pointer-events: auto;

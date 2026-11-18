@@ -22,7 +22,7 @@ export interface RuntimeAdapter {
     seq?: number,
     output?: string,
   ): Promise<ContextSnapshot>;
-  reference(node: FlowNode): Promise<ContextSnapshot>;
+  reference(node: FlowNode, edge?: FlowEdge): Promise<ContextSnapshot>;
   reconcile?(step: RunStep): Promise<Partial<RunStep>>;
   running?(): string[];
 }
@@ -34,7 +34,11 @@ export interface SchedulerStore {
     sessionId: string,
     fork?: ContextSnapshot,
   ): Promise<void>;
-  submitted(nodeId: string, task: string): Promise<void>;
+  submitted(
+    nodeId: string,
+    task: string,
+    isContinuation?: boolean,
+  ): Promise<void>;
 }
 
 /** Durable run ownership. A promise queue serializes commands, never model execution. */
@@ -126,7 +130,42 @@ export class Scheduler {
             continue;
           }
         }
-        await this.enqueue(run, id, sources);
+        await this.enqueue(run, id, sources, false);
+      }
+      this.settle(run);
+      await this.store.changed();
+      return structuredClone(run);
+    });
+  }
+  /** Rerun failed/interrupted nodes of a run and their affected downstream while reusing completed upstream snapshots (R5). */
+  async rerunFailed(runId: string): Promise<FlowspaceRun> {
+    return this.transact(async () => {
+      const prev = this.requireRun(runId);
+      const latestByNode = new Map<string, RunStep>();
+      for (const step of prev.steps) latestByNode.set(step.nodeId, step);
+      const failedRoots = [...latestByNode.entries()]
+        .filter(([, step]) =>
+          ["error", "aborted", "interrupted"].includes(step.state),
+        )
+        .map(([nodeId]) => nodeId)
+        .filter((nodeId) =>
+          this.store.document().nodes.some((n) => n.id === nodeId && n.kind === "agent"),
+        );
+      if (!failedRoots.length) throw new Error("该次运行没有可重跑的失败或中断节点");
+      const doc = this.store.document();
+      const scope = prev.scope
+        ? [...new Set([...prev.scope, ...reachable(failedRoots, doc.edges)])]
+        : null;
+      const run = this.create(failedRoots, scope, "canvas");
+      run.notes.push(`自运行 ${prev.title} 局部重跑失败节点及下游`);
+      await this.store.changed();
+      for (const id of run.roots) {
+        const failedStep = latestByNode.get(id);
+        const preservedSources =
+          failedStep?.sources.filter((s) =>
+            ["conclusion", "session", "fork"].includes(s.kind),
+          ) ?? [];
+        await this.enqueue(run, id, preservedSources, preservedSources.length > 0);
       }
       this.settle(run);
       await this.store.changed();
@@ -154,6 +193,7 @@ export class Scheduler {
       steps: [],
       tokens: [],
       notes: [],
+      deliverables: [],
     };
     this.runs.push(run);
     return run;
@@ -196,7 +236,7 @@ export class Scheduler {
         sources,
         createdAt: Date.now(),
       });
-      await this.store.submitted(node.id, task);
+      await this.store.submitted(node.id, task, false);
       await this.store.changed();
     });
   }
@@ -225,6 +265,45 @@ export class Scheduler {
       }
       step.turn = turn;
       step.state = "running";
+      await this.store.changed();
+    });
+  }
+  deliverable(
+    sessionId: string,
+    turn: number,
+    seq: number,
+    time: number,
+    files: { path: string; description?: string }[],
+  ): Promise<void> {
+    return this.transact(async () => {
+      const run = [...this.runs]
+        .reverse()
+        .find((r) =>
+          r.steps.some(
+            (s) =>
+              s.sessionId === sessionId &&
+              (s.turn === turn || (!s.endedAt && s.turn === undefined)),
+          ),
+        );
+      const node = this.store
+        .document()
+        .nodes.find((n) => n.sessionId === sessionId);
+      if (!run || !node) return;
+      run.deliverables ??= [];
+      for (const file of files) {
+        const id = `${sessionId}:${seq}:${file.path}`;
+        if (run.deliverables.some((d) => d.id === id)) continue;
+        run.deliverables.push({
+          id,
+          nodeId: node.id,
+          sessionId,
+          turn,
+          seq,
+          time,
+          path: file.path,
+          description: file.description,
+        });
+      }
       await this.store.changed();
     });
   }
@@ -374,6 +453,7 @@ export class Scheduler {
         run,
         nodeId,
         chosen.map((t) => t.source),
+        true,
       );
     }
   }
@@ -381,9 +461,22 @@ export class Scheduler {
     run: FlowspaceRun,
     nodeId: string,
     sources: ContextSnapshot[],
+    isContinuation = false,
   ): Promise<void> {
+    const liveDoc = this.store.document();
+    const liveNode = liveDoc.nodes.find((n) => n.id === nodeId);
     const node = run.graph.nodes.find((n) => n.id === nodeId)!;
-    const task = node.draft.trim() || node.task.trim();
+    if (liveNode?.continuationPrompt !== undefined) {
+      node.continuationPrompt = liveNode.continuationPrompt;
+    }
+    const task = isContinuation
+      ? (node.continuationPrompt ?? "").trim() ||
+        (node.sessionId
+          ? node.task.trim() || node.draft.trim()
+          : node.draft.trim() || node.task.trim())
+      : node.draft.trim() ||
+        node.task.trim() ||
+        (node.continuationPrompt ?? "").trim();
     if (!task) {
       run.notes.push(`${node.title}：尚未填写任务`);
       run.state = "error";
@@ -410,8 +503,9 @@ export class Scheduler {
         const captured =
           source.kind === "agent"
             ? await this.runtime.capture(source, edge.mode)
-            : await this.runtime.reference(source);
+            : await this.runtime.reference(source, edge);
         const version = `${captured.sourceSessionId ?? captured.sourceNodeId}:${captured.version ?? captured.seq ?? captured.text}`;
+        edge.currentVersion = version;
         if (
           edge.kind === "reference" &&
           !edge.always &&
@@ -424,8 +518,11 @@ export class Scheduler {
           );
         step.sources.push(captured);
         edge.sentVersion = version;
-        const live = this.store.document().edges.find((e) => e.id === edge.id);
-        if (live) live.sentVersion = version;
+        const live = liveDoc.edges.find((e) => e.id === edge.id);
+        if (live) {
+          live.sentVersion = version;
+          live.currentVersion = version;
+        }
       }
       if (
         new Set(
@@ -436,7 +533,7 @@ export class Scheduler {
       )
         throw new Error("一次会话引用最多包含三个来源；更多来源可改用结论");
       const fork = step.sources.find((s) => s.kind === "fork");
-      const current = this.store.document().nodes.find((n) => n.id === nodeId);
+      const current = liveDoc.nodes.find((n) => n.id === nodeId);
       // A draft fork is one-time. Subsequent loop rounds reuse the created Session.
       if (current?.sessionId) node.sessionId = current.sessionId;
       step.sessionId = await this.runtime.ensure(
@@ -454,7 +551,7 @@ export class Scheduler {
         }
       await this.store.changed();
       await this.runtime.send(step);
-      await this.store.submitted(nodeId, task);
+      await this.store.submitted(nodeId, task, isContinuation);
     } catch (e) {
       step.state = "error";
       step.error = String(e);

@@ -14,7 +14,7 @@ import type {
 } from "../types.ts";
 import { Icon, kindIconName } from "./icons.tsx";
 import { getLanguage, t } from "./i18n.ts";
-import { inferGroupPorts, nodeBox } from "./geometry.ts";
+import { capsuleStateOf, inferGroupPorts, nodeBox } from "./geometry.ts";
 import { allTemplates } from "./templates.ts";
 
 export function formatTime(at: number): string {
@@ -374,16 +374,22 @@ export function InspectorPanel({
                     {titleOf(selectedEdge.source)}
                   </span>
                   <small>
-                    {t(
-                      selectedEdge.always
-                        ? "always"
-                        : selectedEdge.sentVersion
-                          ? "sent"
-                          : "pending",
-                    )}
+                    {t(capsuleStateOf(selectedEdge, snapshot?.sourceVersions))}
                   </small>
                 </div>
               </div>
+              {selectedEdge.sentVersion && !selectedEdge.always && (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() =>
+                    onEditEdge(selectedEdge.id, { sentVersion: "" })
+                  }
+                >
+                  <Icon name="refresh" />
+                  <span>{t("rearmCapsule")}</span>
+                </button>
+              )}
             </>
           )}
 
@@ -605,7 +611,10 @@ export function InspectorPanel({
             className="text-field"
             value={selectedNode.title}
             onChange={(e) =>
-              onEditNode(selectedNode.id, { title: e.target.value })
+              onEditNode(selectedNode.id, {
+                title: e.target.value,
+                customTitle: true,
+              })
             }
           />
 
@@ -632,6 +641,35 @@ export function InspectorPanel({
                 ))}
               </select>
 
+              {(selectedNode.branch || selectedNode.worktreePath) && (
+                <p className="muted user-content">
+                  {t("affiliation")}:{" "}
+                  {[
+                    selectedNode.branch,
+                    selectedNode.worktreePath?.split(/[\\/]/).pop(),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+              )}
+
+              {!selectedNode.sessionId && (
+                <div className="switch-row">
+                  <span>{t("planMode")}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={!!selectedNode.planMode}
+                    className="switch"
+                    onClick={() =>
+                      onEditNode(selectedNode.id, {
+                        planMode: !selectedNode.planMode,
+                      })
+                    }
+                  />
+                </div>
+              )}
+
               <label className="field-label">{t("savedTask")}</label>
               <textarea
                 className="text-field"
@@ -640,6 +678,21 @@ export function InspectorPanel({
                 placeholder={t("taskPlaceholder")}
                 onChange={(e) =>
                   onEditNode(selectedNode.id, { task: e.target.value })
+                }
+              />
+
+              <label className="field-label">
+                {t("continuationInstruction")}
+              </label>
+              <textarea
+                className="text-field"
+                rows={2}
+                value={selectedNode.continuationPrompt ?? selectedNode.task}
+                placeholder={t("continuationPlaceholder")}
+                onChange={(e) =>
+                  onEditNode(selectedNode.id, {
+                    continuationPrompt: e.target.value,
+                  })
                 }
               />
 
@@ -1058,8 +1111,10 @@ export function ActivitySurface({
   snapshot,
   onRevealNode,
   onRunCommand,
+  onRerunFailed,
   onReleaseToken,
   onExtractStep,
+  onPinDeliverable,
   onReturnCanvas,
 }: {
   tab: "runs" | "outputs" | "waiting";
@@ -1068,8 +1123,10 @@ export function ActivitySurface({
   snapshot: FlowspaceSnapshot | null;
   onRevealNode: (nodeId: string) => void;
   onRunCommand: (runId: string, action: "pause" | "resume" | "cancel") => void;
+  onRerunFailed: (runId: string) => void;
   onReleaseToken: (runId: string, tokenId: string, accept: boolean) => void;
   onExtractStep: (nodeId: string, text: string, seq?: number) => void;
+  onPinDeliverable: (path: string, nodeId: string) => void;
   onReturnCanvas: () => void;
 }) {
   const runs = [...(snapshot?.runs ?? [])].reverse();
@@ -1264,6 +1321,18 @@ export function ActivitySurface({
                             <span>{t("resume")}</span>
                           </button>
                         )}
+                        {run.steps.some((s) =>
+                          ["error", "aborted", "interrupted"].includes(s.state),
+                        ) && (
+                          <button
+                            type="button"
+                            className="button"
+                            onClick={() => onRerunFailed(run.id)}
+                          >
+                            <Icon name="refresh" />
+                            <span>{t("rerunFailed")}</span>
+                          </button>
+                        )}
                         {!["completed", "cancelled"].includes(run.state) && (
                           <button
                             type="button"
@@ -1341,6 +1410,32 @@ export function ActivitySurface({
                         </div>
                       )}
                     </div>
+
+                    {!!run.deliverables?.length && (
+                      <div className="fs-run-deliverables">
+                        <span className="eyebrow">
+                          {t("deliverablesTitle")} ({run.deliverables.length})
+                        </span>
+                        <div className="fs-deliverable-chips">
+                          {run.deliverables.map((deliv) => (
+                            <button
+                              key={deliv.id}
+                              type="button"
+                              className="capsule capsule-pending"
+                              title={deliv.description || deliv.path}
+                              onClick={() =>
+                                onPinDeliverable(deliv.path, deliv.nodeId)
+                              }
+                            >
+                              <Icon name="file" />
+                              <span className="user-content">
+                                {deliv.path.split(/[\\/]/).pop() ?? deliv.path}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     <details
                       className="run-timeline"

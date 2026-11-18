@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
-import type { FlowspaceDocument, FlowspaceRun } from "../types.ts";
+import type {
+  CanvasSnapshot,
+  FlowspaceDocument,
+  FlowspaceRun,
+  WorkflowTemplate,
+} from "../types.ts";
 
 const groupPort = z.object({
   id: z.string(),
@@ -41,6 +46,9 @@ const node = z.object({
     "group",
     "board",
     "detail",
+    "git",
+    "changes",
+    "terminal",
   ]),
   title: z.string(),
   x: z.number().finite(),
@@ -52,9 +60,16 @@ const node = z.object({
   sessionId: z.string().optional(),
   workspaceId: z.string().optional(),
   cwd: z.string().optional(),
+  branch: z.string().optional(),
+  worktreePath: z.string().optional(),
   agentPreset: z.string().optional(),
+  planMode: z.boolean().optional(),
+  customTitle: z.boolean().optional(),
+  subAgentsExpanded: z.boolean().optional(),
   task: z.string(),
   draft: z.string(),
+  continuationPrompt: z.string().optional(),
+  continuationCollapsed: z.boolean().optional(),
   nativeTrigger: z.enum(["inherit", "enabled", "disabled"]),
   participation: z.enum(["global", "manual", "paused"]),
   text: z.string(),
@@ -84,6 +99,13 @@ const node = z.object({
       origH: z.number().positive().optional(),
     })
     .optional(),
+  gitTab: z.enum(["changes", "history", "branches"]).optional(),
+  gitCommitOid: z.string().optional(),
+  changesSessionId: z.string().optional(),
+  changesSeq: z.number().optional(),
+  changesTurn: z.number().optional(),
+  terminalSessionId: z.string().optional(),
+  terminalId: z.string().optional(),
 });
 
 const waypoint = z.object({
@@ -101,12 +123,16 @@ const edge = z.object({
   maxRounds: z.number().int().positive(),
   always: z.boolean(),
   sentVersion: z.string().optional(),
+  currentVersion: z.string().optional(),
+  sourceItemKey: z.string().optional(),
+  snapshotTitle: z.string().optional(),
+  snapshotText: z.string().optional(),
   originMode: z.enum(["conclusion", "session", "fork"]).optional(),
   waypoints: z.array(waypoint).optional(),
   placedCapsules: z.array(z.string()).optional(),
 });
 
-const workflowTemplate = z.object({
+export const workflowTemplateSchema: z.ZodType<WorkflowTemplate> = z.object({
   id: z.string(),
   title: z.string(),
   description: z.string(),
@@ -120,7 +146,7 @@ const workflowTemplate = z.object({
   ports: z.array(groupPort),
 });
 
-const canvasSnapshot = z.object({
+export const canvasSnapshotSchema: z.ZodType<CanvasSnapshot> = z.object({
   id: z.string(),
   title: z.string(),
   createdAt: z.number(),
@@ -167,15 +193,17 @@ export const documentSchema: z.ZodType<FlowspaceDocument> = z.object({
       theme: z.enum(["dark", "light", "auto"]).optional(),
       wheel: z.enum(["zoom", "pan"]).optional(),
       snap: z.boolean().optional(),
-      filter: z.enum(["auto", "running", "all"]).optional(),
+      filter: z.enum(["auto", "running", "3d", "7d", "all"]).optional(),
       hiddenWorkspaces: z.array(z.string()).optional(),
+      showBranches: z.boolean().optional(),
+      showWorktrees: z.boolean().optional(),
     })
     .optional(),
-  templates: z.array(workflowTemplate).optional(),
-  snapshots: z.array(canvasSnapshot).optional(),
+  templates: z.array(workflowTemplateSchema).optional(),
+  snapshots: z.array(canvasSnapshotSchema).optional(),
 });
 
-// Run records are internal to the scheduler. The typed JSON record is not revalidated at every hop.
+// Four isolated tables per design.md §6.2: documents, runs, templates, snapshots.
 export const flowspaceDomain = defineDomain({
   name: "flowspace",
   version: 1,
@@ -186,6 +214,8 @@ export const flowspaceDomain = defineDomain({
         (v) => typeof v === "object" && v !== null && "id" in v && "steps" in v,
       ),
     ),
+    templates: domainTable(workflowTemplateSchema),
+    snapshots: domainTable(canvasSnapshotSchema),
   },
 });
 

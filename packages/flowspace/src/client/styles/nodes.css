@@ -13,6 +13,9 @@
   color: var(--text);
   user-select: none;
   --kc: var(--text-3);
+  box-shadow:
+    0 1px 2px rgba(15, 18, 25, 0.04),
+    0 10px 26px -14px var(--shadow);
   transition:
     width var(--dur-slow) var(--ease-out),
     height var(--dur-slow) var(--ease-out),
@@ -23,6 +26,9 @@
 }
 .fs-root .node:hover {
   border-color: color-mix(in srgb, var(--kc) 55%, var(--border-strong));
+  box-shadow:
+    0 2px 6px rgba(15, 18, 25, 0.06),
+    0 16px 34px -16px var(--shadow);
 }
 .fs-root .node.selected {
   z-index: 4;
@@ -535,14 +541,47 @@
   width: 100%;
   flex: 1;
   min-height: 92px;
+  max-height: 150px;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--text);
-  font-size: 13.5px;
+  font-size: 14px;
   line-height: 1.7;
   user-select: text;
   caret-color: var(--accent);
+}
+.fs-root .saved-task {
+  color: var(--text-2);
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-strong);
+}
+.fs-root .agent-composer {
+  flex: none;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fs-root .followup-editor {
+  width: 100%;
+  min-height: 44px;
+  max-height: 88px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--bg);
+  user-select: text;
+  caret-color: var(--accent);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
 }
 .fs-root .task-editor::placeholder,
 .fs-root .note-editor::placeholder,

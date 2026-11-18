@@ -5,7 +5,7 @@ import type {
   TypertRemoteInfo,
   TypertRemoteMethod,
 } from '@deepseek-ai/dsh-typert-protocol'
-import type { BindRequest, DraftRequest, FilePreviewRequest, FlowNode, FlowspaceDocument, FlowspaceRun, FlowspaceSnapshot, LaunchPlan, ReleaseRequest, RunCommand, SessionBrief, SourceRequest, StartRequest, WorkspaceBrief, WorkspaceFilePreview, WorkspaceFilesRequest } from 'dsh-flowspace/types'
+import type { BindRequest, DraftRequest, FilePreviewRequest, FlowNode, FlowspaceDocument, FlowspaceRun, FlowspaceSnapshot, GitActionRequest, GitDiffRequest, GitDiffResult, GitInspectRequest, GitRepoStatus, LaunchPlan, ReleaseRequest, RerunFailedRequest, RunCommand, SessionBrief, SessionChangeDiffRequest, SessionChangesRequest, SessionChangeTurn, SessionFileDiffView, SessionTerminalBrief, SessionTerminalsRequest, SourceRequest, StartRequest, TerminalScreenReadRequest, TerminalScreenSnapshot, WorkspaceBrief, WorkspaceFilePreview, WorkspaceFilesRequest, WorkspaceStructureBrief } from 'dsh-flowspace/types'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertRemoteNamespace$666c6f777370616365 {
@@ -15,11 +15,21 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     display: (request: SourceRequest) => Promise<RemoteResult<FlowNode>>
     draft: (request: DraftRequest) => Promise<RemoteResult<void>>
     follow: (signal?: AbortSignal) => RemoteStreamHandle<FlowspaceSnapshot, never>
+    gitAction: (request: GitActionRequest) => Promise<RemoteResult<GitRepoStatus>>
+    gitDiff: (request: GitDiffRequest) => Promise<RemoteResult<GitDiffResult>>
+    gitInspect: (request: GitInspectRequest) => Promise<RemoteResult<GitRepoStatus>>
+    openSessionTerminal: (request: SessionTerminalsRequest) => Promise<RemoteResult<SessionTerminalBrief>>
     plan: (request: StartRequest) => Promise<RemoteResult<LaunchPlan>>
+    projectStructures: () => Promise<RemoteResult<WorkspaceStructureBrief[]>>
+    readTerminalScreen: (request: TerminalScreenReadRequest) => Promise<RemoteResult<TerminalScreenSnapshot>>
     readWorkspaceFile: (request: FilePreviewRequest) => Promise<RemoteResult<WorkspaceFilePreview>>
     release: (request: ReleaseRequest) => Promise<RemoteResult<void>>
+    rerunFailed: (request: RerunFailedRequest) => Promise<RemoteResult<FlowspaceRun>>
     save: (document: FlowspaceDocument) => Promise<RemoteResult<FlowspaceDocument>>
+    sessionChangeDiff: (request: SessionChangeDiffRequest) => Promise<RemoteResult<SessionFileDiffView>>
+    sessionChanges: (request: SessionChangesRequest) => Promise<RemoteResult<SessionChangeTurn[]>>
     sessions: () => Promise<RemoteResult<SessionBrief[]>>
+    sessionTerminals: (request: SessionTerminalsRequest) => Promise<RemoteResult<SessionTerminalBrief[]>>
     snapshot: () => Promise<RemoteResult<FlowspaceSnapshot>>
     start: (request: StartRequest) => Promise<RemoteResult<FlowspaceRun>>
     stopNode: (nodeId: string) => Promise<RemoteResult<void>>
@@ -33,11 +43,21 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'flowspace/display': (request: SourceRequest) => Promise<RemoteResult<FlowNode>>
     'flowspace/draft': (request: DraftRequest) => Promise<RemoteResult<void>>
     'flowspace/follow': (signal?: AbortSignal) => RemoteStreamHandle<FlowspaceSnapshot, never>
+    'flowspace/gitAction': (request: GitActionRequest) => Promise<RemoteResult<GitRepoStatus>>
+    'flowspace/gitDiff': (request: GitDiffRequest) => Promise<RemoteResult<GitDiffResult>>
+    'flowspace/gitInspect': (request: GitInspectRequest) => Promise<RemoteResult<GitRepoStatus>>
+    'flowspace/openSessionTerminal': (request: SessionTerminalsRequest) => Promise<RemoteResult<SessionTerminalBrief>>
     'flowspace/plan': (request: StartRequest) => Promise<RemoteResult<LaunchPlan>>
+    'flowspace/projectStructures': () => Promise<RemoteResult<WorkspaceStructureBrief[]>>
+    'flowspace/readTerminalScreen': (request: TerminalScreenReadRequest) => Promise<RemoteResult<TerminalScreenSnapshot>>
     'flowspace/readWorkspaceFile': (request: FilePreviewRequest) => Promise<RemoteResult<WorkspaceFilePreview>>
     'flowspace/release': (request: ReleaseRequest) => Promise<RemoteResult<void>>
+    'flowspace/rerunFailed': (request: RerunFailedRequest) => Promise<RemoteResult<FlowspaceRun>>
     'flowspace/save': (document: FlowspaceDocument) => Promise<RemoteResult<FlowspaceDocument>>
+    'flowspace/sessionChangeDiff': (request: SessionChangeDiffRequest) => Promise<RemoteResult<SessionFileDiffView>>
+    'flowspace/sessionChanges': (request: SessionChangesRequest) => Promise<RemoteResult<SessionChangeTurn[]>>
     'flowspace/sessions': () => Promise<RemoteResult<SessionBrief[]>>
+    'flowspace/sessionTerminals': (request: SessionTerminalsRequest) => Promise<RemoteResult<SessionTerminalBrief[]>>
     'flowspace/snapshot': () => Promise<RemoteResult<FlowspaceSnapshot>>
     'flowspace/start': (request: StartRequest) => Promise<RemoteResult<FlowspaceRun>>
     'flowspace/stopNode': (nodeId: string) => Promise<RemoteResult<void>>
@@ -56,11 +76,21 @@ export declare const TYPERT_REMOTE: TypertRemoteInfo<{
   readonly 'flowspace/display': TypertRemoteMethod<{ readonly 'request': SourceRequest }, FlowNode>
   readonly 'flowspace/draft': TypertRemoteMethod<{ readonly 'request': DraftRequest }, void>
   readonly 'flowspace/follow': TypertRemoteMethod<{  }, FlowspaceSnapshot, 'stream'>
+  readonly 'flowspace/gitAction': TypertRemoteMethod<{ readonly 'request': GitActionRequest }, GitRepoStatus>
+  readonly 'flowspace/gitDiff': TypertRemoteMethod<{ readonly 'request': GitDiffRequest }, GitDiffResult>
+  readonly 'flowspace/gitInspect': TypertRemoteMethod<{ readonly 'request': GitInspectRequest }, GitRepoStatus>
+  readonly 'flowspace/openSessionTerminal': TypertRemoteMethod<{ readonly 'request': SessionTerminalsRequest }, SessionTerminalBrief>
   readonly 'flowspace/plan': TypertRemoteMethod<{ readonly 'request': StartRequest }, LaunchPlan>
+  readonly 'flowspace/projectStructures': TypertRemoteMethod<{  }, WorkspaceStructureBrief[]>
+  readonly 'flowspace/readTerminalScreen': TypertRemoteMethod<{ readonly 'request': TerminalScreenReadRequest }, TerminalScreenSnapshot>
   readonly 'flowspace/readWorkspaceFile': TypertRemoteMethod<{ readonly 'request': FilePreviewRequest }, WorkspaceFilePreview>
   readonly 'flowspace/release': TypertRemoteMethod<{ readonly 'request': ReleaseRequest }, void>
+  readonly 'flowspace/rerunFailed': TypertRemoteMethod<{ readonly 'request': RerunFailedRequest }, FlowspaceRun>
   readonly 'flowspace/save': TypertRemoteMethod<{ readonly 'document': FlowspaceDocument }, FlowspaceDocument>
+  readonly 'flowspace/sessionChangeDiff': TypertRemoteMethod<{ readonly 'request': SessionChangeDiffRequest }, SessionFileDiffView>
+  readonly 'flowspace/sessionChanges': TypertRemoteMethod<{ readonly 'request': SessionChangesRequest }, SessionChangeTurn[]>
   readonly 'flowspace/sessions': TypertRemoteMethod<{  }, SessionBrief[]>
+  readonly 'flowspace/sessionTerminals': TypertRemoteMethod<{ readonly 'request': SessionTerminalsRequest }, SessionTerminalBrief[]>
   readonly 'flowspace/snapshot': TypertRemoteMethod<{  }, FlowspaceSnapshot>
   readonly 'flowspace/start': TypertRemoteMethod<{ readonly 'request': StartRequest }, FlowspaceRun>
   readonly 'flowspace/stopNode': TypertRemoteMethod<{ readonly 'nodeId': string }, void>

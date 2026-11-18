@@ -41,7 +41,7 @@ export function builtinTemplates(): WorkflowTemplate[] {
     tplAgent(
       "slot-review",
       "审查建议",
-      408,
+      420,
       54,
       "审查上游建议的可行性，核对代码证据、潜在风险与边界条件。先不要修改文件。",
       { roleLabel: "review" },
@@ -49,7 +49,7 @@ export function builtinTemplates(): WorkflowTemplate[] {
     tplAgent(
       "slot-deliver",
       "汇总结论",
-      792,
+      816,
       54,
       "结合上游审查结论，整理出一份简洁、可直接执行的行动清单与验收项。",
       { roleLabel: "delivery" },
@@ -130,7 +130,7 @@ export function builtinTemplates(): WorkflowTemplate[] {
       builtin: true,
       color: "violet",
       w: 1152,
-      h: 492,
+      h: 474,
       nodes: reviewNodes,
       edges: reviewEdges,
       ports: [

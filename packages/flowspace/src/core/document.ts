@@ -26,9 +26,15 @@ const DEFAULT_DIMS: Record<FlowNode["kind"], [number, number]> = {
   group: [1152, 474],
   board: [520, 310],
   detail: [340, 362],
+  git: [380, 376],
+  changes: [340, 318],
+  terminal: [360, 300],
 };
 
-export function boardSummaryText(columns: BoardColumn[], selectedIds?: string[]): string {
+export function boardSummaryText(
+  columns: BoardColumn[],
+  selectedIds?: string[],
+): string {
   const chosen = selectedIds?.length ? new Set(selectedIds) : null;
   const lines: string[] = [];
   for (const col of columns) {
@@ -40,6 +46,19 @@ export function boardSummaryText(columns: BoardColumn[], selectedIds?: string[])
     for (const card of cards) lines.push(`- ${card.text}`);
   }
   return lines.join("\n");
+}
+
+/** Derive an auto-title from the first non-empty line of a draft prompt (D38). */
+export function deriveDraftTitle(
+  prompt: string,
+  fallback = "新 Agent",
+): string {
+  const first = prompt
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[#>*\-\s]+/, "").trim())
+    .find(Boolean);
+  if (!first) return fallback;
+  return first.length > 36 ? `${first.slice(0, 36)}…` : first;
 }
 
 export function newNode(
@@ -74,12 +93,19 @@ export function newNode(
         group: "工作流",
         board: "任务看板",
         detail: "执行详情",
+        git: "Git 仓库",
+        changes: "轮次改动",
+        terminal: "终端快照",
       }[kind],
     x,
     y,
     width,
     height,
-    expanded: kind === "agent" || kind === "board" || kind === "detail",
+    expanded:
+      kind === "agent" ||
+      kind === "board" ||
+      kind === "detail" ||
+      kind === "git",
     task: "",
     draft: "",
     nativeTrigger: "inherit",
@@ -87,7 +113,11 @@ export function newNode(
     text: columns ? boardSummaryText(columns) : "",
     fixed: kind !== "detail",
     collapsed: false,
-    ...(kind === "agent" ? { tab: "task" as const, rerun: "change" as const } : {}),
+    ...(title ? { customTitle: true } : {}),
+    ...(kind === "agent"
+      ? { tab: "conversation" as const, rerun: "change" as const }
+      : {}),
+    ...(kind === "git" ? { gitTab: "changes" as const } : {}),
     ...(kind === "group" ? { color: "violet" as const, ports: [] } : {}),
     ...(columns ? { columns, selectedItems: [] } : {}),
   };
@@ -129,12 +159,13 @@ export function sample(
   doc: FlowspaceDocument,
   kind: "review" | "parallel",
   placement?: { workspaceId?: string; cwd?: string },
+  availableFiles?: string[],
 ): FlowspaceDocument {
   const copy = structuredClone(doc);
   const baseX = copy.nodes.length
-    ? Math.max(...copy.nodes.map((n) => n.x + n.width)) + 120
+    ? Math.max(...copy.nodes.map((n) => n.x + n.width)) + 132
     : 40;
-  const baseY = 180;
+  const baseY = 194;
   const group = {
     ...newNode(
       "group",
@@ -143,7 +174,7 @@ export function sample(
       kind === "review" ? "分析与审查工作流" : "并行调查工作流",
     ),
     color: (kind === "review" ? "violet" : "teal") as "violet" | "teal",
-    width: kind === "review" ? 1152 : 782,
+    width: kind === "review" ? 1152 : 756,
     height: 474,
   };
   const prompts =
@@ -207,9 +238,29 @@ export function sample(
     roleLabel: roleLabel as string,
     task: task as string,
     draft: task as string,
+    continuationPrompt: i > 0 ? (task as string) : undefined,
   }));
+  const fileItems =
+    availableFiles !== undefined
+      ? availableFiles.slice(0, 4)
+      : ["README.md", "package.json"];
+  const firstFile = fileItems[0] ?? "";
+  const fileCard = {
+    ...newNode("file", baseX, baseY - 146, "工作区文件"),
+    ...placement,
+    items: fileItems,
+    selectedItems: firstFile ? [firstFile] : [],
+    text: firstFile,
+    expanded: false,
+    pinned: true,
+  };
   const note = {
-    ...newNode("note", baseX, baseY - 146, "验收标准"),
+    ...newNode(
+      "note",
+      baseX + (kind === "review" ? 460 : 300),
+      baseY - 160,
+      "验收标准",
+    ),
     text: "先只读核对代码事实，保持结论精炼可验证；确认无误后再放行整理交付清单。",
     expanded: false,
     pinned: true,
@@ -222,14 +273,20 @@ export function sample(
             ...newEdge(nodes[1].id, nodes[2].id, "continuation"),
             trigger: "confirm" as const,
           },
+          ...(firstFile
+            ? [newEdge(fileCard.id, nodes[1].id, "reference")]
+            : [newEdge(note.id, nodes[1].id, "reference")]),
           newEdge(note.id, nodes[2].id, "reference"),
         ]
       : [
           newEdge(nodes[0].id, nodes[2].id, "continuation"),
           newEdge(nodes[1].id, nodes[2].id, "continuation"),
+          ...(firstFile
+            ? [newEdge(fileCard.id, nodes[0].id, "reference")]
+            : []),
           newEdge(note.id, nodes[2].id, "reference"),
         ];
-  copy.nodes.push(group, note, ...nodes);
+  copy.nodes.push(group, fileCard, note, ...nodes);
   copy.edges.push(...edges);
   return copy;
 }

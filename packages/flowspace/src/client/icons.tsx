@@ -2,8 +2,8 @@ import type { NodeKind } from "../types.ts";
 
 export const ICONS: Record<string, string> = {
   bench: "M2 3h12v10H2z M6 3v10 M6 8h8",
-  hand: "M6.5 2.5v5 M8.5 2v5.5 M10.5 3v4.8 M4.5 5v3.5L3.3 7.3a1.2 1.2 0 0 0-1.8 1.5l2.7 3.7c.7.9 1.7 1.5 2.9 1.5h2.4c2 0 3.5-1.5 3.5-3.5V5.5a1 1 0 0 0-2 0",
-  pointer: "M4 2.5l8 5.8-3.6.7 1.9 3.9-1.7.8-1.9-3.9L4 12.2z",
+  hand: "M6 7.5V3.2a1 1 0 0 1 2 0V7 M8 4V2.8a1 1 0 0 1 2 0V7 M10 4.5V3.6a1 1 0 0 1 2 0v5.9a4 4 0 0 1-4 4H6.8a3.8 3.8 0 0 1-3.1-1.6L2.2 9.7a1 1 0 0 1 1.5-1.3L6 10V4.5",
+  pointer: "M4.2 2.4l7.6 6.2-3.4.5 1.8 3.6-1.6.8-1.8-3.6-2.6 2.3z",
   chat: "M2.5 3.5h11v7H8l-3 2.5v-2.5H2.5z",
   canvas: "M2 3h4v3H2z M10 10h4v3h-4z M6 4.5h1.5c2 0 .5 7 2.5 7",
   home: "M2.5 8L8 3l5.5 5 M4 7v6h8V7",
@@ -56,6 +56,7 @@ export const ICONS: Record<string, string> = {
   download: "M8 2.5v7.5 M5 7.5L8 10.5l3-3 M3 13h10",
   upload: "M8 10.5V3 M5 6l3-3 3 3 M3 13h10",
   trash: "M3.5 4.5h9 M6 4.5V3h4v1.5 M5 4.5l.6 8.5h4.8l.6-8.5",
+  refresh: "M13 8a5 5 0 1 1-1.4-3.5 M13 2.8v3.2H9.8",
 };
 
 export function Icon({
@@ -89,6 +90,18 @@ export function kindIconName(kind: NodeKind | string): string {
       return "card";
     case "group":
       return "canvas";
+    case "git":
+      return "git";
+    case "changes":
+      return "diff";
+    case "terminal":
+      return "term";
+    case "project":
+      return "project";
+    case "branch":
+      return "branch";
+    case "worktree":
+      return "worktree";
     default:
       return "card";
   }
