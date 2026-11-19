@@ -30,6 +30,35 @@ export interface DerivedStructureLink {
   fromBox: Box;
   toBox: Box;
   active?: boolean;
+  /** `subagent` links are tree tethers (spine + elbows) drawn from `path`. */
+  kind?: "structure" | "subagent-spine" | "subagent-branch";
+  /** Pre-routed SVG path; when absent the renderer routes `fromBox` → `toBox`. */
+  path?: string;
+}
+
+/** Corner radius of a sub-agent tether elbow. */
+const TETHER_RADIUS = 12;
+
+/**
+ * File-tree tether geometry for a parent Agent's sub-agents: one vertical spine
+ * dropping from the parent card plus a rounded elbow into each child card's left edge.
+ */
+export function subagentTetherPaths(
+  parentBox: Box,
+  childBoxes: Box[],
+): { spine: string; branches: string[]; spineX: number } {
+  const spineX = Math.round(parentBox.x + 18);
+  const top = Math.round(parentBox.y + parentBox.h);
+  const r = TETHER_RADIUS;
+  const mids = childBoxes.map((b) => Math.round(b.y + b.h / 2));
+  const last = mids.length ? mids[mids.length - 1] : top;
+  const spine = `M ${spineX} ${top} L ${spineX} ${Math.max(top, last - r)}`;
+  const branches = childBoxes.map((b, i) => {
+    const cy = mids[i];
+    const cx = Math.round(b.x);
+    return `M ${spineX} ${cy - r} Q ${spineX} ${cy} ${spineX + r} ${cy} L ${cx} ${cy}`;
+  });
+  return { spine, branches, spineX };
 }
 
 export interface DraftAffiliation {
@@ -319,14 +348,24 @@ export function buildDerivedStructure(opts: {
       opts.lod,
       opts.keepExpandedIds.has(agent.id),
     );
+    const subBoxes: Box[] = subs.map((_, idx) => ({
+      x: parentBox.x + 44,
+      y: parentBox.y + parentBox.h + 22 + idx * 64,
+      w: Math.max(220, parentBox.w - 64),
+      h: 52,
+      compact: true,
+    }));
+    const tether = subagentTetherPaths(parentBox, subBoxes);
+    links.push({
+      id: `slink-agent-${agent.id}-subspine`,
+      fromBox: parentBox,
+      toBox: subBoxes[subBoxes.length - 1],
+      active: subs.some((s) => s.running),
+      kind: "subagent-spine",
+      path: tether.spine,
+    });
     subs.forEach((sub, idx) => {
-      const subBox: Box = {
-        x: parentBox.x + 24,
-        y: parentBox.y + parentBox.h + 26 + idx * 66,
-        w: Math.max(232, parentBox.w - 48),
-        h: 54,
-        compact: true,
-      };
+      const subBox = subBoxes[idx];
       const subCard: DerivedStructureCard = {
         id: `struct-sub-${sub.sessionId}`,
         kind: "subagent",
@@ -345,6 +384,8 @@ export function buildDerivedStructure(opts: {
         fromBox: parentBox,
         toBox: subBox,
         active: sub.running,
+        kind: "subagent-branch",
+        path: tether.branches[idx],
       });
     });
   }

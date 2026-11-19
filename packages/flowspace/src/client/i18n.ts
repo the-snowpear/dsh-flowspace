@@ -401,6 +401,11 @@ export const dict: Record<string, [string, string]> = {
   wheelBehavior: ["滚轮默认手势", "Mouse wheel"],
   zoom: ["缩放画布", "Zoom"],
   pan: ["平移画布", "Pan"],
+  wireRouting: ["连线走向", "Wire routing"],
+  wireRoutingAvoid: ["绕过节点", "Avoid nodes"],
+  wireRoutingOverlap: ["允许遮盖", "Allow overlap"],
+  wireRoutingAvoidDescription: ["连线会寻找节点之间的空隙。", "Wires route through gaps between nodes."],
+  wireRoutingOverlapDescription: ["连线经过节点时会被卡片盖住。", "Cards cover any wires that pass behind them."],
   snapGrid: ["拖动时吸附网格 (12px)", "Snap nodes to 12px grid"],
   reducedMotion: ["减弱动效", "Reduce motion"],
   reducedMotionDescription: [

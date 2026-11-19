@@ -75,3 +75,42 @@ Summary handoff (`compaction`) and Web `iframe` tool nodes are intentionally exc
 Canvas persistence covers text drafts, connections, layout and run records. Browser-owned unsent native attachments retain DSH's existing lifecycle. Recovery does not reconstruct an interrupted provider request: completed results are preserved, remaining captured continuations can be resumed, and interrupted nodes are explicitly rerun by the user.
 
 Windows Web is verified. macOS/Linux, multiple simultaneous editing clients, large-graph performance and full screen-reader coverage were not validated in this first delivery.
+
+## Canvas performance verification · 2026-11-19
+
+Windows, RTX 4080 Laptop, Chrome 157.0.8103.79, 1440 × 900, DPR 1, published DSH 0.2.2-rc.3. Playwright drove the original museum and synthetic grids in isolated mock profiles. The harness dismissed the DSH preview notice before sampling. A grid has 200 or 500 expanded Agent nodes plus one group, with 370 or 940 continuation edges. The minimap and project guides were enabled.
+
+Each round zoomed from 86% to 44% and back with a fixed anchor. The table gives browser animation-frame intervals in milliseconds. The first round is cold. The hot crossing window includes the frame spanning the card switch and the following 320 ms of animation. Stable P95 uses the remaining hot samples. “Maximum” includes all observed frames, including cold frames and viewport settling.
+
+| Scene | Rounds | Stable P95 | Cold crossing max | Hot crossing max | Maximum |
+|---|---:|---:|---:|---:|---:|
+| Museum, backup | 10 | 77.0 | 330.5 | 166.0 | 330.5 |
+| Museum, current | 10 | 30.8 | 169.0 | 107.6 | 346.0 |
+| 200, overlap, backup | 3 | 1504.2 | 1507.6 | 2176.9 | 2176.9 |
+| 200, overlap, current | 10 | 34.7 | 153.9 | 149.9 | 153.9 |
+| 200, avoidance, backup | 3 | 1465.4 | 1765.5 | 1819.1 | 1819.1 |
+| 200, avoidance, current | 10 | 50.1 | 196.1 | 188.5 | 196.1 |
+| 500, overlap, current | 10 | 53.8 | 280.7 | 188.5 | 280.7 |
+| 500, avoidance, current | 10 | 53.9 | 330.7 | 207.7 | 330.7 |
+
+On the matched first three rounds at 200 nodes, hot crossing maxima fell from 2176.9 to 138.5 ms for overlap and from 1819.1 to 188.5 ms for avoidance. At 86% the 200-node world had 1440 DOM descendants compared with 20,731 in the backup. Over ten museum rounds, cumulative style recalculation fell from 7807 to 5255 ms. Cumulative layout was 553 and 551 ms respectively. The 20 ms stable P95 target and the museum/200-node crossing targets of 33/50 ms remain open.
+
+| Scene | Pan P95 | Node drag P95 | Group drag P95 |
+|---|---:|---:|---:|
+| Museum | 30.7 | 30.7 | 34.9 |
+| 200, overlap | 53.9 | 73.1 | 96.1 |
+| 200, avoidance | 65.4 | 134.7 | 107.7 |
+| 500, overlap | 53.9 | 250.0 | 176.9 |
+| 500, avoidance | 57.6 | 277.0 | 230.9 |
+
+Browser checks exercised rapid reversals across 50%, single-step undo, cancelled movement, and real embedded Conversation focus and draft retention through zoom and offscreen pan. A deterministic model requested native approval and completed after approval. The run kept its canvas origin through the test. Floating and returning the card followed by a reload preserved the session ID and the unsent text draft. Browser-owned unsent file attachments were not separately exercised.
+
+Dark and light museum screenshots were compared at both zoom levels. Mean absolute RGB channel differences over the four full-viewport pairs ranged from 0.18 to 0.96 on a scale of 255. Both versions retain the 320 ms card transition. The separate two-round Chrome profiles include style recalculation, layout, paint, and script activity.
+
+Local evidence is under `output/playwright/`:
+
+- `canvas-perf-1795057719731` and `canvas-perf-1795060893136` contain the museum and grid baseline reports.
+- `canvas-perf-1795060705460` contains current raw frames, drag metrics, four museum screenshots, and the native approval capture.
+- `canvas-perf-1795061104763/museum.trace.json` and `canvas-perf-1795061077616/museum.trace.json` contain the before and after Chrome traces. The latter directory also contains the rapid reversal capture.
+
+To reproduce, build with `pnpm build`, make Playwright available to Node, then run `node --expose-internals --import tsx scripts/canvas-perf.mjs museum 200-overlap 200-avoid 500-overlap 500-avoid native`. The runner uses installed Chrome. Set `FLOWSPACE_PLAYWRIGHT` to an importable Playwright module URL when installed outside the workspace, `FLOWSPACE_PERF_LIB` to test a backup bundle, and `FLOWSPACE_PERF_TRACE=1` for a separate instrumented run. The two visual checks use `FLOWSPACE_VISUAL=1` and `FLOWSPACE_REVERSAL=1`.

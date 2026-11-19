@@ -5,6 +5,7 @@
 
 .fs-root .node {
   position: absolute;
+  contain: layout style;
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -334,12 +335,20 @@
   height: 13px;
 }
 .fs-root .node-body {
+  contain: layout paint;
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   border-radius: 0 0 11px 11px;
+}
+.fs-root .fs-card-slot {
+  display: contents;
+}
+.fs-root .fs-card-slot[hidden],
+.fs-root .node-body[hidden] {
+  display: none;
 }
 .fs-root .node.full .node-body {
   animation: var(--motion-unfold);

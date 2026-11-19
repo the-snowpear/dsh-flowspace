@@ -554,10 +554,10 @@
     left var(--dur-slow) var(--ease-nav),
     right var(--dur-slow) var(--ease-nav);
 }
-.fs-root .fs-canvas-column:has(.has-left-window) .fs-canvas-toolbar {
+.fs-root .fs-canvas-column.has-left-window .fs-canvas-toolbar {
   left: calc(50% + 12px);
 }
-.fs-root .fs-canvas-column:has(.has-right-window) .fs-canvas-toolbar {
+.fs-root .fs-canvas-column.has-right-window .fs-canvas-toolbar {
   right: calc(50% + 12px);
 }
 /* ---------- Liquid Glass capsules ----------
@@ -789,6 +789,14 @@
   width: 1px;
   height: 1px;
 }
+.fs-root .fs-scene-clip {
+  position: absolute;
+  overflow: clip;
+  contain: strict;
+}
+.fs-root .fs-scene-origin {
+  position: absolute;
+}
 .fs-root .fs-nodes-layer,
 .fs-root .fs-groups-layer,
 .fs-root .fs-tags-layer {
@@ -796,8 +804,11 @@
   left: 0;
   top: 0;
 }
-.fs-root .fs-groups-layer {
+.fs-root .fs-groups-layer > .workflow-group {
   z-index: 0;
+}
+.fs-root .fs-groups-layer > .composite {
+  z-index: 3;
 }
 .fs-root .fs-nodes-layer {
   z-index: 3;
@@ -805,13 +816,16 @@
 .fs-root .fs-tags-layer {
   z-index: 4;
 }
+.fs-root [data-wire-routing="overlap"] > .fs-wire-labels {
+  z-index: 2;
+}
 .fs-root .fs-edges-svg {
   position: absolute;
   left: 0;
   top: 0;
   width: 1px;
   height: 1px;
-  overflow: visible;
+  overflow: hidden;
   pointer-events: none;
   z-index: 1;
 }
@@ -892,11 +906,11 @@
     left var(--dur-slow) var(--ease-nav),
     right var(--dur-slow) var(--ease-nav);
 }
-.fs-root .fs-canvas-column:has(.has-left-window) .fs-canvas-controls,
+.fs-root .fs-canvas-column.has-left-window .fs-canvas-controls,
 .fs-root .fs-canvas-area.has-left-window .fs-canvas-controls {
   left: calc(50% + 12px);
 }
-.fs-root .fs-canvas-column:has(.has-right-window) .fs-canvas-controls,
+.fs-root .fs-canvas-column.has-right-window .fs-canvas-controls,
 .fs-root .fs-canvas-area.has-right-window .fs-canvas-controls {
   right: calc(50% + 12px);
 }
@@ -995,7 +1009,7 @@
     right var(--dur-slow) var(--ease-nav),
     bottom var(--dur-slow) var(--ease-nav);
 }
-.fs-root .fs-canvas-column:has(.has-right-window) .fs-minimap,
+.fs-root .fs-canvas-column.has-right-window .fs-minimap,
 .fs-root .fs-canvas-area.has-right-window .fs-minimap {
   right: calc(50% + 12px);
 }

@@ -3,7 +3,6 @@ import type {
   FlowNode,
   FlowspaceDocument,
   GroupPort,
-  Waypoint,
 } from "../types.ts";
 import { members } from "../core/document.ts";
 
@@ -365,12 +364,21 @@ export function endpoint(
   direction: "in" | "out",
   lod = false,
   keepExpandedIds?: Set<string>,
+  index?: {
+    nodes: Map<string, FlowNode>;
+    ancestors: Map<string, FlowNode | undefined>;
+    ports: Map<string, GroupPort[]>;
+  },
 ): { x: number; y: number; groupId?: string; box: Box } {
-  const node = doc.nodes.find((n) => n.id === nodeId);
+  const node = index ? index.nodes.get(nodeId) : doc.nodes.find((n) => n.id === nodeId);
   if (!node) return { x: 0, y: 0, box: { x: 0, y: 0, w: 0, h: 0 } };
-  const collapsed = collapsedAncestor(doc, nodeId);
+  const collapsed = index ? index.ancestors.get(nodeId) : collapsedAncestor(doc, nodeId);
   if (collapsed) {
-    const allPorts = inferGroupPorts(doc, collapsed).filter((p) => !p.hidden);
+    let allPorts = index?.ports.get(collapsed.id);
+    if (!allPorts) {
+      allPorts = inferGroupPorts(doc, collapsed).filter((p) => !p.hidden);
+      index?.ports.set(collapsed.id, allPorts);
+    }
     const dirPorts = allPorts.filter((p) => p.direction === direction);
     const rows = Math.max(
       allPorts.filter((p) => p.direction === "in").length,
@@ -388,237 +396,12 @@ export function endpoint(
       box,
     };
   }
-  const box = nodeBox(node, lod, keepExpandedIds?.has(node.id));
+  const box = nodeBox(node, lod, Boolean(node.window) || keepExpandedIds?.has(node.id));
   return {
     x: box.x + (direction === "out" ? box.w : 0),
     y: box.y + portY(node, kind, !!box.compact),
     box,
   };
-}
-
-function rounded(points: { x: number; y: number }[], radius = 16): string {
-  let path = `M ${round(points[0].x)} ${round(points[0].y)}`;
-  for (let i = 1; i < points.length - 1; i++) {
-    const before = points[i - 1],
-      corner = points[i],
-      after = points[i + 1];
-    const inLen = Math.hypot(corner.x - before.x, corner.y - before.y) || 1,
-      outLen = Math.hypot(after.x - corner.x, after.y - corner.y) || 1,
-      r = Math.min(radius, inLen / 2, outLen / 2);
-    path += ` L ${round(corner.x - ((corner.x - before.x) / inLen) * r)} ${round(corner.y - ((corner.y - before.y) / inLen) * r)} Q ${round(corner.x)} ${round(corner.y)} ${round(corner.x + ((after.x - corner.x) / outLen) * r)} ${round(corner.y + ((after.y - corner.y) / outLen) * r)}`;
-  }
-  const last = points[points.length - 1];
-  return `${path} L ${round(last.x)} ${round(last.y)}`;
-}
-
-function computeChainTangents(pts: { x: number; y: number }[]): { x: number; y: number }[] {
-  const n = pts.length;
-  return pts.map((curr, i) => {
-    if (i === 0 || i === n - 1) {
-      return { x: 1, y: 0 };
-    }
-    const prev = pts[i - 1];
-    const next = pts[i + 1];
-    const inDx = curr.x - prev.x;
-    const inDy = curr.y - prev.y;
-    const inLen = Math.hypot(inDx, inDy) || 1;
-    const outDx = next.x - curr.x;
-    const outDy = next.y - curr.y;
-    const outLen = Math.hypot(outDx, outDy) || 1;
-    const bx = inDx / inLen + outDx / outLen;
-    const by = inDy / inLen + outDy / outLen;
-    const bLen = Math.hypot(bx, by);
-    if (bLen > 1e-3) {
-      return { x: bx / bLen, y: by / bLen };
-    }
-    return { x: -inDy / inLen, y: inDx / inLen };
-  });
-}
-
-function cubicPoint(
-  p0: { x: number; y: number },
-  c1: { x: number; y: number },
-  c2: { x: number; y: number },
-  p3: { x: number; y: number },
-  t: number,
-): { x: number; y: number } {
-  const u = 1 - t;
-  const b0 = u * u * u;
-  const b1 = 3 * u * u * t;
-  const b2 = 3 * u * t * t;
-  const b3 = t * t * t;
-  return {
-    x: b0 * p0.x + b1 * c1.x + b2 * c2.x + b3 * p3.x,
-    y: b0 * p0.y + b1 * c1.y + b2 * c2.y + b3 * p3.y,
-  };
-}
-
-function distToSegmentSquared(
-  p: { x: number; y: number },
-  a: { x: number; y: number },
-  b: { x: number; y: number },
-): number {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq <= 1e-6) {
-    return (p.x - a.x) ** 2 + (p.y - a.y) ** 2;
-  }
-  const t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq, 0, 1);
-  const projX = a.x + t * dx;
-  const projY = a.y + t * dy;
-  return (p.x - projX) ** 2 + (p.y - projY) ** 2;
-}
-
-export function route(
-  from: { x: number; y: number; box?: Box },
-  to: { x: number; y: number; box?: Box },
-  waypoints: Waypoint[] = [],
-): { path: string; label: { x: number; y: number }; tight: boolean } {
-  const pts = [from, ...waypoints, to];
-  if (pts.length === 2 && to.x < from.x + 24) {
-    const a = from.box ?? { x: from.x, y: from.y, w: 0, h: 0 },
-      b = to.box ?? { x: to.x, y: to.y, w: 0, h: 0 },
-      stub = 28;
-    const lane =
-      a.y + a.h + 24 <= b.y
-        ? (a.y + a.h + b.y) / 2
-        : b.y + b.h + 24 <= a.y
-          ? (b.y + b.h + a.y) / 2
-          : Math.max(a.y + a.h, b.y + b.h) + 38;
-    const x1 = from.x + stub,
-      x2 = to.x - stub;
-    return {
-      path: rounded(
-        [
-          from,
-          { x: x1, y: from.y },
-          { x: x1, y: lane },
-          { x: x2, y: lane },
-          { x: x2, y: to.y },
-          to,
-        ],
-        18,
-      ),
-      label: { x: (x1 + x2) / 2, y: lane },
-      tight: Math.abs(x1 - x2) < 140,
-    };
-  }
-
-  if (pts.length === 2) {
-    const reach = clamp(Math.abs(to.x - from.x) * 0.48, 36, 180);
-    const c1 = { x: from.x + reach, y: from.y };
-    const c2 = { x: to.x - reach, y: to.y };
-    const mid = cubicPoint(from, c1, c2, to, 0.5);
-    return {
-      path: `M ${round(from.x)} ${round(from.y)} C ${round(c1.x)} ${round(c1.y)}, ${round(c2.x)} ${round(c2.y)}, ${round(to.x)} ${round(to.y)}`,
-      label: { x: round(mid.x), y: round(mid.y) },
-      tight: Math.hypot(to.x - from.x, to.y - from.y) < 148,
-    };
-  }
-
-  /* C1-smooth tangent routing across 1+ waypoints (supports both forward & cyclic backward loops without twists) */
-  const tangents = computeChainTangents(pts);
-  let path = `M ${round(from.x)} ${round(from.y)}`;
-  let bestLabelSegLen = -1;
-  let label = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
-
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1];
-    const b = pts[i];
-    const tA = tangents[i - 1];
-    const tB = tangents[i];
-    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
-    const isFirstBackward = i === 1 && b.x < a.x + 16;
-    const isLastBackward = i === pts.length - 1 && b.x < a.x + 16;
-    const reachA = isFirstBackward
-      ? clamp(segLen * 0.44, 44, 150)
-      : clamp(segLen * 0.36, 24, 160);
-    const reachB = isLastBackward
-      ? clamp(segLen * 0.44, 44, 150)
-      : clamp(segLen * 0.36, 24, 160);
-    const c1 = { x: a.x + tA.x * reachA, y: a.y + tA.y * reachA };
-    const c2 = { x: b.x - tB.x * reachB, y: b.y - tB.y * reachB };
-    path += ` C ${round(c1.x)} ${round(c1.y)}, ${round(c2.x)} ${round(c2.y)}, ${round(b.x)} ${round(b.y)}`;
-    if (segLen > bestLabelSegLen) {
-      bestLabelSegLen = segLen;
-      const mid = cubicPoint(a, c1, c2, b, 0.5);
-      label = { x: round(mid.x), y: round(mid.y) };
-    }
-  }
-  return {
-    path,
-    label,
-    tight: bestLabelSegLen < 120,
-  };
-}
-
-/**
- * Inserts a new waypoint into the exact wire segment closest to `clickPt`
- * (sampling rendered Bezier / loop curves rather than blindly appending to the end).
- */
-export function insertWaypointAtClosestSegment(
-  points: Waypoint[],
-  clickPt: Waypoint,
-  existingWaypoints?: Waypoint[],
-): Waypoint[] {
-  const wp: Waypoint = { x: round(clickPt.x), y: round(clickPt.y) };
-  const base =
-    existingWaypoints !== undefined
-      ? [...existingWaypoints]
-      : points.length >= 2
-        ? points.slice(1, -1)
-        : [];
-  if (points.length < 2) {
-    return [...base, wp];
-  }
-  const chain: Waypoint[] =
-    existingWaypoints !== undefined &&
-    points.length === 2 &&
-    existingWaypoints.length > 0
-      ? [points[0], ...existingWaypoints, points[1]]
-      : points;
-
-  if (chain.length <= 2) {
-    return [wp];
-  }
-
-  const tangents = computeChainTangents(chain);
-  let bestSegIdx = base.length;
-  let bestDistSq = Infinity;
-  const samples = 12;
-
-  for (let seg = 0; seg < chain.length - 1; seg++) {
-    const a = chain[seg];
-    const b = chain[seg + 1];
-    const tA = tangents[seg];
-    const tB = tangents[seg + 1];
-    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
-    const reachA =
-      seg === 0 && b.x < a.x + 16
-        ? clamp(segLen * 0.44, 44, 150)
-        : clamp(segLen * 0.36, 24, 160);
-    const reachB =
-      seg === chain.length - 2 && b.x < a.x + 16
-        ? clamp(segLen * 0.44, 44, 150)
-        : clamp(segLen * 0.36, 24, 160);
-    const c1 = { x: a.x + tA.x * reachA, y: a.y + tA.y * reachA };
-    const c2 = { x: b.x - tB.x * reachB, y: b.y - tB.y * reachB };
-
-    let prevSample = a;
-    for (let s = 1; s <= samples; s++) {
-      const currSample = cubicPoint(a, c1, c2, b, s / samples);
-      const dSq = distToSegmentSquared(clickPt, prevSample, currSample);
-      if (dSq < bestDistSq) {
-        bestDistSq = dSq;
-        bestSegIdx = seg;
-      }
-      prevSample = currSample;
-    }
-  }
-
-  const insertIdx = clamp(bestSegIdx, 0, base.length);
-  return [...base.slice(0, insertIdx), wp, ...base.slice(insertIdx)];
 }
 
 /**
@@ -865,57 +648,99 @@ function bezier(x1: number, y1: number, x2: number, y2: number) {
 }
 export const easeView = bezier(0.32, 0.72, 0, 1);
 
-/** Expanding a card nudges only cards below it that would overlap, and grows its group; collapsing restores both. */
+/** Horizontal / vertical clearance kept between a grown card and the cards it moves. */
+const ROOM_GAP = 24;
+
+function overlapArea(a: Box, b: Box, gap: number): number {
+  const w = Math.min(a.x + a.w, b.x + b.w + gap) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.h, b.y + b.h + gap) - Math.max(a.y, b.y);
+  return w > 4 && h > 0 ? w * h : 0;
+}
+
+/**
+ * A card grew (expanded, or switched into the wider live-chat form): move only the cards
+ * it now covers out of its way. A card sitting beside it on the same row slides right,
+ * a card underneath slides down, and displaced cards push their own neighbours in turn,
+ * so a left-to-right pipeline stays a readable row. Enclosing groups grow to fit.
+ * Every moved card / group remembers its original geometry for `giveRoomBack`.
+ */
 export function makeRoom(doc: FlowspaceDocument, expandedNode: FlowNode): void {
-  const gap = 24;
-  const settled: Box[] = [nodeBox(expandedNode, false, true)];
-  const below = doc.nodes
+  const gap = ROOM_GAP;
+  const origin = { x: expandedNode.x, y: expandedNode.y };
+  const others = doc.nodes
     .filter(
       (other) =>
         other.id !== expandedNode.id &&
         other.kind !== "group" &&
         !other.window &&
-        other.y >= expandedNode.y - 8,
+        (other.y >= origin.y - 8 || other.x >= origin.x + 8),
     )
-    .sort((a, b) => a.y - b.y);
-  for (const other of below) {
-    const box = nodeBox(other, false, Boolean(other.pinned));
-    const overlaps = settled.filter(
-      (s) =>
-        box.x < s.x + s.w - 4 &&
-        box.x + box.w > s.x + 4 &&
-        box.y < s.y + s.h + gap &&
-        box.y + box.h > s.y,
+    .sort(
+      (a, b) =>
+        a.x - origin.x + (a.y - origin.y) - (b.x - origin.x + (b.y - origin.y)),
     );
-    if (!overlaps.length) continue;
-    const nextY = Math.max(...overlaps.map((s) => s.y + s.h + gap));
-    if (nextY > other.y) {
-      if (!other.nudge) other.nudge = { by: expandedNode.id, origY: other.y };
-      other.y = nextY;
+  // Only the grown card and cards it displaced can push others, so unrelated
+  // pre-existing overlaps are left exactly as the user arranged them.
+  const pushers = new Map<string, Box>([
+    [expandedNode.id, nodeBox(expandedNode, false, true)],
+  ]);
+  const moved = new Set<string>();
+  for (let pass = 0; pass < 6; pass++) {
+    let changed = false;
+    for (const other of others) {
+      const box = nodeBox(other, false, Boolean(other.pinned));
+      let primary: Box | null = null;
+      let best = 0;
+      for (const [pid, s] of pushers) {
+        if (pid === other.id) continue;
+        const area = overlapArea(box, s, gap);
+        if (area > best) {
+          best = area;
+          primary = s;
+        }
+      }
+      if (!primary) continue;
+      const beside = box.x >= primary.x + 24 && box.y < primary.y + primary.h * 0.5;
+      if (!other.nudge) {
+        other.nudge = { by: expandedNode.id, origX: other.x, origY: other.y };
+      }
+      if (beside) other.x = Math.max(other.x, primary.x + primary.w + gap);
+      else other.y = Math.max(other.y, primary.y + primary.h + gap);
+      changed = true;
+      moved.add(other.id);
+      pushers.set(other.id, nodeBox(other, false, Boolean(other.pinned)));
     }
-    settled.push(nodeBox(other, false, Boolean(other.pinned)));
+    if (!changed) break;
   }
-  let parentId = expandedNode.parentId;
-  while (parentId) {
-    const g = doc.nodes.find((n) => n.id === parentId && n.kind === "group");
-    if (!g) break;
+  // Grow every group that encloses the grown card or a displaced card.
+  const groupIds = new Set<string>();
+  for (const id of [expandedNode.id, ...moved]) {
+    let parentId = doc.nodes.find((n) => n.id === id)?.parentId;
+    while (parentId && !groupIds.has(parentId)) {
+      groupIds.add(parentId);
+      parentId = doc.nodes.find((n) => n.id === parentId)?.parentId;
+    }
+  }
+  for (const gid of groupIds) {
+    const g = doc.nodes.find((n) => n.id === gid && n.kind === "group");
+    if (!g) continue;
     const memberIds = members(doc, g.id);
     const memberBoxes = doc.nodes
       .filter((n) => memberIds.includes(n.id))
       .map((n) =>
         nodeBox(n, false, n.id === expandedNode.id || Boolean(n.pinned)),
       );
-    if (memberBoxes.length) {
-      const b = bounds(memberBoxes);
-      const neededH = b.y + b.h + 28 - g.y;
-      const neededW = b.x + b.w + 28 - g.x;
-      if (neededH > g.height) {
-        if (!g.nudge) g.nudge = { by: expandedNode.id, origH: g.height };
-        g.height = neededH;
+    if (!memberBoxes.length) continue;
+    const b = bounds(memberBoxes);
+    const neededH = b.y + b.h + 28 - g.y;
+    const neededW = b.x + b.w + 28 - g.x;
+    if (neededH > g.height || neededW > g.width) {
+      if (!g.nudge) {
+        g.nudge = { by: expandedNode.id, origW: g.width, origH: g.height };
       }
-      if (neededW > g.width) g.width = neededW;
+      g.height = Math.max(g.height, neededH);
+      g.width = Math.max(g.width, neededW);
     }
-    parentId = g.parentId;
   }
 }
 
@@ -925,7 +750,9 @@ export function giveRoomBack(
 ): void {
   for (const other of doc.nodes) {
     if (other.nudge?.by === collapsedNode.id) {
+      if (other.nudge.origX !== undefined) other.x = other.nudge.origX;
       if (other.nudge.origY !== undefined) other.y = other.nudge.origY;
+      if (other.nudge.origW !== undefined) other.width = other.nudge.origW;
       if (other.nudge.origH !== undefined) other.height = other.nudge.origH;
       delete other.nudge;
     }

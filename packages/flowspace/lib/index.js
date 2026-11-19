@@ -2374,7 +2374,9 @@ var node = z.object({
   selectedItems: z.array(z.string()).optional(),
   nudge: z.object({
     by: z.string(),
+    origX: z.number().finite().optional(),
     origY: z.number().finite().optional(),
+    origW: z.number().positive().optional(),
     origH: z.number().positive().optional()
   }).optional(),
   gitTab: z.enum(["changes", "history", "branches"]).optional(),
@@ -2462,6 +2464,7 @@ var documentSchema = z.object({
   prefs: z.object({
     theme: z.enum(["dark", "light", "auto"]).optional(),
     wheel: z.enum(["zoom", "pan"]).optional(),
+    wireRouting: z.enum(["avoid", "overlap"]).optional(),
     snap: z.boolean().optional(),
     filter: z.enum(["auto", "running", "3d", "7d", "all"]).optional(),
     hiddenWorkspaces: z.array(z.string()).optional(),
@@ -3239,8 +3242,10 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
     return this.scheduler.transact(async () => {
       const sanitized = sanitizeDocumentForWire(document);
       const next = documentSchema.parse(sanitized);
+      const previousNodes = new Map(this.state.doc.nodes.map((node2) => [node2.id, node2]));
+      const previousEdges = new Map(this.state.doc.edges.map((edge2) => [edge2.id, edge2]));
       for (const node2 of next.nodes) {
-        const old = this.state.doc.nodes.find((n) => n.id === node2.id);
+        const old = previousNodes.get(node2.id);
         if (old?.sessionId) {
           node2.sessionId = old.sessionId;
           node2.cwd = old.cwd;
@@ -3259,7 +3264,7 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
         }
       }
       for (const edge2 of next.edges) {
-        const old = this.state.doc.edges.find((e) => e.id === edge2.id);
+        const old = previousEdges.get(edge2.id);
         if (old?.originMode === "fork") {
           edge2.originMode = "fork";
           edge2.mode = old.mode;

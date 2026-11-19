@@ -193,27 +193,47 @@ dsh plugin --profile web remove dsh-flowspace
 
 ### 方式二：本地独立沙盒开发与秒级热预览
 
+可直接双击或运行仓库根目录的一体化启动与管理脚本（无需记忆繁琐命令，支持交互式控制台与快捷子命令）：
+
 ```bash
-pnpm install
-pnpm dev          # 默认端口 3190（真实模型沙盒，自动增量编译 + 双端实时 HMR）
+.\flowspace.cmd          # Windows CMD / PowerShell / 资源管理器直接双击打开交互菜单
 ```
 
-- **完全隔离全局 DSH**：`pnpm dev` 使用仓库内 `.local/flowspace` 作为独立 `$DSH_HOME`（工作区位于其中的 `workspace`），不触碰日常 `~/.dsh` 与全局复杂插件，可与电脑已安装的 DSH 同时开启。首次启动若检测到全局 `~/.dsh/.credentials.yaml` 会单向同步凭据副本（可用 `--no-sync-auth` 关闭）。
+```bash
+./flowspace.sh           # Git Bash / macOS / Linux 打开交互菜单（等价于 pnpm start）
+```
+
+也可直接一行命令启动或管理：
+
+```bash
+./flowspace.sh dev       # 启动真实模型隔离沙盒（:3190）+ 双端秒级 HMR + 自动打开画布
+```
+
+```bash
+./flowspace.sh mock      # 启动零账单模拟模型沙盒（:3191）+ 双端秒级 HMR + 自动打开画布
+```
+
+启动菜单的 **[10] 打开博物馆画布** 会在独立的 Mock 沙盒中打开预置展区。也可以运行 `./flowspace.sh museum` 或 `.\flowspace.cmd museum`。首次启动会布置全部 10 类节点、6 种内置工作流及一个可试跑的展签接续流程，后续打开继续使用 `.local/flowspace-museum` 中保存的画布。从左侧「工作流」可直接跳到各展区，「快照」中保留了初始布展。
+
+「协作展区」预置了馆长和展签核对子代理的 DSH 会话。点消息线上的气泡可查看正文与方向，双击馆长下方的子代理卡可打开原生对话。已有博物馆在下次启动时会自动加入该展区。
+
+- **完全隔离全局 DSH**：使用仓库内 `.local/flowspace`（真实模型）与 `.local/flowspace-mock`（模拟模型）作为独立 `$DSH_HOME`，不触碰日常 `~/.dsh` 与全局复杂插件，可与电脑已安装的 DSH 同时开启。首次启动若检测到全局 `~/.dsh/.credentials.yaml` 会单向同步凭据副本（可用 `--no-sync-auth` 关闭）。
 - **源码级秒级无刷新热重载（Live HMR）**：常驻监听 `packages/flowspace/src/**`——修改前端 TSX/CSS 约几十毫秒自动增量打包并通过 `client-hmr` 无刷新热替换；修改 Host 服务或 `@Remote` 协议自动通过 `dsh-hmr` 内存级热重载并自动重连画布快照流。
-- **独立沙盒多插件联调（`pnpm sandbox`）**：可在该纯净测试 DSH 中仅安装所需测试插件而不污染全局：
+- **独立沙盒多插件联调（`flowspace` / `pnpm sandbox`）**：可在该纯净测试 DSH 中仅安装所需测试插件而不污染全局：
 
 ```bash
-pnpm sandbox                              # 查看独立沙盒状态、已装插件与软链目录
-pnpm sandbox:plugin link ../other-plugin  # 软链挂载另一个本地开发的测试插件联调
-pnpm sandbox:plugin add <pkg-or-tgz>      # 在隔离沙盒中安装其他测试插件
-pnpm sandbox:plugin remove <pkg>          # 从隔离沙盒移除测试插件
-pnpm sandbox:sync-auth --force            # 重新从 ~/.dsh 单向同步模型凭据
-pnpm sandbox:reset                        # 一键清空测试会话与画布脏数据（自动备份）
+./flowspace.sh status                       # 查看双沙盒运行状态、凭据与已装测试插件
+./flowspace.sh link ../other-plugin --both  # 软链挂载另一个本地开发的插件到真实与 Mock 沙盒
+./flowspace.sh add <pkg-or-tgz> --both      # 在隔离沙盒中安装其他测试插件
+./flowspace.sh remove <pkg> --both          # 从隔离沙盒移除测试插件
+./flowspace.sh auth --force                 # 重新从 ~/.dsh 单向同步模型凭据
+./flowspace.sh reset --all --keep-plugins   # 一键备份并清空测试会话与画布脏数据
 ```
 
-- **确定性测试模型环境**：
+- **无自动弹窗后台开发命令（供编辑器或 CI 调用）**：
 
 ```bash
+pnpm dev          # 默认端口 3190（真实模型沙盒，不自动弹系统浏览器）
 pnpm dev:mock     # 默认端口 3191（独立 .local/flowspace-mock + 零账单确定性模拟模型）
 ```
 

@@ -1,17 +1,18 @@
 import assert from "node:assert/strict";
 import { copyFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { boot } from "./environment.mjs";
+import { boot, findAvailablePort } from "./environment.mjs";
 import {
   emptyDocument,
   newNode,
   newEdge,
 } from "../packages/flowspace/src/core/document.ts";
 const environmentName = `integration-${Date.now()}`;
+const integrationPort = await findAvailablePort(3192);
 const { ctx, shutdown, workspace, profile } = await boot({
   name: environmentName,
   mock: true,
-  port: 3192,
+  port: integrationPort,
 });
 const report: { name: string; passed: boolean }[] = [];
 async function until(test: () => boolean, description: string): Promise<void> {

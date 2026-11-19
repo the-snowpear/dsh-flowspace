@@ -1065,8 +1065,10 @@ export class FlowspaceService extends TypertRemoteService {
     return this.scheduler.transact(async () => {
       const sanitized = sanitizeDocumentForWire(document);
       const next = documentSchema.parse(sanitized);
+      const previousNodes = new Map(this.state.doc.nodes.map(node => [node.id, node]));
+      const previousEdges = new Map(this.state.doc.edges.map(edge => [edge.id, edge]));
       for (const node of next.nodes) {
-        const old = this.state.doc.nodes.find((n) => n.id === node.id);
+        const old = previousNodes.get(node.id);
         if (old?.sessionId) {
           node.sessionId = old.sessionId;
           node.cwd = old.cwd;
@@ -1090,7 +1092,7 @@ export class FlowspaceService extends TypertRemoteService {
         }
       }
       for (const edge of next.edges) {
-        const old = this.state.doc.edges.find((e) => e.id === edge.id);
+        const old = previousEdges.get(edge.id);
         if (old?.originMode === "fork") {
           edge.originMode = "fork";
           edge.mode = old.mode;

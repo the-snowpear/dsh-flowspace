@@ -32,11 +32,13 @@ import type { RemoteResult } from "@deepseek-ai/dsh-typert-protocol";
 import type {} from "../../lib/typert.remote-client.js";
 import type {} from "@deepseek-ai/dsh-client-locale/client";
 import { setLanguage } from "./i18n.ts";
+import { shareSnapshotValue } from "./sceneModel.ts";
 
 export { sanitizeDocumentForWire };
 
 export interface CanvasBridge {
   useSnapshot(): FlowspaceSnapshot | null;
+  useValue<T>(read: (snapshot: FlowspaceSnapshot | null) => T): T;
   connect(): () => void;
   save(doc: FlowspaceDocument): Promise<FlowspaceDocument>;
   plan(req: StartRequest): Promise<LaunchPlan>;
@@ -86,6 +88,8 @@ function value<T>(result: RemoteResult<T>): T {
 }
 export class FlowClient implements CanvasBridge {
   private snapshot: FlowspaceSnapshot | null = null;
+  private hostSnapshot: FlowspaceSnapshot | null = null;
+  private pendingPresence?: string[];
   private listeners = new Set<() => void>();
   private stream?: { dispose(): void };
   private focus?: string;
@@ -98,7 +102,10 @@ export class FlowClient implements CanvasBridge {
     ctx.effect(() =>
       ctx.locale.subscribe(() => {
         setLanguage(ctx.locale.getLocale().active);
-        if (this.snapshot) this.publish({ ...this.snapshot });
+        if (this.snapshot) {
+          this.snapshot = { ...this.snapshot };
+          this.listeners.forEach(fn => fn());
+        }
       }),
     );
     ctx.on("connection/reset", () => {
@@ -108,23 +115,25 @@ export class FlowClient implements CanvasBridge {
     });
     ctx.effect(() =>
       ctx.uiSession.sessionStatus.subscribe(() => {
-        if (this.snapshot) this.publish(this.snapshot);
+        if (this.hostSnapshot) this.publish(this.hostSnapshot);
       }),
     );
   }
-  useSnapshot = (): FlowspaceSnapshot | null =>
-    useSyncExternalStore(
-      (fn) => {
-        this.listeners.add(fn);
-        return () => this.listeners.delete(fn);
-      },
-      () => this.snapshot,
-    );
+  private subscribe = (fn: () => void) => {
+    this.listeners.add(fn);
+    return () => { this.listeners.delete(fn); };
+  };
+  useSnapshot = (): FlowspaceSnapshot | null => useSyncExternalStore(this.subscribe, () => this.snapshot);
+  useValue = <T,>(read: (snapshot: FlowspaceSnapshot | null) => T): T =>
+    useSyncExternalStore(this.subscribe, () => read(this.snapshot));
   private publish(snapshot: FlowspaceSnapshot): void {
+    snapshot = this.hostSnapshot ? shareSnapshotValue(this.hostSnapshot, snapshot) : snapshot;
+    this.hostSnapshot = snapshot;
     const statuses = this.ctx.uiSession.sessionStatus.getSnapshot();
+    const byNode = new Map(snapshot.live.map(item => [item.nodeId, item]));
     const live = snapshot.document.nodes.flatMap((node) => {
       if (!node.sessionId) return [];
-      const host = snapshot.live.find((s) => s.nodeId === node.id),
+      const host = byNode.get(node.id),
         status = statuses.get(node.sessionId as SessionId);
       return [
         {
@@ -142,7 +151,9 @@ export class FlowClient implements CanvasBridge {
         },
       ];
     });
-    this.snapshot = { ...snapshot, live };
+    const next = { ...snapshot, live: this.snapshot ? shareSnapshotValue(this.snapshot.live, live) : live };
+    if (this.snapshot && (Object.keys(next) as (keyof FlowspaceSnapshot)[]).every(key => this.snapshot![key] === next[key])) return;
+    this.snapshot = next;
     this.listeners.forEach((fn) => fn());
   }
   connect(): () => void {
@@ -356,6 +367,10 @@ export class FlowClient implements CanvasBridge {
   openCanvas(nodeId?: string): void {
     this.focus = nodeId;
     this.ctx.layout.selectPanel("flowspace" as MainPanelId);
+    if (nodeId && this.snapshot) {
+      this.snapshot = { ...this.snapshot };
+      this.listeners.forEach(fn => fn());
+    }
   }
   takeFocus(): string | undefined {
     const id = this.focus;
@@ -363,8 +378,15 @@ export class FlowClient implements CanvasBridge {
     return id;
   }
   presence(ids: string[]): void {
+    const queued = this.pendingPresence !== undefined;
+    this.pendingPresence = ids;
+    if (queued) return;
     void Promise.resolve()
-      .then(() => this.ctx.remote.flowspace.canvasPresence(ids))
+      .then(() => {
+        const latest = this.pendingPresence!;
+        this.pendingPresence = undefined;
+        return this.ctx.remote.flowspace.canvasPresence(latest);
+      })
       .then(value)
       .catch(() => {
         /* The namespace may already be withdrawn during plugin teardown. */

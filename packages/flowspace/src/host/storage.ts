@@ -98,7 +98,9 @@ const node = z.object({
   nudge: z
     .object({
       by: z.string(),
+      origX: z.number().finite().optional(),
       origY: z.number().finite().optional(),
+      origW: z.number().positive().optional(),
       origH: z.number().positive().optional(),
     })
     .optional(),
@@ -195,6 +197,7 @@ export const documentSchema: z.ZodType<FlowspaceDocument> = z.object({
     .object({
       theme: z.enum(["dark", "light", "auto"]).optional(),
       wheel: z.enum(["zoom", "pan"]).optional(),
+      wireRouting: z.enum(["avoid", "overlap"]).optional(),
       snap: z.boolean().optional(),
       filter: z.enum(["auto", "running", "3d", "7d", "all"]).optional(),
       hiddenWorkspaces: z.array(z.string()).optional(),

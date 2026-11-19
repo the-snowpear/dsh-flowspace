@@ -127,15 +127,6 @@
     background-position: -200% 0;
   }
 }
-@keyframes cv-reveal {
-  from {
-    clip-path: circle(0 at var(--tx, 50%) var(--ty, 0%));
-  }
-  to {
-    clip-path: circle(150vmax at var(--tx, 50%) var(--ty, 0%));
-  }
-}
-
 .fs-root {
   --font-ui:
     "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont,

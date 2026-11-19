@@ -18,6 +18,7 @@ export type GroupColor = "violet" | "teal" | "blue" | "amber";
 export type AgentTab = "task" | "conversation" | "execution";
 export type RerunRule = "change" | "update" | "always";
 export type VisualFilter = "auto" | "running" | "3d" | "7d" | "all";
+export type WireRoutingMode = "avoid" | "overlap";
 export type GitPanelTab = "changes" | "history" | "branches";
 
 export interface GroupPort {
@@ -51,7 +52,9 @@ export interface WindowState {
 
 export interface NodeNudge {
   by: string;
+  origX?: number;
   origY?: number;
+  origW?: number;
   origH?: number;
 }
 
@@ -170,6 +173,7 @@ export interface CanvasSnapshot {
 export interface CanvasPrefs {
   theme?: "dark" | "light" | "auto";
   wheel?: "zoom" | "pan";
+  wireRouting?: WireRoutingMode;
   snap?: boolean;
   filter?: VisualFilter;
   hiddenWorkspaces?: string[];

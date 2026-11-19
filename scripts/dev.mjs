@@ -56,20 +56,45 @@ function timestamp() {
 }
 
 async function runDevServer() {
-  const { boot, listSandboxPlugins, root } = await import("./environment.mjs");
+  const {
+    boot,
+    listSandboxPlugins,
+    writeSandboxRuntime,
+    clearSandboxRuntime,
+    openSystemBrowser,
+    canBindPort,
+    findAvailablePort,
+    museumSandbox,
+    museumPort,
+  } = await import("./environment.mjs");
   const { createIncrementalBuilder, pkg } = await import("./compiler.mjs");
 
   const argv = process.argv.slice(2);
-  const mock = argv.includes("--mock");
+  const museum = argv.includes("--museum");
+  const mock = museum || argv.includes("--mock");
   const noWatch = argv.includes("--no-watch");
+  const shouldOpen =
+    (argv.includes("--open") || argv.includes("--open-chat")) &&
+    !argv.includes("--no-open");
+  const openChat = argv.includes("--open-chat");
   const syncCredentials = !argv.includes("--no-sync-auth");
   const explicitPort = readFlagValue(argv, "--port") ?? process.env.PORT;
-  const port = Number(explicitPort) || (mock ? 3191 : 3190);
+  let port = Number(explicitPort) || (museum ? museumPort : mock ? 3191 : 3190);
+  if (!explicitPort) {
+    const bindCheck = await canBindPort(port);
+    if (!bindCheck.ok) {
+      const nextPort = await findAvailablePort(port + 1);
+      console.warn(
+        `[${timestamp()}] [Port] Port ${port} unavailable (${bindCheck.code}); switching to ${nextPort}`,
+      );
+      port = nextPort;
+    }
+  }
   const explicitSandbox =
     readFlagValue(argv, "--sandbox") ?? process.env.FLOWSPACE_SANDBOX;
 
   const profileKey =
-    explicitSandbox ||
+    (museum ? museumSandbox : explicitSandbox) ||
     (port !== 3191 && port !== 3190
       ? `${mock ? "flowspace-mock" : "flowspace"}-${port}`
       : mock
@@ -88,6 +113,35 @@ async function runDevServer() {
     port,
     syncCredentials,
   });
+  if (museum) {
+    try {
+      const { prepareMuseum } = await import("./museum-native.mjs");
+      await prepareMuseum(result);
+    } catch (error) {
+      console.error(`[Museum] ${formatError(error)}`);
+      await builder.dispose();
+      await result.shutdown.shutdown(1);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  const baseUrl =
+    result.ctx.get?.("webApp")?.getAdvertisedUrl?.() ??
+    `http://127.0.0.1:${port}`;
+  const authenticatedUrl =
+    result.ctx.get?.("connection")?.authenticatedUrl?.(baseUrl) ?? baseUrl;
+  const canvasUrl = `${authenticatedUrl}#flowspace`;
+
+  await writeSandboxRuntime(profileKey, {
+    pid: process.pid,
+    port,
+    mock,
+    sandbox: profileKey,
+    url: authenticatedUrl,
+    canvasUrl,
+    startedAt: new Date().toISOString(),
+  });
 
   const sandboxInfo = await listSandboxPlugins(result.profile);
   const extraBundles = sandboxInfo.bundles.filter(
@@ -100,24 +154,42 @@ async function runDevServer() {
   console.log(
     [
       "",
-      `FlowSpace isolated DSH dev server ready (${mock ? "simulated model" : "real model"}):`,
-      `  Preview URL  : http://127.0.0.1:${port}`,
+      `FlowSpace isolated DSH dev server ready (${museum ? "museum" : mock ? "simulated model" : "real model"}):`,
+      `  Canvas URL   : ${canvasUrl}`,
+      `  Web Root URL : ${authenticatedUrl}`,
       `  Sandbox Home : ${result.home}`,
       `  Workspace    : ${result.workspace}`,
-      `  Extra Plugins: ${extraBundles.length ? extraBundles.join(", ") : "(none — use `pnpm sandbox:plugin` to add)"}`,
+      `  Extra Plugins: ${extraBundles.length ? extraBundles.join(", ") : "(none — use `flowspace link <dir>` or `pnpm sandbox:plugin` to add)"}`,
       `  Live HMR     : ${noWatch ? "disabled (--no-watch)" : "watching packages/flowspace/src (Client + Host + RPC)"}`,
+      `  Stop Server  : Press Ctrl+C`,
       "",
     ].join("\n"),
   );
+
+  if (shouldOpen) {
+    const targetUrl = openChat ? authenticatedUrl : canvasUrl;
+    const opened = await openSystemBrowser(targetUrl);
+    if (opened) {
+      console.log(`[${timestamp()}] [Open] Opened browser -> ${targetUrl}`);
+    } else {
+      console.warn(
+        `[${timestamp()}] [Open] Could not launch browser automatically. Open manually: ${targetUrl}`,
+      );
+    }
+  }
 
   let shuttingDown = false;
   const cleanShutdown = async (code = 0) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    await clearSandboxRuntime(profileKey);
     await builder.dispose();
     await result.shutdown.shutdown(code);
   };
 
+  process.on("exit", () => {
+    void clearSandboxRuntime(profileKey);
+  });
   process.on("SIGINT", () => {
     void cleanShutdown(0);
   });

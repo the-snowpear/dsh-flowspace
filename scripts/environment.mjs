@@ -11,12 +11,16 @@ import {
   rm,
 } from "node:fs/promises";
 import { homedir } from "node:os";
+import { createConnection, createServer } from "node:net";
+import { spawn } from "node:child_process";
 import { resolve, join } from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 
 export const root = resolve(import.meta.dirname, "..");
 export const defaultPackageDir = resolve(root, "packages/flowspace");
+export const museumSandbox = "flowspace-museum";
+export const museumPort = 3194;
 export const dshCliEntry = createRequire(import.meta.url).resolve(
   "@deepseek-ai/dsh/lib/bin.js",
 );
@@ -32,7 +36,135 @@ export function resolveSandboxPaths(name = "flowspace") {
   const home = resolve(root, ".local", name);
   const profile = join(home, "profiles", "flowspace");
   const workspace = join(home, "workspace");
-  return { home, profile, workspace };
+  const runtimeFile = join(home, "runtime.json");
+  return { home, profile, workspace, runtimeFile };
+}
+
+export function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === "EPERM";
+  }
+}
+
+export function probePort(port, host = "127.0.0.1", timeoutMs = 450) {
+  return new Promise((resolveProbe) => {
+    const socket = createConnection({ port: Number(port), host });
+    let settled = false;
+    const finish = (alive) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolveProbe(alive);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+  });
+}
+
+export function canBindPort(port, host = "127.0.0.1") {
+  return new Promise((resolveBind) => {
+    const server = createServer();
+    server.once("error", (err) => {
+      resolveBind({ ok: false, code: err?.code || "ERROR" });
+    });
+    server.listen(Number(port), host, () => {
+      server.close(() => resolveBind({ ok: true, code: null }));
+    });
+  });
+}
+
+export async function findAvailablePort(
+  startPort,
+  host = "127.0.0.1",
+  maxTries = 100,
+) {
+  for (let offset = 0; offset < maxTries; offset++) {
+    const candidate = Number(startPort) + offset;
+    const bindCheck = await canBindPort(candidate, host);
+    if (bindCheck.ok) {
+      return candidate;
+    }
+  }
+  throw new Error(
+    `No bindable port found between ${startPort} and ${Number(startPort) + maxTries - 1}`,
+  );
+}
+
+export async function readSandboxRuntime(name = "flowspace") {
+  const { runtimeFile } = resolveSandboxPaths(name);
+  if (!(await exists(runtimeFile))) return null;
+  try {
+    const data = JSON.parse(await readFile(runtimeFile, "utf8"));
+    const pidOk = isPidAlive(data?.pid);
+    const portOk = data?.port ? await probePort(data.port) : false;
+    if (pidOk && portOk) {
+      return data;
+    }
+    await rm(runtimeFile, { force: true }).catch(() => {});
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function writeSandboxRuntime(name, payload) {
+  const { home, runtimeFile } = resolveSandboxPaths(name);
+  await mkdir(home, { recursive: true });
+  await writeFile(runtimeFile, JSON.stringify(payload, null, 2) + "\n", {
+    mode: 0o600,
+  });
+}
+
+export async function clearSandboxRuntime(name, expectedPid = process.pid) {
+  const { runtimeFile } = resolveSandboxPaths(name);
+  try {
+    const raw = await readFile(runtimeFile, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!expectedPid || parsed?.pid === expectedPid) {
+      await rm(runtimeFile, { force: true });
+    }
+  } catch {}
+}
+
+export async function openSystemBrowser(url) {
+  try {
+    const webApp = await runtimeImport("@deepseek-ai/dsh-web-app");
+    if (typeof webApp?.internals?.openBrowser === "function") {
+      await webApp.internals.openBrowser(url);
+      return true;
+    }
+  } catch {}
+
+  return new Promise((resolveOpen) => {
+    const [cmd, args] =
+      process.platform === "win32"
+        ? [
+            "powershell.exe",
+            [
+              "-NoProfile",
+              "-NonInteractive",
+              "-Command",
+              "Start-Process $args[0]",
+              url,
+            ],
+          ]
+        : process.platform === "darwin"
+          ? ["open", [url]]
+          : ["xdg-open", [url]];
+
+    const child = spawn(cmd, args, {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.once("error", () => resolveOpen(false));
+    child.once("close", (code) => resolveOpen(code === 0));
+  });
 }
 
 async function exists(target) {

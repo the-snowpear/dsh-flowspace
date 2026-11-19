@@ -1,4 +1,7 @@
 import {
+  createContext,
+  memo,
+  useContext,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -7,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { flushSync } from "react-dom";
 import type { SessionReference } from "@deepseek-ai/dsh-api-session-controller/client";
 import type {
   AgentTab,
@@ -15,9 +19,7 @@ import type {
   CanvasSnapshot,
   FlowEdge,
   FlowNode,
-  FlowToken,
   FlowspaceDocument,
-  FlowspaceRun,
   FlowspaceSnapshot,
   GroupPort,
   LaunchPlan,
@@ -54,6 +56,7 @@ import {
   easeView,
   endpoint,
   exchangeRoute,
+  expandedGroupBox,
   fit,
   giveRoomBack,
   groupBox,
@@ -63,12 +66,17 @@ import {
   makeRoom,
   nodeBox,
   portY,
-  route,
   toWorld,
   zoomAt,
   type Box,
   type HubSatelliteItem,
 } from "./geometry.ts";
+import { DEFAULT_WIRE_ROUTING, insertWireWaypoint, route } from "./wireRouting.ts";
+import { startThemeTransition } from "./themeTransition.ts";
+import { pathExtent, pathTouches, SceneWires } from "./sceneWires.ts";
+import { StructureWireLayer } from "./StructureWireLayer.tsx";
+import { paintLayer, settleLayer } from "./cameraFrame.ts";
+import { applyGeometry, byId, encloses, indexEdges, indexNodes, intersects, padded, runtimeIndex, shareSnapshotValue, viewportBox, type GeometryEdit } from "./sceneModel.ts";
 import {
   allTemplates,
   buildSnapshot,
@@ -96,6 +104,7 @@ import {
   type WireDropContext,
 } from "./QuickCreateMenu.tsx";
 import { PayloadPeekPopover } from "./PayloadPeekPopover.tsx";
+import { installHostStyleGuard } from "./hostStyleGuard.ts";
 import { CanvasDialog } from "./CanvasDialog.tsx";
 import {
   alignNodes,
@@ -212,6 +221,123 @@ interface PayloadPeekState {
   anchor: { x: number; y: number };
 }
 
+/** How many times an embedded conversation retries `sessions.retain` before reporting. */
+const EMBED_RETAIN_ATTEMPTS = 6;
+/** React state follows the live viewport only after the gesture has been idle this long. */
+const VIEW_COMMIT_IDLE_MS = 160;
+/** Time constant of the eased wheel glide (smaller = snappier). */
+const WHEEL_GLIDE_TAU_MS = 72;
+/** Time constant of the momentum decay after a fling-pan. */
+const PAN_INERTIA_TAU_MS = 300;
+/** Grid layer overscan; must exceed the widest on-screen major cell (24 × 5 × 2.2 × 1.25). */
+const GRID_OVERSCAN = 360;
+/** The grid layer is re-tiled once its live scale drifts outside this band. */
+const GRID_REBASE_MIN = 0.8;
+const GRID_REBASE_MAX = 1.25;
+
+function worldTransform(v: { x: number; y: number; zoom: number }): string {
+  return `translate(${v.x}px, ${v.y}px) scale(${v.zoom})`;
+}
+
+/** Semantic-zoom text compensation, quantised so zooming does not relayout every frame. */
+function typeScaleFor(zoom: number): number {
+  return zoom < LOD_ZOOM ? Math.round(clamp(1 / zoom, 1, 2.6) * 10) / 10 : 1;
+}
+
+/** Zoom at which each grid layer's tiles were last rasterised. */
+const gridBaseZoom = new WeakMap<HTMLElement, number>();
+
+/**
+ * Moves the dot-grid layer with a pure compositor transform. While zooming, the cached
+ * tiles are scaled instead of re-tiled; they are re-rasterised crisply when the view
+ * settles (`settle`) or once the scale drifts past the rebase band.
+ */
+function applyGridFrame(
+  grid: HTMLElement,
+  v: { x: number; y: number; zoom: number },
+  settle = false,
+  mirrors: (HTMLElement | null)[] = [],
+): string {
+  let base = gridBaseZoom.get(grid);
+  const drift = base ? v.zoom / base : 0;
+  if (!base || drift < GRID_REBASE_MIN || drift > GRID_REBASE_MAX || (settle && base !== v.zoom)) {
+    base = v.zoom;
+    gridBaseZoom.set(grid, base);
+    const minor = 24 * base;
+    const major = minor * 5;
+    const size = `${major}px ${major}px, ${minor}px ${minor}px`;
+    const ga = String(clamp((base - 0.35) / 0.4, 0, 1));
+    for (const el of [grid, ...mirrors]) {
+      if (!el) continue;
+      el.style.backgroundSize = size;
+      el.style.setProperty("--ga", ga);
+    }
+  }
+  const scale = v.zoom / base;
+  const period = 24 * 5 * v.zoom;
+  const mod = (n: number) => ((n % period) + period) % period;
+  const tx = mod(v.x + GRID_OVERSCAN);
+  const ty = mod(v.y + GRID_OVERSCAN);
+  const transform =
+    scale === 1
+      ? `translate3d(${Math.round(tx)}px, ${Math.round(ty)}px, 0)`
+      : `translate3d(${tx}px, ${ty}px, 0) scale(${scale})`;
+  if (settle) {
+    grid.style.transform = transform;
+    settleLayer(grid);
+  } else paintLayer(grid, { transform });
+  return transform;
+}
+
+/** Minimap projection: world frame → map pixels, plus the live camera size. */
+type MiniFrame = {
+  x: number;
+  y: number;
+  sc: number;
+  ox: number;
+  oy: number;
+  vw: number;
+  vh: number;
+  mw: number;
+  mh: number;
+};
+
+/**
+ * The camera rectangle on the minimap, clipped to the map so a view larger than the
+ * content (or partly off it) still reads as a crisp frame instead of spilling out.
+ */
+function miniViewRect(
+  f: MiniFrame,
+  v: { x: number; y: number; zoom: number },
+): { x: number; y: number; w: number; h: number } {
+  const x0 = (-v.x / v.zoom - f.x) * f.sc + f.ox;
+  const y0 = (-v.y / v.zoom - f.y) * f.sc + f.oy;
+  const x1 = x0 + (f.vw / v.zoom) * f.sc;
+  const y1 = y0 + (f.vh / v.zoom) * f.sc;
+  const edge = 1;
+  const span = (a: number, b: number, max: number): [number, number] => {
+    let lo = clamp(a, edge, max - edge);
+    let hi = clamp(b, edge, max - edge);
+    if (hi - lo < 6) {
+      const mid = clamp((a + b) / 2, edge + 3, max - edge - 3);
+      lo = mid - 3;
+      hi = mid + 3;
+    }
+    return [lo, hi];
+  };
+  const [lx, hx] = span(x0, x1, f.mw);
+  const [ly, hy] = span(y0, y1, f.mh);
+  return { x: lx, y: ly, w: hx - lx, h: hy - ly };
+}
+
+/** Cursor-light follow constants: the lens tracks tightly, the halo trails like liquid. */
+const CURSOR_LENS_TAU_MS = 34;
+const CURSOR_HALO_TAU_MS = 120;
+const CURSOR_LENS_R = 150;
+const CURSOR_HALO_R = 280;
+
+const SessionOnCanvas = createContext(true);
+
 function EmbeddedSession({
   node,
   bridge,
@@ -229,21 +355,50 @@ function EmbeddedSession({
   onPresenceChange: (sessionId: string, mounted: boolean) => void;
 }) {
   const [reference, setReference] = useState<SessionReference>();
+  const [retained, setRetained] = useState<string>();
+  const present = useContext(SessionOnCanvas);
+  useLayoutEffect(() => {
+    if (!present || !retained || retained !== node.sessionId) return;
+    onPresenceChange(retained, true);
+    return () => onPresenceChange(retained, false);
+  }, [retained, node.sessionId, present, onPresenceChange]);
   useEffect(() => {
     if (!node.sessionId) return;
     const sid = node.sessionId;
-    onPresenceChange(sid, true);
-    const ref = bridge.retain(node);
     let active = true;
-    ref.ready
-      .then(() => {
-        if (active) setReference(ref);
-      })
-      .catch(onError);
+    let ref: SessionReference | undefined;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+    const acquire = () => {
+      if (!active) return;
+      try {
+        ref = bridge.retain(node);
+      } catch (err) {
+        // Right after a reload the host may not have listed this session yet, and
+        // `retain` throws synchronously. Retry briefly instead of letting the throw
+        // unmount the whole canvas slot; report only if it never resolves.
+        if (++attempt < EMBED_RETAIN_ATTEMPTS) {
+          retryTimer = setTimeout(acquire, 250 * attempt);
+        } else {
+          onError(err);
+        }
+        return;
+      }
+      setRetained(sid);
+      const acquired = ref;
+      acquired.ready
+        .then(() => {
+          if (active) setReference(acquired);
+        })
+        .catch(onError);
+    };
+    acquire();
     return () => {
       active = false;
-      onPresenceChange(sid, false);
-      ref.release();
+      clearTimeout(retryTimer);
+      if (ref) {
+        ref.release();
+      }
     };
   }, [bridge, node.sessionId]);
 
@@ -253,6 +408,78 @@ function EmbeddedSession({
     <div className="fs-loading">{t("openingConversation")}</div>
   );
 }
+
+type CardRenderer = (node: FlowNode, placement: "canvas" | "window" | "conversation", snapshot: FlowspaceSnapshot | null) => ReactNode;
+
+function useCardActions<T extends Record<string, (...args: never[]) => unknown>>(actions: T): T {
+  const latest = useRef(actions);
+  useLayoutEffect(() => { latest.current = actions; });
+  return useMemo(() => Object.fromEntries(Object.keys(actions).map(key =>
+    [key, (...args: never[]) => latest.current[key](...args)],
+  )) as T, []);
+}
+
+function CardBody({ compact, preserve, full, summary }: {
+  compact: boolean; preserve: boolean; full: () => ReactNode; summary: () => ReactNode;
+}) {
+  const previous = useRef<ReactNode>(null);
+  if (!compact) previous.current = full();
+  else if (!preserve) previous.current = null;
+  return <>
+    {(previous.current != null || !compact) && <div key="full" className="node-body" hidden={compact}>
+      <SessionOnCanvas.Provider value={!compact}>{previous.current}</SessionOnCanvas.Provider>
+    </div>}
+    {(compact || preserve) && <div key="compact" className="node-body" hidden={!compact}>{summary()}</div>}
+  </>;
+}
+
+const ViewportCard = memo(function ViewportCard({ node, visible, compact, render, snapshot }: {
+  node: FlowNode; visible: boolean; compact: boolean; render: CardRenderer; snapshot: FlowspaceSnapshot | null; incoming?: FlowEdge[];
+}) {
+  const slot = useRef<HTMLDivElement>(null);
+  const scroll = useRef(new Map<string, number>());
+  const keepMounted = node.expanded && (Boolean(node.sessionId) || ["git", "changes", "terminal"].includes(node.kind));
+  useLayoutEffect(() => {
+    if (!visible || !scroll.current.size || !slot.current) return;
+    for (const element of Array.from(slot.current.querySelectorAll<HTMLElement>(".node-scroll,textarea"))) {
+      const value = scroll.current.get(element.className);
+      if (value) element.scrollTop = value;
+    }
+  }, [visible, compact]);
+  if (!visible && !keepMounted) return null;
+  return <div className="fs-card-slot" ref={slot} hidden={!visible} onScrollCapture={event => {
+    const element = event.target as HTMLElement;
+    if (element.matches(".node-scroll,textarea")) scroll.current.set(element.className, element.scrollTop);
+  }}>{render(node, "canvas", snapshot)}</div>;
+}, (before, after) => {
+  if (before.node !== after.node || before.visible !== after.visible || before.compact !== after.compact ||
+    before.render !== after.render || before.incoming !== after.incoming) return false;
+  if (before.snapshot === after.snapshot) return true;
+  const node = after.node;
+  if (node.kind === "changes") return before.snapshot?.live === after.snapshot?.live;
+  const old = runtimeIndex(before.snapshot), current = runtimeIndex(after.snapshot);
+  const sameNode = (id: string) => {
+    if (old.live.get(id) !== current.live.get(id) || old.statuses.get(id) !== current.statuses.get(id)) return false;
+    if (before.snapshot?.runs === after.snapshot?.runs) return true;
+    const steps = old.steps.get(id), next = current.steps.get(id);
+    return steps?.length === next?.length && (!steps || steps.every((step, index) => step === next?.[index])) &&
+      !old.waiting.has(id) && !current.waiting.has(id);
+  };
+  return sameNode(node.id) && (!node.sourceNodeId || sameNode(node.sourceNodeId)) &&
+    (node.kind !== "agent" || ((!after.incoming?.some(edge => edge.kind === "reference" &&
+      before.snapshot?.sourceVersions?.[edge.source] !== after.snapshot?.sourceVersions?.[edge.source])) &&
+      before.snapshot?.subagents === after.snapshot?.subagents));
+});
+
+const MiniMapNodes = memo(function MiniMapNodes({ boxes, snapshot, x, y, scale, offsetX, offsetY }: {
+  boxes: { n: FlowNode; b: Box }[]; snapshot: FlowspaceSnapshot | null; x: number; y: number; scale: number; offsetX: number; offsetY: number;
+}) {
+  return <>{boxes.map(({ n, b }) =>
+    <rect key={n.id} className={`mini-node mini-${n.kind === "agent" ? nodeStatusOf(snapshot, n.id) : n.kind}`}
+      x={(b.x - x) * scale + offsetX} y={(b.y - y) * scale + offsetY}
+      width={Math.max(2, b.w * scale)} height={Math.max(2, b.h * scale)} rx={1.8} />,
+  )}</>;
+});
 
 export function CanvasApp({
   bridge,
@@ -265,11 +492,21 @@ export function CanvasApp({
   ) => ReactNode;
 }) {
   const snapshot = bridge.useSnapshot();
-  const [, setLangTick] = useState(0);
+  const [languageRevision, setLangTick] = useState(0);
   useEffect(() => subscribeLanguage(() => setLangTick((v) => v + 1)), []);
+  // Neutralise a host `:has()` rule that makes every canvas DOM change restyle the canvas.
+  useEffect(() => installHostStyleGuard(), []);
 
-  const [doc, setDoc] = useState<FlowspaceDocument>(emptyDocument);
-  const docRef = useRef(doc);
+  const [baseDoc, setDoc] = useState<FlowspaceDocument>(emptyDocument);
+  const [gesture, setGesture] = useState<GeometryEdit | null>(null);
+  const gestureRef = useRef<GeometryEdit | null>(null);
+  const doc = useMemo(() => applyGeometry(baseDoc, gesture), [baseDoc, gesture]);
+  const { nodesById, collapsed, membersOf } = useMemo(() => indexNodes(doc.nodes), [doc.nodes]);
+  const edgeIndex = useMemo(() => indexEdges(doc.edges), [doc.edges]);
+  const endpointIndex = useMemo(() => ({ nodes: nodesById, ancestors: collapsed, ports: new Map<string, GroupPort[]>() }), [nodesById, collapsed, doc.edges]);
+  const runtime = runtimeIndex(snapshot);
+  const docRef = useRef(baseDoc);
+  const graphDocument = useMemo(() => doc, [doc.nodes, doc.edges]);
   const dirty = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>();
   const savingPromise = useRef<Promise<unknown>>(Promise.resolve());
@@ -297,7 +534,8 @@ export function CanvasApp({
     "events",
   );
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // The canvas opens full-bleed; the library / activity side panel is one click away.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [minimapOpen, setMinimapOpen] = useState(true);
   const [tool, setTool] = useState<"pointer" | "hand">("pointer");
@@ -422,6 +660,27 @@ export function CanvasApp({
   const importInputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const viewAnimToken = useRef(0);
+  /* Live viewport engine: pan / zoom frames write straight to the DOM (compositor-only
+     transforms) and React state is committed once the gesture settles. */
+  const worldRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const zoomLabelRef = useRef<HTMLButtonElement>(null);
+  const miniViewportRef = useRef<SVGRectElement>(null);
+  const miniFrameRef = useRef<MiniFrame | null>(null);
+  /* Cursor light: a soft halo plus a lens that lifts the grid dots near the pointer. */
+  const cursorFxRef = useRef<HTMLDivElement>(null);
+  const lensGridRef = useRef<HTMLDivElement>(null);
+  const gridTransformRef = useRef("");
+  const viewCommitTimer = useRef<ReturnType<typeof setTimeout>>();
+  const movingTimer = useRef<ReturnType<typeof setTimeout>>();
+  const committedLodRef = useRef(false);
+  const typeScaleRef = useRef(1);
+  const typeElements = useRef<HTMLElement[]>([]);
+  const wheelTargetRef = useRef<{
+    view: { x: number; y: number; zoom: number };
+    anchor: { x: number; y: number };
+  } | null>(null);
+  const wheelRafRef = useRef(0);
   const mountedSessionsRef = useRef(new Map<string, number>());
   const autoSwitchedSteps = useRef(new Set<string>());
   const sidebarAutoAdjusted = useRef(false);
@@ -578,19 +837,8 @@ export function CanvasApp({
     [bridge, reportError],
   );
 
-  const edit = useCallback(
-    (
-      mutator: (d: FlowspaceDocument) => void,
-      options: { remember?: boolean; delay?: number } = {},
-    ) => {
-      const { remember = true, delay = 450 } = options;
-      const prev = docRef.current;
-      const next = structuredClone(prev);
-      if (remember) {
-        setHistory((h) => [...h.slice(-39), prev]);
-        setFuture([]);
-      }
-      mutator(next);
+  const commitEdit = useCallback(
+    (next: FlowspaceDocument, delay = 450) => {
       revision.current++;
       docRef.current = next;
       setDoc(next);
@@ -604,19 +852,40 @@ export function CanvasApp({
     [flush, reportError],
   );
 
+  const edit = useCallback(
+    (
+      mutator: (d: FlowspaceDocument) => void,
+      options: { remember?: boolean; delay?: number } = {},
+    ) => {
+      const { remember = true, delay = 450 } = options;
+      const prev = docRef.current;
+      const next = structuredClone(prev);
+      if (remember) {
+        setHistory((h) => [...h.slice(-39), prev]);
+        setFuture([]);
+      }
+      mutator(next);
+      commitEdit(next, delay);
+    },
+    [commitEdit],
+  );
+
   /* Sync incoming Host snapshots */
+  const lastHostDoc = useRef<FlowspaceDocument>();
   useEffect(() => {
     if (!snapshot) return;
-    if (!dirty.current) {
+    if (lastHostDoc.current !== snapshot.document && !dirty.current) {
       docRef.current = snapshot.document;
       setDoc(snapshot.document);
-    } else {
+    } else if (lastHostDoc.current !== snapshot.document) {
+      const hostNodes = byId(snapshot.document.nodes);
+      const hostEdges = byId(snapshot.document.edges);
       const merged: FlowspaceDocument = {
         ...docRef.current,
         nodes: docRef.current.nodes.map((n) => {
-          const host = snapshot.document.nodes.find((x) => x.id === n.id);
+          const host = hostNodes.get(n.id);
           if (!host) return n;
-          return {
+          return shareSnapshotValue(n, {
             ...n,
             ...(host.sessionId ? { sessionId: host.sessionId } : {}),
             ...(host.lastSubmittedTask !== undefined
@@ -627,11 +896,12 @@ export function CanvasApp({
             host.text
               ? { text: host.text, sourceSeq: host.sourceSeq }
               : {}),
-          };
+          });
         }),
         edges: docRef.current.edges.map((e) => {
-          const hostEdge = snapshot.document.edges.find((x) => x.id === e.id);
+          const hostEdge = hostEdges.get(e.id);
           if (!hostEdge) return e;
+          if (e.sentVersion === hostEdge.sentVersion && e.originMode === (hostEdge.originMode ?? e.originMode)) return e;
           return {
             ...e,
             sentVersion: hostEdge.sentVersion,
@@ -639,9 +909,11 @@ export function CanvasApp({
           };
         }),
       };
-      docRef.current = merged;
-      setDoc(merged);
+      const next = shareSnapshotValue(docRef.current, merged);
+      docRef.current = next;
+      setDoc(next);
     }
+    lastHostDoc.current = snapshot.document;
     if (!initialized.current) {
       initialized.current = true;
       const d = snapshot.document;
@@ -670,7 +942,8 @@ export function CanvasApp({
       }
     }
 
-    /* Auto-switch newly started Agent steps to Conversation tab so live stream is visible */
+    /* Auto-switch newly started Agent steps to Conversation tab so live stream is visible
+       (the wider live-chat card then makes room via the intrinsic-size reflow below) */
     for (const run of snapshot.runs) {
       if (run.state !== "running") continue;
       for (const step of run.steps) {
@@ -694,15 +967,56 @@ export function CanvasApp({
     }
   }, [snapshot, edit]);
 
+  /* Intrinsic-size reflow: when an expanded card grows on its own (live chat tab, a
+     session binding, …) it pushes the neighbours it would cover; when it shrinks back
+     they return. Manual resizes and first sightings (page load) never move anything. */
+  const intrinsicSizes = useRef(
+    new Map<string, { w: number; h: number; mw: number; mh: number }>(),
+  );
+  useEffect(() => {
+    const seen = new Set<string>();
+    const grown: string[] = [];
+    const shrunk: string[] = [];
+    for (const n of doc.nodes) {
+      if (n.kind === "group" || n.window || !n.expanded) continue;
+      seen.add(n.id);
+      const b = nodeBox(n, false, true);
+      const next = { w: b.w, h: b.h, mw: n.width || 0, mh: n.height || 0 };
+      const prev = intrinsicSizes.current.get(n.id);
+      intrinsicSizes.current.set(n.id, next);
+      if (!prev || prev.mw !== next.mw || prev.mh !== next.mh) continue;
+      if (next.w > prev.w + 1 || next.h > prev.h + 1) grown.push(n.id);
+      else if (next.w < prev.w - 1 || next.h < prev.h - 1) shrunk.push(n.id);
+    }
+    for (const id of intrinsicSizes.current.keys()) {
+      if (!seen.has(id)) intrinsicSizes.current.delete(id);
+    }
+    if (!grown.length && !shrunk.length) return;
+    edit(
+      (d) => {
+        for (const id of shrunk) {
+          const n = d.nodes.find((x) => x.id === id);
+          if (n) giveRoomBack(d, n);
+        }
+        for (const id of grown) {
+          const n = d.nodes.find((x) => x.id === id);
+          if (n) makeRoom(d, n);
+        }
+      },
+      { remember: false },
+    );
+  }, [doc.nodes, edit]);
+
   const prefs = useMemo(
     () => ({
       theme: doc.prefs?.theme ?? "auto",
       wheel: doc.prefs?.wheel ?? "zoom",
+      wireRouting: doc.prefs?.wireRouting ?? DEFAULT_WIRE_ROUTING,
       snap: doc.prefs?.snap ?? true,
       filter: doc.prefs?.filter ?? "all",
       hiddenWorkspaces: doc.prefs?.hiddenWorkspaces ?? [],
-      showBranches: doc.prefs?.showBranches ?? false,
-      showWorktrees: doc.prefs?.showWorktrees ?? false,
+      showBranches: doc.prefs?.showBranches ?? true,
+      showWorktrees: doc.prefs?.showWorktrees ?? true,
     }),
     [doc.prefs],
   );
@@ -712,23 +1026,280 @@ export function CanvasApp({
   const reducedMotion = doc.settings.reducedMotion || sysReducedMotion;
   const view = doc.viewport;
   const lod = view.zoom < LOD_ZOOM;
+  committedLodRef.current = lod;
+  const paintAreaRef = useRef<Box>(padded(viewportBox(view, vpSize), 128 / view.zoom));
+  const paintArea = useMemo(() => {
+    const viewport = viewportBox(view, vpSize);
+    const old = paintAreaRef.current;
+    return encloses(old, viewport) && old.w < viewport.w * 1.45 && old.h < viewport.h * 1.65
+      ? old : padded(viewport, 96 / view.zoom);
+  }, [view, vpSize]);
+  useLayoutEffect(() => { paintAreaRef.current = paintArea; }, [paintArea]);
 
-  /* Smooth Viewport Animation */
+  /* ---------- Cursor light ----------
+     Two compositor layers under the world: a wide halo that trails the pointer like
+     liquid, and a tight lens that lifts and tints the grid dots right under it. All
+     motion is transform-only and runs in its own rAF loop, so it never touches React. */
+  const reducedMotionRef = useRef(reducedMotion);
+  reducedMotionRef.current = reducedMotion;
+  const cursorHaloRef = useRef<HTMLDivElement>(null);
+  const cursorLensRef = useRef<HTMLDivElement>(null);
+  const cursorFx = useRef({ tx: 0, ty: 0, lx: 0, ly: 0, hx: 0, hy: 0, raf: 0, last: 0, primed: false });
+
+  /* The lens carries its own copy of the grid, counter-moved so its dots sit exactly on
+     the real ones: lens offset cancels out, leaving the live grid transform. */
+  const paintCursorLensGrid = useCallback(() => {
+    const lensGrid = lensGridRef.current;
+    if (!lensGrid) return;
+    const s = cursorFx.current;
+    lensGrid.style.transform = `translate3d(${CURSOR_LENS_R - s.lx}px, ${CURSOR_LENS_R - s.ly}px, 0) ${gridTransformRef.current}`;
+  }, []);
+
+  const stepCursorFx = useCallback(
+    (now: number) => {
+      const s = cursorFx.current;
+      const halo = cursorHaloRef.current;
+      const lens = cursorLensRef.current;
+      if (!halo || !lens) {
+        s.raf = 0;
+        return;
+      }
+      const dt = Math.min(64, s.last ? now - s.last : 16);
+      s.last = now;
+      const still = reducedMotionRef.current;
+      const kl = still ? 1 : 1 - Math.exp(-dt / CURSOR_LENS_TAU_MS);
+      const kh = still ? 1 : 1 - Math.exp(-dt / CURSOR_HALO_TAU_MS);
+      s.lx += (s.tx - s.lx) * kl;
+      s.ly += (s.ty - s.ly) * kl;
+      s.hx += (s.tx - s.hx) * kh;
+      s.hy += (s.ty - s.hy) * kh;
+      halo.style.transform = `translate3d(${s.hx - CURSOR_HALO_R}px, ${s.hy - CURSOR_HALO_R}px, 0)`;
+      lens.style.transform = `translate3d(${s.lx - CURSOR_LENS_R}px, ${s.ly - CURSOR_LENS_R}px, 0)`;
+      paintCursorLensGrid();
+      const settled =
+        Math.abs(s.tx - s.hx) + Math.abs(s.ty - s.hy) < 0.3 &&
+        Math.abs(s.tx - s.lx) + Math.abs(s.ty - s.ly) < 0.3;
+      if (settled) {
+        s.raf = 0;
+        s.last = 0;
+      } else {
+        s.raf = requestAnimationFrame(stepCursorFx);
+      }
+    },
+    [paintCursorLensGrid],
+  );
+
+  useEffect(() => {
+    const vp = viewportRef.current;
+    const root = cursorFxRef.current;
+    if (!vp || !root) return;
+    const CHROME =
+      ".fs-canvas-controls, .fs-minimap, .fs-canvas-toolbar, .offscreen-indicator, .fs-welcome-card";
+    const BUSY =
+      ".node, .fs-struct-card, .group-header, .composite, .edge-hit, .edge-tag, .exchange-tag, .waypoint, .fs-input-satellite, .fs-hub-corridor";
+    let rect = vp.getBoundingClientRect();
+    const ro = new ResizeObserver(() => {
+      rect = vp.getBoundingClientRect();
+    });
+    ro.observe(vp);
+    const setOn = (on: boolean) => {
+      if (on === (root.dataset.on === "1")) return;
+      if (on) root.dataset.on = "1";
+      else delete root.dataset.on;
+    };
+    const onEnter = () => {
+      rect = vp.getBoundingClientRect();
+    };
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerType === "touch") return;
+      const s = cursorFx.current;
+      s.tx = ev.clientX - rect.left;
+      s.ty = ev.clientY - rect.top;
+      if (!s.primed) {
+        // Re-entering: appear under the pointer instead of sweeping in from the last exit.
+        s.primed = true;
+        s.lx = s.hx = s.tx;
+        s.ly = s.hy = s.ty;
+      }
+      setOn(!(ev.target as Element | null)?.closest?.(CHROME));
+      if (!s.raf) s.raf = requestAnimationFrame(stepCursorFx);
+    };
+    const onLeave = () => {
+      setOn(false);
+      cursorFx.current.primed = false;
+    };
+    const onDown = (ev: PointerEvent) => {
+      if (ev.button !== 0 || reducedMotionRef.current) return;
+      const target = ev.target as Element | null;
+      if (target?.closest?.(`${CHROME}, ${BUSY}`)) return;
+      const ring = document.createElement("i");
+      ring.className = "fx-ripple";
+      // `translate` (not `transform`) so the keyframed `scale` blooms about the press point.
+      ring.style.translate = `${ev.clientX - rect.left}px ${ev.clientY - rect.top}px`;
+      const drop = () => ring.remove();
+      ring.addEventListener("animationend", drop, { once: true });
+      setTimeout(drop, 1400);
+      root.appendChild(ring);
+    };
+    vp.addEventListener("pointerenter", onEnter);
+    vp.addEventListener("pointermove", onMove, { passive: true });
+    vp.addEventListener("pointerleave", onLeave);
+    vp.addEventListener("pointerdown", onDown, { passive: true });
+    return () => {
+      ro.disconnect();
+      vp.removeEventListener("pointerenter", onEnter);
+      vp.removeEventListener("pointermove", onMove);
+      vp.removeEventListener("pointerleave", onLeave);
+      vp.removeEventListener("pointerdown", onDown);
+      cancelAnimationFrame(cursorFx.current.raf);
+      cursorFx.current.raf = 0;
+    };
+  }, [stepCursorFx]);
+
+  /* Liquid-glass capsules catch a glint that follows the pointer across them. The
+     variables land on the one hovered capsule only, so the restyle stays tiny. */
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const CAPSULE = ".canvas-title, .toolbar-actions, .pointer-tools, .view-tools, .fs-minimap";
+    let lit: HTMLElement | null = null;
+    let raf = 0;
+    let px = 0;
+    let py = 0;
+    const paint = () => {
+      raf = 0;
+      if (!lit) return;
+      const r = lit.getBoundingClientRect();
+      lit.style.setProperty("--lx", `${Math.round(px - r.left)}px`);
+      lit.style.setProperty("--ly", `${Math.round(py - r.top)}px`);
+    };
+    const onMove = (ev: PointerEvent) => {
+      lit = ((ev.target as Element | null)?.closest?.(CAPSULE) as HTMLElement | null) ?? null;
+      if (!lit) return;
+      px = ev.clientX;
+      py = ev.clientY;
+      if (!raf) raf = requestAnimationFrame(paint);
+    };
+    root.addEventListener("pointermove", onMove, { passive: true });
+    return () => {
+      root.removeEventListener("pointermove", onMove);
+      cancelAnimationFrame(raf);
+    };
+  }, []);
+
+  /* Paint one viewport frame without React: world transform, grid layer, HUD readouts. */
+  const applyViewToDom = useCallback(
+    (v: { x: number; y: number; zoom: number }, settle = false) => {
+      const world = worldRef.current;
+      if (world) {
+        const transform = worldTransform(v);
+        if (settle) {
+          world.style.transform = transform;
+          settleLayer(world);
+        } else paintLayer(world, { transform });
+        const ts = typeScaleFor(v.zoom);
+        if (ts !== typeScaleRef.current) {
+          typeScaleRef.current = ts;
+          for (const element of typeElements.current) element.style.setProperty("--type-scale", String(ts));
+        }
+      }
+      const grid = gridRef.current;
+      if (grid) {
+        gridTransformRef.current = applyGridFrame(grid, v, settle, [lensGridRef.current]);
+        if (cursorFx.current.primed) paintCursorLensGrid();
+      }
+      const label = zoomLabelRef.current;
+      const pct = `${Math.round(v.zoom * 100)}%`;
+      const text = label?.firstChild;
+      if (text && text.nodeValue !== pct) text.nodeValue = pct;
+      const mini = miniFrameRef.current;
+      const miniRect = miniViewportRef.current;
+      if (mini && miniRect) {
+        const r = miniViewRect(mini, v);
+        if (settle) {
+          miniRect.setAttribute("x", String(r.x));
+          miniRect.setAttribute("y", String(r.y));
+          miniRect.setAttribute("width", String(r.w));
+          miniRect.setAttribute("height", String(r.h));
+          settleLayer(miniRect);
+        } else paintLayer(miniRect, { x: `${r.x}px`, y: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+      }
+    },
+    [paintCursorLensGrid],
+  );
+
+  /* While the view moves, promote the world to its own layer so every frame is a pure
+     compositor transform; dropping the hint afterwards re-rasterises text crisply. */
+  const markViewMoving = useCallback(() => {
+    const world = worldRef.current;
+    if (!world) return;
+    if (!world.dataset.moving) world.dataset.moving = "1";
+    clearTimeout(movingTimer.current);
+    movingTimer.current = setTimeout(() => {
+      delete world.dataset.moving;
+    }, 200);
+  }, []);
+
   const setViewportDirect = useCallback(
     (nextView: { x: number; y: number; zoom: number }, persistDelay = 500) => {
       const next = { ...docRef.current, viewport: nextView };
       revision.current++;
       docRef.current = next;
-      setDoc(next);
+      if (!dirty.current) setSaved(false);
       dirty.current = true;
-      setSaved(false);
+      applyViewToDom(nextView);
+      markViewMoving();
+      const nextLod = nextView.zoom < LOD_ZOOM;
+      clearTimeout(viewCommitTimer.current);
+      const nextBox = viewportBox(nextView, vpSize);
+      if (nextLod !== committedLodRef.current || !encloses(paintAreaRef.current, nextBox)) {
+        // Semantic-zoom flips card layouts, so React must re-render right away.
+        committedLodRef.current = nextLod;
+        setDoc(next);
+      } else {
+        viewCommitTimer.current = setTimeout(() => {
+          setDoc(docRef.current);
+        }, VIEW_COMMIT_IDLE_MS);
+      }
       clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => {
-        void flush().catch(reportError);
-      }, persistDelay);
+      saveTimer.current = setTimeout(
+        () => {
+          void flush().catch(reportError);
+        },
+        Math.max(persistDelay, VIEW_COMMIT_IDLE_MS + 120),
+      );
     },
-    [flush, reportError],
+    [applyViewToDom, markViewMoving, flush, reportError, vpSize],
   );
+
+  useEffect(
+    () => () => {
+      clearTimeout(viewCommitTimer.current);
+      clearTimeout(movingTimer.current);
+      cancelAnimationFrame(wheelRafRef.current);
+    },
+    [],
+  );
+
+  /* Keep the DOM-driven layers (grid, HUD readouts) in step with committed views too,
+     e.g. Host snapshots, undo, or the grid element mounting after a route switch. */
+  useLayoutEffect(() => {
+    applyViewToDom(docRef.current.viewport, !wheelTargetRef.current);
+  }, [applyViewToDom, view, routeName, minimapOpen]);
+  useLayoutEffect(() => {
+    if (!lod || !worldRef.current) {
+      typeElements.current = [];
+      return;
+    }
+    const elements = worldRef.current.querySelectorAll<HTMLElement>(
+      ".fs-card-slot:not([hidden]) :is(.port,.compact .node-heading strong,.compact-status .status,.compact .node-avatar),.group-header > strong",
+    );
+    typeElements.current = Array.from(elements);
+    const scale = String(typeScaleFor(docRef.current.viewport.zoom));
+    for (const element of typeElements.current) {
+      if (element.style.getPropertyValue("--type-scale") !== scale) element.style.setProperty("--type-scale", scale);
+    }
+  });
 
   const animateView = useCallback(
     (
@@ -736,12 +1307,16 @@ export function CanvasApp({
       duration = MOTION.hero,
     ) => {
       const token = ++viewAnimToken.current;
+      wheelTargetRef.current = null;
       const from = { ...docRef.current.viewport };
       if (reducedMotion || duration <= 0) {
         setViewportDirect(target, 300);
         return;
       }
       const started = performance.now();
+      // Interpolate zoom geometrically so zooming in and out feel equally paced.
+      const logFrom = Math.log(from.zoom);
+      const logTo = Math.log(target.zoom);
       const step = (now: number) => {
         if (token !== viewAnimToken.current) return;
         const frac = clamp((now - started) / duration, 0, 1);
@@ -749,12 +1324,68 @@ export function CanvasApp({
         const cur = {
           x: from.x + (target.x - from.x) * eased,
           y: from.y + (target.y - from.y) * eased,
-          zoom: from.zoom + (target.zoom - from.zoom) * eased,
+          zoom: Math.exp(logFrom + (logTo - logFrom) * eased),
         };
-        setViewportDirect(cur, frac < 1 ? 1200 : 300);
+        setViewportDirect(frac < 1 ? cur : target, frac < 1 ? 1200 : 300);
         if (frac < 1) requestAnimationFrame(step);
       };
       requestAnimationFrame(step);
+    },
+    [reducedMotion, setViewportDirect],
+  );
+
+  /* Eased wheel zoom / pan: wheel notches set a target that the view glides toward,
+     keeping the world point under the cursor pinned while the zoom settles. */
+  const glideViewTo = useCallback(
+    (
+      target: { x: number; y: number; zoom: number },
+      anchor: { x: number; y: number },
+    ) => {
+      if (reducedMotion) {
+        wheelTargetRef.current = null;
+        setViewportDirect(target, 400);
+        return;
+      }
+      wheelTargetRef.current = { view: target, anchor };
+      if (wheelRafRef.current) return;
+      let last = performance.now();
+      const tick = (now: number) => {
+        const goal = wheelTargetRef.current;
+        if (!goal) {
+          wheelRafRef.current = 0;
+          return;
+        }
+        const dt = Math.min(64, now - last);
+        last = now;
+        const k = 1 - Math.exp(-dt / WHEEL_GLIDE_TAU_MS);
+        const cur = docRef.current.viewport;
+        const t = goal.view;
+        const zoom = Math.exp(
+          Math.log(cur.zoom) + (Math.log(t.zoom) - Math.log(cur.zoom)) * k,
+        );
+        let x: number, y: number;
+        if (Math.abs(t.zoom - cur.zoom) > 1e-5) {
+          const wx = (goal.anchor.x - t.x) / t.zoom;
+          const wy = (goal.anchor.y - t.y) / t.zoom;
+          x = goal.anchor.x - wx * zoom;
+          y = goal.anchor.y - wy * zoom;
+        } else {
+          x = cur.x + (t.x - cur.x) * k;
+          y = cur.y + (t.y - cur.y) * k;
+        }
+        const settled =
+          Math.abs(t.zoom - zoom) < 1e-4 &&
+          Math.abs(t.x - x) < 0.3 &&
+          Math.abs(t.y - y) < 0.3;
+        setViewportDirect(settled ? t : { x, y, zoom }, 400);
+        if (settled) {
+          wheelTargetRef.current = null;
+          wheelRafRef.current = 0;
+          return;
+        }
+        wheelRafRef.current = requestAnimationFrame(tick);
+      };
+      wheelRafRef.current = requestAnimationFrame(tick);
     },
     [reducedMotion, setViewportDirect],
   );
@@ -787,41 +1418,20 @@ export function CanvasApp({
   }, [bridge, snapshot, fitBoxes]);
 
   /* Visibility & Waiting Helpers */
-  const waitingForNode = useCallback(
-    (nodeId: string): { run: FlowspaceRun; token: FlowToken }[] =>
-      snapshot?.runs
-        .filter((r) => ["running", "waiting", "paused"].includes(r.state))
-        .flatMap((run) =>
-          run.tokens
-            .filter(
-              (tk) =>
-                !tk.ready &&
-                !tk.consumed &&
-                !tk.dismissed &&
-                run.graph.edges.find((e) => e.id === tk.edgeId)?.target ===
-                  nodeId,
-            )
-            .map((token) => ({ run, token })),
-        ) ?? [],
-    [snapshot],
-  );
-
+  const filterSnapshot = ["all", "auto"].includes(prefs.filter) ? null : snapshot;
   const isNodeVisible = useCallback(
     (node: FlowNode | undefined, ignoreCollapse = false): boolean => {
       if (!node || node.kind === "group") return false;
       const wsKey = node.workspaceId || "__default__";
       if (prefs.hiddenWorkspaces.includes(wsKey)) return false;
-      if (!ignoreCollapse && collapsedAncestor(doc, node.id)) return false;
+      if (!ignoreCollapse && collapsed.get(node.id)) return false;
       if (node.kind === "agent" && prefs.filter !== "all") {
-        const st = nodeStatusOf(snapshot, node.id);
+        const runtime = runtimeIndex(filterSnapshot);
+        const st = nodeStatusOf(filterSnapshot, node.id);
         const active = ["running", "waiting", "queued", "input"].includes(st);
         if (prefs.filter === "running") return active;
-        const liveItem = snapshot?.live.find((l) => l.nodeId === node.id);
-        const lastStepAt =
-          snapshot?.runs
-            .flatMap((r) => r.steps)
-            .filter((s) => s.nodeId === node.id)
-            .at(-1)?.createdAt ?? 0;
+        const liveItem = runtime.live.get(node.id);
+        const lastStepAt = runtime.steps.get(node.id)?.at(-1)?.createdAt ?? 0;
         const updatedAt = Math.max(liveItem?.updatedAt ?? 0, lastStepAt);
         if (prefs.filter === "3d") {
           return (
@@ -839,21 +1449,10 @@ export function CanvasApp({
             Date.now() - updatedAt <= 7 * 86_400_000
           );
         }
-        if (prefs.filter === "auto") {
-          return (
-            active ||
-            !node.sessionId ||
-            Boolean(node.pinned) ||
-            doc.edges.some(
-              (e) => e.source === node.id || e.target === node.id,
-            ) ||
-            true
-          );
-        }
       }
       return true;
     },
-    [doc, prefs.hiddenWorkspaces, prefs.filter, snapshot],
+    [collapsed, prefs.hiddenWorkspaces, prefs.filter, filterSnapshot],
   );
 
   const visibleGroups = useMemo(
@@ -861,21 +1460,16 @@ export function CanvasApp({
       doc.nodes.filter((g) => {
         if (g.kind !== "group") return false;
         if (g.parentId) {
-          const parent = doc.nodes.find((p) => p.id === g.parentId);
+          const parent = nodesById.get(g.parentId);
           if (parent?.collapsed) return false;
         }
-        const memberIds = members(doc, g.id);
-        if (!memberIds.length) return true;
-        return memberIds.some((id) =>
-          isNodeVisible(
-            doc.nodes.find((n) => n.id === id),
-            true,
-          ),
-        );
+        const groupMembers = membersOf(g.id);
+        return !groupMembers.length || groupMembers.some(node => isNodeVisible(node, true));
       }),
-    [doc, isNodeVisible],
+    [doc.nodes, nodesById, membersOf, isNodeVisible],
   );
 
+  const previousExpanded = useRef(new Set<string>());
   const keepExpandedIds = useMemo(() => {
     const ids = new Set<string>(selection.nodes);
     if (editingNodeId) ids.add(editingNodeId);
@@ -884,8 +1478,14 @@ export function CanvasApp({
       const st = nodeStatusOf(snapshot, n.id);
       if (st === "waiting" || st === "input") ids.add(n.id);
     }
+    if (ids.size === previousExpanded.current.size && [...ids].every(id => previousExpanded.current.has(id))) return previousExpanded.current;
+    previousExpanded.current = ids;
     return ids;
   }, [selection.nodes, editingNodeId, doc.nodes, snapshot]);
+  const sceneNodes = useMemo(() => doc.nodes.filter(n => isNodeVisible(n)).map(n => ({
+    n, b: nodeBox(n, lod, Boolean(n.window) || keepExpandedIds.has(n.id)),
+  })), [doc.nodes, isNodeVisible, lod, keepExpandedIds]);
+  const focusedCard = document.activeElement?.closest("[data-node-card]")?.getAttribute("data-node-card");
 
   const waitingAgentNodes = useMemo(
     () =>
@@ -1132,6 +1732,19 @@ export function CanvasApp({
         Object.keys(changes).every((k) =>
           ["draft", "task", "text"].includes(k),
         );
+      if (changes.expanded === undefined) {
+        const prev = docRef.current;
+        const index = prev.nodes.findIndex(node => node.id === id);
+        if (index === -1) return;
+        if (!textOnly) {
+          setHistory(history => [...history.slice(-39), prev]);
+          setFuture([]);
+        }
+        const nodes = prev.nodes.slice();
+        nodes[index] = { ...nodes[index], ...changes };
+        commitEdit({ ...prev, nodes });
+        return;
+      }
       edit(
         (d) => {
           const n = d.nodes.find((x) => x.id === id);
@@ -1147,7 +1760,7 @@ export function CanvasApp({
         { remember: !textOnly },
       );
     },
-    [edit],
+    [edit, commitEdit],
   );
 
   const editEdge = useCallback(
@@ -1797,6 +2410,9 @@ export function CanvasApp({
         (d) => {
           const liveNodes = d.nodes;
           const restored = structuredClone(target);
+          if (restored.prefs?.wireRouting !== d.prefs?.wireRouting) {
+            restored.prefs = { ...restored.prefs, wireRouting: d.prefs?.wireRouting };
+          }
           Object.assign(d, restored);
           d.nodes = restored.nodes.map((n) => {
             const existing = liveNodes.find((x) => x.id === n.id);
@@ -2210,43 +2826,51 @@ export function CanvasApp({
   );
 
   /* Theme & Preferences */
+  const updatePrefs = useCallback((changes: Partial<CanvasPrefs>) => {
+    const current = docRef.current;
+    commitEdit({ ...current, prefs: { ...current.prefs, ...changes } });
+  }, [commitEdit]);
+
+  const [themeOverride, setThemeOverride] = useState<"dark" | "light">();
+  const themeTransitionRef = useRef<ReturnType<typeof startThemeTransition> | null>(null);
+  const displayedTheme = themeOverride ?? effectiveTheme;
+  const showTheme = useCallback((theme: "dark" | "light" | undefined) => {
+    flushSync(() => setThemeOverride(theme));
+  }, []);
+
+  useLayoutEffect(() => () => themeTransitionRef.current?.stop(), []);
+  useEffect(() => {
+    if (reducedMotion && themeTransitionRef.current) {
+      themeTransitionRef.current.stop();
+      setThemeOverride(undefined);
+    }
+  }, [reducedMotion]);
+
   const toggleTheme = useCallback(
-    (originEl?: HTMLElement | null) => {
-      const nextTheme: "dark" | "light" =
-        effectiveTheme === "dark" ? "light" : "dark";
-      const applyTheme = () =>
-        edit(
-          (d) => {
-            d.prefs = { ...d.prefs, theme: nextTheme };
-          },
-          { remember: false },
-        );
-      const docAny = document as Document & {
-        startViewTransition?: (cb: () => void) => { finished: Promise<void> };
-      };
-      if (!reducedMotion && docAny.startViewTransition) {
-        const rect = originEl?.getBoundingClientRect();
-        if (rect) {
-          document.documentElement.style.setProperty(
-            "--tx",
-            `${rect.left + rect.width / 2}px`,
-          );
-          document.documentElement.style.setProperty(
-            "--ty",
-            `${rect.top + rect.height / 2}px`,
+    (button: HTMLElement) => {
+      const preference = docRef.current.prefs?.theme ?? "auto";
+      const currentTheme = preference === "auto" ? (hostDark ? "dark" : "light") : preference;
+      const nextTheme = currentTheme === "dark" ? "light" : "dark";
+      const root = rootRef.current;
+      if (root && !reducedMotion && typeof document.startViewTransition === "function") {
+        const running = themeTransitionRef.current;
+        if (running) {
+          running.add(nextTheme);
+        } else {
+          setThemeOverride(currentTheme);
+          themeTransitionRef.current = startThemeTransition(
+            root,
+            button,
+            currentTheme,
+            nextTheme,
+            showTheme,
+            () => { themeTransitionRef.current = null; },
           );
         }
-        document.documentElement.dataset.themeTransition = "";
-        docAny
-          .startViewTransition(applyTheme)
-          .finished.finally(() => {
-            delete document.documentElement.dataset.themeTransition;
-          });
-      } else {
-        applyTheme();
       }
+      updatePrefs({ theme: nextTheme });
     },
-    [effectiveTheme, reducedMotion, edit],
+    [hostDark, reducedMotion, showTheme, updatePrefs],
   );
 
   /* Menus */
@@ -2753,7 +3377,23 @@ export function CanvasApp({
       onEnd?: (ev: PointerEvent | KeyboardEvent, canceled: boolean) => void,
     ) => {
       startEvent.preventDefault();
-      const move = (ev: PointerEvent) => onMove(ev);
+      let pending: PointerEvent | undefined;
+      let frame = 0;
+      let lastX = startEvent.clientX, lastY = startEvent.clientY;
+      const pointerId = startEvent.pointerId;
+      const paint = () => {
+        frame = 0;
+        if (!pending) return;
+        lastX = pending.clientX;
+        lastY = pending.clientY;
+        onMove(pending);
+        pending = undefined;
+      };
+      const move = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
+        pending = ev;
+        if (!frame) frame = requestAnimationFrame(paint);
+      };
       const up = (ev: PointerEvent) => finish(ev, false);
       const cancel = (ev: PointerEvent) => finish(ev, true);
       const key = (ev: KeyboardEvent) => {
@@ -2763,6 +3403,12 @@ export function CanvasApp({
         }
       };
       function finish(ev: PointerEvent | KeyboardEvent, canceled: boolean) {
+        if ("pointerId" in ev && ev.pointerId !== pointerId) return;
+        cancelAnimationFrame(frame);
+        if (!canceled && "clientX" in ev && (pending || ev.clientX !== lastX || ev.clientY !== lastY)) {
+          pending = ev;
+          paint();
+        }
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
         window.removeEventListener("pointercancel", cancel);
@@ -2777,6 +3423,23 @@ export function CanvasApp({
     [],
   );
 
+  const previewGeometry = useCallback((patch: GeometryEdit) => {
+    gestureRef.current = patch;
+    setGesture(patch);
+  }, []);
+  const finishGeometry = useCallback((canceled: boolean, finalize?: (next: FlowspaceDocument) => void) => {
+    const patch = gestureRef.current;
+    gestureRef.current = null;
+    setGesture(null);
+    if (canceled || !patch) return;
+    const previous = docRef.current;
+    const next = applyGeometry(previous, patch);
+    finalize?.(next);
+    setHistory(history => [...history.slice(-39), previous]);
+    setFuture([]);
+    commitEdit(next, 250);
+  }, [commitEdit]);
+
   /* Pointer Interactions: Pan, Node Drag, Group Drag, Resize, Port Wire Drag, Waypoint, Marquee */
   const startPan = useCallback(
     (ev: React.PointerEvent) => {
@@ -2784,14 +3447,23 @@ export function CanvasApp({
       const sx = ev.clientX,
         sy = ev.clientY;
       let moved = false;
-      viewAnimToken.current++;
-      setIsDragging(true);
+      const token = ++viewAnimToken.current;
+      wheelTargetRef.current = null;
+      // Recent pointer samples drive the release velocity for momentum panning.
+      const samples: { t: number; x: number; y: number }[] = [];
+      // Pan only needs the grab cursor; toggling the class directly avoids two full
+      // canvas re-renders per gesture (start + end) that `setIsDragging` would cost.
+      const vpEl = viewportRef.current;
+      vpEl?.classList.add("is-dragging");
       trackPointer(
         ev,
         (next) => {
           if (!moved && Math.hypot(next.clientX - sx, next.clientY - sy) < 3)
             return;
           moved = true;
+          const now = performance.now();
+          samples.push({ t: now, x: next.clientX, y: next.clientY });
+          while (samples.length > 2 && now - samples[0].t > 90) samples.shift();
           setViewportDirect(
             {
               x: origin.x + (next.clientX - sx),
@@ -2802,17 +3474,46 @@ export function CanvasApp({
           );
         },
         (_, canceled) => {
-          setIsDragging(false);
-          if (canceled) setViewportDirect(origin, 300);
-          else if (!moved && !spacePressed && tool !== "hand") {
-            setSelection({ nodes: [], groups: [], edge: null });
-          } else {
-            setViewportDirect(docRef.current.viewport, 250);
+          vpEl?.classList.remove("is-dragging");
+          if (canceled) {
+            setViewportDirect(origin, 300);
+            return;
           }
+          if (!moved && !spacePressed && tool !== "hand") {
+            setSelection({ nodes: [], groups: [], edge: null });
+            return;
+          }
+          const first = samples[0];
+          const lastSample = samples[samples.length - 1];
+          const span = first && lastSample ? lastSample.t - first.t : 0;
+          const releaseGap = lastSample ? performance.now() - lastSample.t : Infinity;
+          let vx = span > 8 ? (lastSample.x - first.x) / span : 0;
+          let vy = span > 8 ? (lastSample.y - first.y) / span : 0;
+          if (reducedMotion || releaseGap > 70 || Math.hypot(vx, vy) < 0.35) {
+            setViewportDirect(docRef.current.viewport, 250);
+            return;
+          }
+          // Fling: glide with exponential friction until the motion fades out.
+          let prev = performance.now();
+          const glide = (now: number) => {
+            if (token !== viewAnimToken.current) return;
+            const dt = Math.min(48, now - prev);
+            prev = now;
+            const decay = Math.exp(-dt / PAN_INERTIA_TAU_MS);
+            vx *= decay;
+            vy *= decay;
+            const cur = docRef.current.viewport;
+            setViewportDirect(
+              { x: cur.x + vx * dt, y: cur.y + vy * dt, zoom: cur.zoom },
+              400,
+            );
+            if (Math.hypot(vx, vy) > 0.02) requestAnimationFrame(glide);
+          };
+          requestAnimationFrame(glide);
         },
       );
     },
-    [trackPointer, setViewportDirect, spacePressed, tool],
+    [trackPointer, setViewportDirect, spacePressed, tool, reducedMotion],
   );
 
   const startWindowMove = useCallback(
@@ -2846,9 +3547,8 @@ export function CanvasApp({
         );
         baseY = 16;
       }
-      setHistory((h) => [...h.slice(-39), docRef.current]);
-      setFuture([]);
       let snap: "left" | "right" | "max" | null = null;
+      previewGeometry({ nodes: new Map([[nodeId, { window: { ...originWin, z: maxZ } }]]) });
       setIsDragging(true);
       trackPointer(
         ev,
@@ -2866,32 +3566,16 @@ export function CanvasApp({
                   ? "right"
                   : null;
           setSnapPreview(snap);
-          edit(
-            (d) => {
-              const target = d.nodes.find((x) => x.id === nodeId);
-              if (target?.window) {
-                target.window = {
-                  ...target.window,
-                  x: nx,
-                  y: ny,
-                  snap: undefined,
-                  z: maxZ,
-                };
-              }
-            },
-            { remember: false, delay: 900 },
-          );
+          previewGeometry({ nodes: new Map([[nodeId, { window: { ...originWin, x: nx, y: ny, snap: undefined, z: maxZ } }]]) });
         },
         (_, canceled) => {
           setIsDragging(false);
           setSnapPreview(null);
-          edit(
+          finishGeometry(canceled,
             (d) => {
               const target = d.nodes.find((x) => x.id === nodeId);
               if (!target) return;
-              if (canceled) {
-                target.window = originWin;
-              } else if (returnOnDrop) {
+              if (returnOnDrop) {
                 delete target.window;
               } else if (target.window) {
                 target.window.snap = snap ?? undefined;
@@ -2907,12 +3591,11 @@ export function CanvasApp({
                 );
               }
             },
-            { remember: false, delay: 250 },
           );
         },
       );
     },
-    [trackPointer, edit],
+    [trackPointer, previewGeometry, finishGeometry],
   );
 
   const startNodeMove = useCallback(
@@ -2971,44 +3654,18 @@ export function CanvasApp({
           if (!moved) {
             moved = true;
             setIsDragging(true);
-            setHistory((h) => [...h.slice(-39), docRef.current]);
-            setFuture([]);
           }
-          edit(
-            (d) => {
-              for (const orig of originals) {
-                const target = d.nodes.find((x) => x.id === orig.id);
-                if (target) {
-                  target.x = orig.x + dx;
-                  target.y = orig.y + dy;
-                }
-              }
-            },
-            { remember: false, delay: 900 },
-          );
+          previewGeometry({ nodes: new Map(originals.map(orig => [orig.id, { x: orig.x + dx, y: orig.y + dy }])) });
         },
         (endEv, canceled) => {
           setIsDragging(false);
           if (!moved) return;
           if (canceled) {
-            edit(
-              (d) => {
-                for (const orig of originals) {
-                  const target = d.nodes.find((x) => x.id === orig.id);
-                  if (target) {
-                    target.x = orig.x;
-                    target.y = orig.y;
-                    target.parentId = orig.parentId;
-                  }
-                }
-              },
-              { remember: false, delay: 250 },
-            );
-            setHistory((h) => h.slice(0, -1));
+            finishGeometry(true);
             return;
           }
           const noSnap = "ctrlKey" in endEv && endEv.ctrlKey;
-          edit(
+          finishGeometry(false,
             (d) => {
               const candidateGroups = d.nodes
                 .filter((g) => g.kind === "group" && !g.collapsed)
@@ -3016,6 +3673,8 @@ export function CanvasApp({
               for (const orig of originals) {
                 const target = d.nodes.find((x) => x.id === orig.id);
                 if (!target) continue;
+                // A card the user placed by hand must not be yanked back later.
+                delete target.nudge;
                 if (prefs.snap && !noSnap) {
                   target.x = Math.round(target.x / 12) * 12;
                   target.y = Math.round(target.y / 12) * 12;
@@ -3034,7 +3693,6 @@ export function CanvasApp({
                 target.parentId = hitGroup?.id;
               }
             },
-            { remember: false, delay: 250 },
           );
         },
       );
@@ -3045,7 +3703,8 @@ export function CanvasApp({
       selectNode,
       selection.nodes,
       trackPointer,
-      edit,
+      previewGeometry,
+      finishGeometry,
       prefs.snap,
     ],
   );
@@ -3086,46 +3745,17 @@ export function CanvasApp({
           if (!moved) {
             moved = true;
             setIsDragging(true);
-            setHistory((h) => [...h.slice(-39), docRef.current]);
-            setFuture([]);
           }
-          edit(
-            (d) => {
-              for (const orig of originals) {
-                const item = d.nodes.find((x) => x.id === orig.id);
-                if (item) {
-                  item.x = orig.x + dx;
-                  item.y = orig.y + dy;
-                }
-              }
-            },
-            { remember: false, delay: 900 },
-          );
+          previewGeometry({ nodes: new Map(originals.map(orig => [orig.id, { x: orig.x + dx, y: orig.y + dy }])) });
         },
         (_, canceled) => {
           setIsDragging(false);
           if (!moved) return;
-          if (canceled) {
-            edit(
-              (d) => {
-                for (const orig of originals) {
-                  const item = d.nodes.find((x) => x.id === orig.id);
-                  if (item) {
-                    item.x = orig.x;
-                    item.y = orig.y;
-                  }
-                }
-              },
-              { remember: false, delay: 250 },
-            );
-            setHistory((h) => h.slice(0, -1));
-          } else {
-            void flush().catch(reportError);
-          }
+          finishGeometry(canceled);
         },
       );
     },
-    [selectNode, trackPointer, edit, flush, reportError],
+    [selectNode, trackPointer, previewGeometry, finishGeometry],
   );
 
   const startResize = useCallback(
@@ -3146,8 +3776,6 @@ export function CanvasApp({
       const sx = ev.clientX,
         sy = ev.clientY;
       const scale = mode === "window" ? 1 : docRef.current.viewport.zoom;
-      setHistory((h) => [...h.slice(-39), docRef.current]);
-      setFuture([]);
       setIsDragging(true);
       trackPointer(
         ev,
@@ -3160,47 +3788,18 @@ export function CanvasApp({
             mode === "group" ? 180 : 220,
             initialBox.h + (next.clientY - sy) / scale,
           );
-          edit(
-            (d) => {
-              const n = d.nodes.find((x) => x.id === nodeId);
-              if (!n) return;
-              if (mode === "window" && n.window) {
-                n.window.w = nw;
-                n.window.h = nh;
-                n.window.snap = undefined;
-              } else {
-                n.width = nw;
-                n.height = nh;
-              }
-            },
-            { remember: false, delay: 900 },
-          );
+          const change = mode === "window" && target.window
+            ? { window: { ...target.window, w: nw, h: nh, snap: undefined } }
+            : { width: nw, height: nh };
+          previewGeometry({ nodes: new Map([[nodeId, change]]) });
         },
         (_, canceled) => {
           setIsDragging(false);
-          if (canceled) {
-            edit(
-              (d) => {
-                const n = d.nodes.find((x) => x.id === nodeId);
-                if (!n) return;
-                if (mode === "window" && n.window) {
-                  n.window.w = initialBox.w;
-                  n.window.h = initialBox.h;
-                } else {
-                  n.width = initialBox.w;
-                  n.height = initialBox.h;
-                }
-              },
-              { remember: false, delay: 250 },
-            );
-            setHistory((h) => h.slice(0, -1));
-          } else {
-            void flush().catch(reportError);
-          }
+          finishGeometry(canceled);
         },
       );
     },
-    [trackPointer, edit, flush, reportError],
+    [trackPointer, previewGeometry, finishGeometry],
   );
 
   const openInputHub = useCallback(
@@ -3360,7 +3959,7 @@ export function CanvasApp({
           if (d <= snapRadius && (!best || d < best.dist)) {
             best = { dist: d, nodeIds: [n.id], point: pt, label: n.title };
           }
-        } else if (n.kind === "group" && n.collapsed && isNodeVisible(n)) {
+        } else if (n.kind === "group" && n.collapsed && visibleGroups.some((group) => group.id === n.id)) {
           const gPorts = inferGroupPorts(curDoc, n).filter(
             (p) => !p.hidden && p.direction === "in" && p.kind === kind,
           );
@@ -3471,7 +4070,7 @@ export function CanvasApp({
 
       return { current: rawWorld, snappedTarget: null };
     },
-    [isNodeVisible, lod, keepExpandedIds],
+    [isNodeVisible, visibleGroups, lod, keepExpandedIds],
   );
 
   const startPortDrag = useCallback(
@@ -3739,8 +4338,6 @@ export function CanvasApp({
         ? { ...edge.waypoints[wpIndex] }
         : null;
       if (!vpRect || !origWp) return;
-      setHistory((h) => [...h.slice(-39), docRef.current]);
-      setFuture([]);
       setIsDragging(true);
       trackPointer(
         ev,
@@ -3751,36 +4348,16 @@ export function CanvasApp({
             next.clientX,
             next.clientY,
           );
-          edit(
-            (d) => {
-              const target = d.edges.find((x) => x.id === edgeId);
-              if (target?.waypoints?.[wpIndex]) {
-                target.waypoints[wpIndex] = pt;
-              }
-            },
-            { remember: false, delay: 900 },
-          );
+          const waypoints = edge!.waypoints!.map((waypoint, index) => index === wpIndex ? pt : waypoint);
+          previewGeometry({ edge: { id: edgeId, waypoints } });
         },
         (_, canceled) => {
           setIsDragging(false);
-          if (canceled) {
-            edit(
-              (d) => {
-                const target = d.edges.find((x) => x.id === edgeId);
-                if (target?.waypoints?.[wpIndex]) {
-                  target.waypoints[wpIndex] = origWp;
-                }
-              },
-              { remember: false, delay: 250 },
-            );
-            setHistory((h) => h.slice(0, -1));
-          } else {
-            void flush().catch(reportError);
-          }
+          finishGeometry(canceled);
         },
       );
     },
-    [trackPointer, edit, flush, reportError],
+    [trackPointer, previewGeometry, finishGeometry],
   );
 
   const startMarquee = useCallback(
@@ -4177,23 +4754,27 @@ export function CanvasApp({
       if (!ev.ctrlKey && target?.closest(".node.full")) return;
       ev.preventDefault();
       viewAnimToken.current++;
-      const cur = docRef.current.viewport;
+      // Accumulate onto the pending glide target so fast notches never lose distance.
+      const base = wheelTargetRef.current?.view ?? docRef.current.viewport;
+      const rect = vp.getBoundingClientRect();
+      const anchor = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
+      // Line / page delta modes (classic mouse wheels) are normalised to pixels.
+      const unit = ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? rect.height : 1;
+      const dx = ev.deltaX * unit;
+      const dy = ev.deltaY * unit;
       if (prefs.wheel === "pan" && !ev.ctrlKey) {
-        setViewportDirect(
-          { x: cur.x - ev.deltaX, y: cur.y - ev.deltaY, zoom: cur.zoom },
-          400,
-        );
+        glideViewTo({ x: base.x - dx, y: base.y - dy, zoom: base.zoom }, anchor);
       } else {
-        const factor = Math.exp(-ev.deltaY * (ev.ctrlKey ? 0.008 : 0.0018));
-        setViewportDirect(
-          zoomAt(cur, vp.getBoundingClientRect(), ev.clientX, ev.clientY, factor),
-          400,
+        const factor = Math.exp(-dy * (ev.ctrlKey ? 0.009 : 0.0019));
+        glideViewTo(
+          zoomAt(base, rect, ev.clientX, ev.clientY, factor),
+          anchor,
         );
       }
     };
     vp.addEventListener("wheel", onWheel, { passive: false });
     return () => vp.removeEventListener("wheel", onWheel);
-  }, [prefs.wheel, setViewportDirect]);
+  }, [prefs.wheel, glideViewTo]);
 
   /* Computed Read-Only Message Wires strictly from DSH Native Agent Messages (M11) */
   const exchanges = useMemo<ExchangePair[]>(() => {
@@ -4284,44 +4865,19 @@ export function CanvasApp({
     return m;
   }, [activeHubLayout]);
 
+  const routingBoxes = useMemo(
+    () => [
+      ...sceneNodes.map(item => item.b),
+      ...visibleGroups
+        .filter((group) => group.collapsed)
+        .map((group) => expandedGroupBox(graphDocument, group)),
+      ...derivedStructure.cards.map((card) => card.box),
+    ],
+    [graphDocument, sceneNodes, visibleGroups, derivedStructure.cards],
+  );
+
   /* Computed SVG Wire Geometry */
-  const svgBounds = useMemo(() => {
-    const visBoxes = [
-      ...doc.nodes
-        .filter((n) => isNodeVisible(n))
-        .map((n) => nodeBox(n, lod, keepExpandedIds.has(n.id))),
-      ...visibleGroups.map((g) => groupBox(g)),
-      ...derivedStructure.cards.map((c) => c.box),
-      ...(activeHubLayout ? [activeHubLayout.corridorBox] : []),
-      ...(connecting
-        ? [{ x: connecting.current.x - 40, y: connecting.current.y - 40, w: 80, h: 80 }]
-        : []),
-      {
-        x: -view.x / view.zoom,
-        y: -view.y / view.zoom,
-        w: vpSize.width / view.zoom,
-        h: vpSize.height / view.zoom,
-      },
-    ];
-    const b = bounds(visBoxes);
-    return {
-      x: b.x - 256,
-      y: b.y - 256,
-      w: b.w + 512,
-      h: b.h + 512,
-    };
-  }, [
-    doc.nodes,
-    isNodeVisible,
-    lod,
-    keepExpandedIds,
-    visibleGroups,
-    derivedStructure.cards,
-    activeHubLayout,
-    connecting,
-    view,
-    vpSize,
-  ]);
+  const svgBounds = paintArea;
 
   const edgeVisualState = useCallback(
     (edge: FlowEdge): string => {
@@ -4329,15 +4885,12 @@ export function CanvasApp({
         return capsuleStateOf(edge, snapshot?.sourceVersions);
       }
       if (
-        doc.nodes.find((n) => n.id === edge.target)?.participation ===
+        nodesById.get(edge.target)?.participation ===
         "bypassed"
       ) {
         return "bypassed";
       }
-      const activeTokens =
-        snapshot?.runs
-          .filter((r) => ["running", "waiting", "paused"].includes(r.state))
-          .flatMap((r) => r.tokens.filter((tk) => tk.edgeId === edge.id)) ?? [];
+      const activeTokens = runtime.tokens.get(edge.id) ?? [];
       if (
         activeTokens.some(
           (tk) => !tk.ready && !tk.consumed && !tk.dismissed && tk.boundary,
@@ -4354,23 +4907,107 @@ export function CanvasApp({
       const targetState = nodeStatusOf(snapshot, edge.target);
       if (
         targetState === "running" &&
-        snapshot?.runs.some(
-          (r) =>
-            r.state === "running" &&
-            r.tokens.some((tk) => tk.edgeId === edge.id && tk.consumed),
-        )
+        runtime.runningConsumed.has(edge.id)
       )
         return "active";
       if (
-        snapshot?.runs.some((r) =>
-          r.tokens.some((tk) => tk.edgeId === edge.id && tk.consumed),
-        )
+        runtime.consumed.has(edge.id)
       )
         return "done";
       return "idle";
     },
-    [snapshot, doc.nodes],
+    [snapshot, nodesById, runtime],
   );
+
+  const wireCaches = useMemo(() => [new SceneWires(), new SceneWires()], []);
+  const wireScene = useMemo(() => {
+    const cache = wireCaches[Number(lod)];
+    const pathIds = new Set(derivedStructure.links.map(link => link.id));
+    for (const node of doc.nodes) {
+      if (node.kind === "detail" || node.kind === "display") pathIds.add(`source:${node.id}`);
+    }
+    cache.update(routingBoxes, doc.edges, pathIds);
+    return { cache };
+  }, [wireCaches, lod, routingBoxes, doc.edges, doc.nodes, derivedStructure.links]);
+  const baseWireLayouts = useMemo(() => {
+    return graphDocument.edges.flatMap((edge) => {
+      if (
+        !isNodeVisible(nodesById.get(edge.source), true) ||
+        !isNodeVisible(nodesById.get(edge.target), true)
+      ) return [];
+
+      const evState = edgeVisualState(edge);
+      if (
+        lod &&
+        edge.kind === "reference" &&
+        selection.edge !== edge.id &&
+        !selection.nodes.includes(edge.source) &&
+        !selection.nodes.includes(edge.target) &&
+        !["active", "queued", "waiting", "boundary"].includes(evState)
+      ) return [];
+
+      const from = endpoint(graphDocument, edge.source, edge.kind, "out", lod, keepExpandedIds, endpointIndex);
+      const to = endpoint(graphDocument, edge.target, edge.kind, "in", lod, keepExpandedIds, endpointIndex);
+      if (from.groupId && from.groupId === to.groupId) return [];
+      const { geom, extent } = wireScene.cache.get(edge, from, to, prefs.wireRouting);
+      return [{ edge, from, geom, extent, evState }];
+    });
+  }, [
+    graphDocument, edgeVisualState, isNodeVisible, keepExpandedIds, lod, routingBoxes,
+    selection.edge, selection.nodes, prefs.wireRouting, nodesById, wireScene, endpointIndex,
+  ]);
+
+  const wireLayouts = useMemo(() => {
+    const wires = !hubSatByEdgeId.size ? baseWireLayouts : baseWireLayouts.map((wire) => {
+      const { edge, from } = wire;
+      const satellite = hubSatByEdgeId.get(edge.id);
+      if (!satellite) return wire;
+      const geom = route(from, satellite.wireIn, {
+        kind: edge.kind,
+        mode: prefs.wireRouting,
+        obstacles: routingBoxes,
+        waypoints: edge.waypoints,
+      });
+      return { ...wire, geom, extent: padded(pathExtent(geom.path), 72) };
+    });
+    const withLabels = padded(paintArea, 72);
+    return wires.filter(wire => wire.edge.id === selection.edge || pathTouches(wire.geom, withLabels, wire.extent));
+  }, [baseWireLayouts, hubSatByEdgeId, prefs.wireRouting, routingBoxes, paintArea, selection.edge]);
+
+  const accessoryWires = useMemo(() => {
+    const nodesById = new Map(doc.nodes.map((node) => [node.id, node]));
+    return doc.nodes.flatMap((node) => {
+      if (
+        (node.kind !== "display" && node.kind !== "detail") || !node.sourceNodeId ||
+        !isNodeVisible(node, true) || !isNodeVisible(nodesById.get(node.sourceNodeId), true)
+      ) return [];
+      const from = endpoint(graphDocument, node.sourceNodeId, "reference", "out", lod, keepExpandedIds, endpointIndex);
+      const to = endpoint(graphDocument, node.id, "reference", "in", lod, keepExpandedIds, endpointIndex);
+      if (from.groupId && from.groupId === to.groupId) return [];
+      const { path, extent } = wireScene.cache.getPath(`source:${node.id}`, from, to, prefs.wireRouting, "reference");
+      return [{ id: node.id, path, extent }];
+    });
+  }, [doc.nodes, graphDocument, isNodeVisible, keepExpandedIds, lod, prefs.wireRouting, wireScene, endpointIndex]);
+
+  const structureWirePaths = useMemo(() => derivedStructure.links.map((link) => {
+    if (link.path && link.kind !== "structure") return { path: link.path, extent: padded(pathExtent(link.path), 24) };
+    const { fromBox, toBox } = link;
+    return wireScene.cache.getPath(link.id,
+      { x: fromBox.x + fromBox.w, y: fromBox.y + fromBox.h / 2, box: fromBox },
+      { x: toBox.x, y: toBox.y + toBox.h / 2, box: toBox },
+      prefs.wireRouting,
+    );
+  }), [derivedStructure.links, prefs.wireRouting, wireScene]);
+  const structureBatches = useMemo(() => {
+    const batches: { first: number; guides: typeof structureWirePaths }[] = [];
+    for (const [index, link] of derivedStructure.links.entries()) {
+      const last = batches.at(-1);
+      if (link.active || link.path) batches.push({ first: index, guides: [] });
+      else if (last?.guides.length) last.guides.push(structureWirePaths[index]);
+      else batches.push({ first: index, guides: [structureWirePaths[index]] });
+    }
+    return batches;
+  }, [derivedStructure.links, structureWirePaths]);
 
   /* Command / @ Mention Palette Items */
   const paletteEntries = useMemo<PaletteEntry[]>(() => {
@@ -4614,15 +5251,27 @@ export function CanvasApp({
   const leftSnapped = doc.nodes.some((n) => n.window?.snap === "left");
   const rightSnapped = doc.nodes.some((n) => n.window?.snap === "right");
 
+  const cardActions = useCardActions({ editNode, editEdge, edit, selectNode, showToast, openNodeContextMenu,
+    startNodeMove, startResize, startPortDrag, startInputEdgeDrag, revealNode, openDetailCard, bindAgentSession,
+    refreshProjectStructures, openAnchoredMenu, extractDisplayFrom, launchScope, toggleNodeForm, stopNode,
+    returnWindow, openWindow, openInputHub, scheduleCloseInputHub });
+  const cardDocument = useMemo(() => ({ ...graphDocument, settings: doc.settings }), [graphDocument, doc.settings]);
   /* Render a Single Node Card (used on Canvas, Floating Window, and Focused Conversation Surface) */
-  const renderNodeCard = (
+  const renderNodeCard = useCallback((
     node: FlowNode,
     placement: "canvas" | "window" | "conversation",
+    snapshot: FlowspaceSnapshot | null,
   ) => {
+    const doc = cardDocument;
+    const runtime = runtimeIndex(snapshot);
+    const { editNode, editEdge, edit, selectNode, showToast, openNodeContextMenu, startNodeMove, startResize,
+      startPortDrag, startInputEdgeDrag, revealNode, openDetailCard, bindAgentSession, refreshProjectStructures,
+      openAnchoredMenu, extractDisplayFrom, launchScope, toggleNodeForm, stopNode, returnWindow, openWindow,
+      openInputHub, scheduleCloseInputHub } = cardActions;
     const state = node.kind === "agent" ? nodeStatusOf(snapshot, node.id) : "";
     const waitingGates =
-      node.kind === "agent" ? waitingForNode(node.id) : [];
-    const live = snapshot?.live.find((l) => l.nodeId === node.id);
+      node.kind === "agent" ? runtime.waiting.get(node.id) ?? [] : [];
+    const live = runtime.live.get(node.id);
     const isSelected = selection.nodes.includes(node.id);
     const box = nodeBox(node, lod, keepExpandedIds.has(node.id));
     const compact =
@@ -4662,7 +5311,7 @@ export function CanvasApp({
       pKind: "reference" | "continuation",
       dir: "in" | "out",
     ) =>
-      doc.edges.some(
+      (dir === "in" ? edgeIndex.incoming : edgeIndex.outgoing).get(node.id)?.some(
         (e) =>
           e.kind === pKind &&
           (dir === "in" ? e.target === node.id : e.source === node.id),
@@ -4673,16 +5322,13 @@ export function CanvasApp({
         !!node.sourceNodeId);
 
     const activeTab: AgentTab = node.tab ?? "task";
-    const nodeSteps =
-      snapshot?.runs
-        .flatMap((r) => r.steps)
-        .filter((s) => s.nodeId === node.id) ?? [];
+    const nodeSteps = runtime.steps.get(node.id) ?? [];
     const latestOutput =
       live?.output || nodeSteps.filter((s) => s.output).at(-1)?.output || "";
-    const incomingRefs = doc.edges.filter(
+    const incomingRefs = (edgeIndex.incoming.get(node.id) ?? []).filter(
       (e) => e.kind === "reference" && e.target === node.id,
     );
-    const hasForkInbound = doc.edges.some(
+    const hasForkInbound = edgeIndex.incoming.get(node.id)?.some(
       (e) => e.target === node.id && e.mode === "fork",
     );
 
@@ -4913,7 +5559,7 @@ export function CanvasApp({
             ? doc.settings.nativeChatTriggers
             : node.nativeTrigger === "enabled";
         const queuedCount = nodeSteps.filter((s) => s.state === "queued").length;
-        const hasActiveInboundContinuation = doc.edges.some(
+        const hasActiveInboundContinuation = edgeIndex.incoming.get(node.id)?.some(
           (e) =>
             e.kind === "continuation" &&
             e.target === node.id &&
@@ -4945,7 +5591,7 @@ export function CanvasApp({
             <div className="reference-tray">
               {incomingRefs.length ? (
                 incomingRefs.map((refEdge) => {
-                  const src = doc.nodes.find((x) => x.id === refEdge.source);
+                  const src = nodesById.get(refEdge.source);
                   const capState = capsuleStateOf(
                     refEdge,
                     snapshot?.sourceVersions,
@@ -5731,7 +6377,7 @@ export function CanvasApp({
                 className="text-button"
                 disabled={
                   !node.sourceNodeId ||
-                  !doc.nodes.some((n) => n.id === node.sourceNodeId)
+                  !nodesById.has(node.sourceNodeId)
                 }
                 onClick={() =>
                   node.sourceNodeId && revealNode(node.sourceNodeId)
@@ -5746,7 +6392,7 @@ export function CanvasApp({
       }
 
       if (node.kind === "detail") {
-        const srcNode = doc.nodes.find((x) => x.id === node.sourceNodeId);
+        const srcNode = node.sourceNodeId ? nodesById.get(node.sourceNodeId) : undefined;
         const srcState = node.sourceNodeId
           ? nodeStatusOf(snapshot, node.sourceNodeId)
           : "draft";
@@ -5992,6 +6638,14 @@ export function CanvasApp({
         data-participation={
           node.kind === "agent" ? node.participation : undefined
         }
+        onFocusCapture={ev => {
+          if ((ev.target as HTMLElement).closest("input,textarea,select,[contenteditable=true]")) setEditingNodeId(node.id);
+        }}
+        onBlurCapture={ev => {
+          if (!ev.currentTarget.contains(ev.relatedTarget as Node | null)) {
+            setEditingNodeId(current => current === node.id ? null : current);
+          }
+        }}
         onPointerDown={(ev) => {
           if (
             !(ev.target as HTMLElement).closest(
@@ -6023,6 +6677,14 @@ export function CanvasApp({
           openNodeContextMenu(node, { x: ev.clientX, y: ev.clientY });
         }}
       >
+        {state === "running" && (
+          /* A comet of light travelling the rounded border at constant speed:
+             a long faint tail plus a bright head, both dash-offset animated. */
+          <svg className="node-aura" aria-hidden="true">
+            <rect className="aura-tail" pathLength={1000} />
+            <rect className="aura-head" pathLength={1000} />
+          </svg>
+        )}
         <header
           className="node-header"
           onPointerDown={(ev) => {
@@ -6132,20 +6794,20 @@ export function CanvasApp({
           </div>
         </header>
 
-        <div className="node-body">
-          {compact ? renderCompactBody() : renderFullBody()}
-        </div>
+        <CardBody compact={compact}
+          preserve={placement === "canvas" && node.expanded && !node.pinned}
+          full={renderFullBody} summary={renderCompactBody} />
 
         {/* Ports (Canvas cards only) */}
         {placement === "canvas" && node.kind !== "detail" && (
           <>
             {node.kind === "agent" && (() => {
-              const inContEdges = doc.edges.filter(
+              const inContEdges = (edgeIndex.incoming.get(node.id) ?? []).filter(
                 (e) =>
                   e.target === node.id &&
                   e.kind === "continuation" &&
                   isNodeVisible(
-                    doc.nodes.find((s) => s.id === e.source),
+                    nodesById.get(e.source),
                     true,
                   ),
               );
@@ -6241,12 +6903,12 @@ export function CanvasApp({
             {(node.kind === "agent" || node.kind === "display") && (() => {
               const inRefEdges =
                 node.kind === "agent"
-                  ? doc.edges.filter(
+                  ? (edgeIndex.incoming.get(node.id) ?? []).filter(
                       (e) =>
                         e.target === node.id &&
                         e.kind === "reference" &&
                         isNodeVisible(
-                          doc.nodes.find((s) => s.id === e.source),
+                          nodesById.get(e.source),
                           true,
                         ),
                     )
@@ -6360,7 +7022,9 @@ export function CanvasApp({
         )}
       </section>
     );
-  };
+  }, [cardDocument, cardActions, edgeIndex, nodesById, selection.nodes, lod, keepExpandedIds, vpSize, workspaces,
+    bridge, reportError, quoteState, renderConversation, onPresenceChange, projectStructures, activeWorkspaceId,
+    workspaceFilesList, fileInputDrafts, activeWorkspaceCwd, isNodeVisible, activeHubLayout, connecting, isDragging, languageRevision]);
 
   /* Workspace groupings for Left Explorer Sidebar */
   const sidebarWorkspaceBuckets = useMemo(() => {
@@ -6390,7 +7054,7 @@ export function CanvasApp({
     <div
       ref={rootRef}
       className="fs-root"
-      data-theme={effectiveTheme}
+      data-theme={displayedTheme}
       data-perf-tier={reducedMotion ? "L1" : "L3"}
     >
       {/* ---------- Left Navigation Icon Rail ---------- */}
@@ -6744,7 +7408,7 @@ export function CanvasApp({
               title={t("theme")}
               onClick={(ev) => toggleTheme(ev.currentTarget)}
             >
-              <Icon name={effectiveTheme === "dark" ? "moon" : "sun"} />
+              <Icon name={displayedTheme === "dark" ? "moon" : "sun"} />
             </button>
 
             {routeName === "canvas" && (
@@ -6813,7 +7477,9 @@ export function CanvasApp({
 
         {/* Content Row: Canvas / Surface + Right Inspector */}
         <div className="fs-content-row">
-          <div className="fs-canvas-column">
+          <div
+            className={`fs-canvas-column ${leftSnapped ? "has-left-window" : ""} ${rightSnapped ? "has-right-window" : ""}`}
+          >
             {/* Floating Glassmorphic Canvas Toolbar */}
             {routeName === "canvas" && (
               <div className="fs-canvas-toolbar" role="toolbar">
@@ -6975,41 +7641,11 @@ export function CanvasApp({
                 ]
                   .filter(Boolean)
                   .join(" ")}
-                style={
-                  {
-                    ["--gx" as string]: `${view.x}px`,
-                    ["--gy" as string]: `${view.y}px`,
-                    ["--gs" as string]: `${24 * view.zoom}px`,
-                    ["--ga" as string]: clamp((view.zoom - 0.35) / 0.4, 0, 1),
-                  } as React.CSSProperties
-                }
-                onPointerMove={(ev) => {
-                  const vp = viewportRef.current;
-                  if (!vp) return;
-                  const rect = vp.getBoundingClientRect();
-                  vp.style.setProperty("--mx", `${ev.clientX - rect.left}px`);
-                  vp.style.setProperty("--my", `${ev.clientY - rect.top}px`);
-                  vp.style.setProperty("--spot", "1");
-                  const card = (ev.target as HTMLElement | null)?.closest<HTMLElement>(
-                    ".node",
-                  );
-                  if (card) {
-                    const cb = card.getBoundingClientRect();
-                    card.style.setProperty(
-                      "--px",
-                      `${(ev.clientX - cb.left) / view.zoom}px`,
-                    );
-                    card.style.setProperty(
-                      "--py",
-                      `${(ev.clientY - cb.top) / view.zoom}px`,
-                    );
-                  }
-                }}
-                onPointerLeave={() => {
-                  viewportRef.current?.style.setProperty("--spot", "0");
-                }}
                 onPointerDown={(ev) => {
                   const target = ev.target as HTMLElement;
+                  // Any press catches a gliding / flung view, like grabbing a moving sheet.
+                  viewAnimToken.current++;
+                  wheelTargetRef.current = null;
                   if (ev.button === 2) return;
                   if (
                     target.closest(
@@ -7067,16 +7703,31 @@ export function CanvasApp({
                   openQuickCreate({ x: ev.clientX, y: ev.clientY });
                 }}
               >
+                {/* Dot grid on its own layer: panning only translates it */}
+                <div ref={gridRef} className="fs-grid" aria-hidden="true" />
+                {/* Cursor light: halo + dot lens, under the cards so it lights only the floor */}
+                <div ref={cursorFxRef} className="fs-cursor-fx" aria-hidden="true">
+                  <div ref={cursorHaloRef} className="fx-halo" />
+                  <div ref={cursorLensRef} className="fx-lens">
+                    <div
+                      ref={lensGridRef}
+                      className="fx-lens-grid"
+                      style={{
+                        width: (vpSize.width + GRID_OVERSCAN * 2) * GRID_REBASE_MAX,
+                        height: (vpSize.height + GRID_OVERSCAN * 2) * GRID_REBASE_MAX,
+                      }}
+                    />
+                  </div>
+                </div>
                 {/* Transformed World */}
                 <div
+                  ref={worldRef}
                   className={`fs-world ${lod ? "semantic-zoom" : ""}`}
-                  style={
-                    {
-                      transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`,
-                      ["--type-scale" as string]: clamp(1 / view.zoom, 1, 2.6),
-                    } as React.CSSProperties
-                  }
+                  data-wire-routing={prefs.wireRouting}
+                  style={{ transform: worldTransform(view) }}
                 >
+                  <div className="fs-scene-clip" style={{ left: paintArea.x, top: paintArea.y, width: paintArea.w, height: paintArea.h }}>
+                  <div className="fs-scene-origin" data-wire-routing={prefs.wireRouting} style={{ left: -paintArea.x, top: -paintArea.y }}>
                   {/* Groups Layer */}
                   <div className="fs-groups-layer">
                     {visibleGroups.map((grp) => {
@@ -7088,9 +7739,7 @@ export function CanvasApp({
                         ports.filter((p) => p.direction === "out").length,
                       );
                       const rawBox = groupBox(grp, rows);
-                      const memberNodes = members(doc, grp.id)
-                        .map((id) => doc.nodes.find((n) => n.id === id))
-                        .filter((n): n is FlowNode => !!n);
+                      const memberNodes = membersOf(grp.id);
                       const box =
                         lod && !grp.collapsed && memberNodes.length > 0
                           ? {
@@ -7112,6 +7761,7 @@ export function CanvasApp({
                               ),
                             }
                           : rawBox;
+                      if (!intersects(box, paintArea) && !selection.groups.includes(grp.id)) return null;
                       const runningCnt = memberNodes.filter(
                         (n) => nodeStatusOf(snapshot, n.id) === "running",
                       ).length;
@@ -7342,89 +7992,12 @@ export function CanvasApp({
                     </defs>
                     <g>
                       {/* Display & Detail source dotted links */}
-                      {doc.nodes
-                        .filter(
-                          (n) =>
-                            (n.kind === "display" || n.kind === "detail") &&
-                            n.sourceNodeId &&
-                            isNodeVisible(n, true) &&
-                            isNodeVisible(
-                              doc.nodes.find((s) => s.id === n.sourceNodeId),
-                              true,
-                            ),
-                        )
-                        .map((n) => {
-                          const a = endpoint(
-                            doc,
-                            n.sourceNodeId!,
-                            "reference",
-                            "out",
-                            lod,
-                            keepExpandedIds,
-                          );
-                          const b = endpoint(
-                            doc,
-                            n.id,
-                            "reference",
-                            "in",
-                            lod,
-                            keepExpandedIds,
-                          );
-                          if (a.groupId && a.groupId === b.groupId) return null;
-                          return (
-                            <path
-                              key={`disp-${n.id}`}
-                              className="edge-path edge-display"
-                              d={route(a, b).path}
-                            />
-                          );
-                        })}
+                      {accessoryWires.filter(wire => intersects(wire.extent, paintArea)).map(({ id, path }) => (
+                        <path key={`disp-${id}`} className="edge-path edge-display" d={path} />
+                      ))}
 
                       {/* Reference & Continuation Wires */}
-                      {doc.edges.map((edge) => {
-                        const srcNode = doc.nodes.find(
-                          (n) => n.id === edge.source,
-                        );
-                        const tgtNode = doc.nodes.find(
-                          (n) => n.id === edge.target,
-                        );
-                        if (
-                          !isNodeVisible(srcNode, true) ||
-                          !isNodeVisible(tgtNode, true)
-                        )
-                          return null;
-                        const a = endpoint(
-                          doc,
-                          edge.source,
-                          edge.kind,
-                          "out",
-                          lod,
-                          keepExpandedIds,
-                        );
-                        const sat = hubSatByEdgeId.get(edge.id);
-                        const rawB = endpoint(
-                          doc,
-                          edge.target,
-                          edge.kind,
-                          "in",
-                          lod,
-                          keepExpandedIds,
-                        );
-                        if (a.groupId && a.groupId === rawB.groupId) return null;
-                        const b = sat ? sat.wireIn : rawB;
-                        const evState = edgeVisualState(edge);
-                        if (
-                          lod &&
-                          edge.kind !== "continuation" &&
-                          !selection.nodes.includes(edge.source) &&
-                          !selection.nodes.includes(edge.target) &&
-                          !["active", "queued", "waiting", "boundary"].includes(
-                            evState,
-                          )
-                        ) {
-                          return null;
-                        }
-                        const geom = route(a, b, edge.waypoints);
+                      {wireLayouts.map(({ edge, geom, evState }) => {
                         const isReconnecting =
                           connecting?.reconnectingEdge?.id === edge.id;
                         const isSpotlight = hoveredEdgeId === edge.id;
@@ -7453,6 +8026,11 @@ export function CanvasApp({
 
                         return (
                           <g key={edge.id}>
+                            {/* Soft halo under live wires (shown only for active states) */}
+                            <path
+                              className={`edge-path edge-glow ${cls}`}
+                              d={geom.path}
+                            />
                             <path
                               className={`edge-path ${cls}`}
                               d={geom.path}
@@ -7484,7 +8062,7 @@ export function CanvasApp({
                                   ev.clientY,
                                 );
                                 editEdge(edge.id, {
-                                  waypoints: [...(edge.waypoints ?? []), pt],
+                                  waypoints: insertWireWaypoint(edge.waypoints ?? [], geom, pt),
                                 });
                               }}
                               onContextMenu={(ev) => {
@@ -7506,10 +8084,7 @@ export function CanvasApp({
                                       icon: "plus",
                                       fn: () =>
                                         editEdge(edge.id, {
-                                          waypoints: [
-                                            ...(edge.waypoints ?? []),
-                                            pt,
-                                          ],
+                                          waypoints: insertWireWaypoint(edge.waypoints ?? [], geom, pt),
                                         }),
                                     },
                                     {
@@ -7579,29 +8154,51 @@ export function CanvasApp({
                         })}
 
                       {/* 4-Tier Derived Structure Skeleton Links (M06) */}
-                      {derivedStructure.links.map((slink) => {
-                        const p1 = {
-                          x: slink.fromBox.x + slink.fromBox.w,
-                          y: slink.fromBox.y + slink.fromBox.h / 2,
-                        };
-                        const p2 = {
-                          x: slink.toBox.x,
-                          y: slink.toBox.y + slink.toBox.h / 2,
-                        };
+                      {structureBatches.map(({ first: index, guides }) => {
+                        const slink = derivedStructure.links[index];
+                        if (guides.length) return <StructureWireLayer key={`guides-${slink.id}`} guides={guides}
+                          area={paintArea} zoom={view.zoom} theme={effectiveTheme} settled={!worldRef.current?.dataset.moving} lod={lod} />;
+                        if (!intersects(structureWirePaths[index].extent, paintArea)) return null;
+                        if (slink.path && slink.kind !== "structure") {
+                          // Sub-agent tree tether: spine + elbow, with a travelling
+                          // light pulse while the child session is running.
+                          return (
+                            <g
+                              key={slink.id}
+                              className={`fs-tether fs-tether-${slink.kind === "subagent-spine" ? "spine" : "branch"} ${slink.active ? "is-active" : ""}`}
+                            >
+                              <path className="edge-path fs-tether-line" d={slink.path} />
+                              {slink.active && (
+                                <path className="edge-path fs-tether-pulse" d={slink.path} />
+                              )}
+                            </g>
+                          );
+                        }
                         return (
                           <path
                             key={slink.id}
                             className={`edge-path fs-structure-edge ${slink.active ? "is-active" : ""}`}
-                            d={route(p1, p2).path}
+                            d={structureWirePaths[index].path}
                           />
                         );
                       })}
 
                       {/* Live Temporary Drag Wire & Magnetic ComfyUI Plug Tip */}
                       {connecting && (() => {
+                        const target = connecting.snappedTarget?.point;
+                        const tip = target ?? connecting.current;
                         const wirePath = route(
                           connecting.fromPoint,
-                          connecting.current,
+                          tip,
+                          {
+                            kind: connecting.kind,
+                            mode: prefs.wireRouting,
+                            obstacles: target ? routingBoxes : [],
+                            freeEnd: !target,
+                            waypoints: connecting.snappedTarget?.isOriginalTarget
+                              ? connecting.reconnectingEdge?.waypoints
+                              : undefined,
+                          },
                         ).path;
                         const isSnapped = Boolean(connecting.snappedTarget);
                         const isDisconnectZone =
@@ -7624,15 +8221,15 @@ export function CanvasApp({
                             />
                             {isSnapped && (
                               <circle
-                                cx={connecting.current.x}
-                                cy={connecting.current.y}
+                                cx={tip.x}
+                                cy={tip.y}
                                 r={11}
                                 className="fs-wire-snap-halo"
                               />
                             )}
                             <circle
-                              cx={connecting.current.x}
-                              cy={connecting.current.y}
+                              cx={tip.x}
+                              cy={tip.y}
                               r={isSnapped ? 5.5 : 4.6}
                               className={`fs-wire-plug-tip ${isSnapped ? "is-snapped" : isDisconnectZone ? "is-disconnecting" : ""}`}
                             />
@@ -7645,10 +8242,10 @@ export function CanvasApp({
                   {/* Nodes Layer */}
                   <div className="fs-nodes-layer">
                     {/* 4-Tier Derived Structure Cards (Project -> Branch -> Worktree -> SubAgent) */}
-                    {derivedStructure.cards.map((sc) => (
+                    {derivedStructure.cards.filter(sc => intersects(sc.box, paintArea)).map((sc) => (
                       <div
                         key={sc.id}
-                        className={`fs-struct-card fs-struct-${sc.kind} ${selectedStructureId === sc.id ? "selected" : ""}`}
+                        className={`fs-struct-card fs-struct-${sc.kind} ${selectedStructureId === sc.id ? "selected" : ""} ${sc.kind === "subagent" && sc.badge === "running" ? "is-running" : ""}`}
                         style={{
                           left: sc.box.x,
                           top: sc.box.y,
@@ -7718,11 +8315,10 @@ export function CanvasApp({
                       </div>
                     ))}
 
-                    {doc.nodes
-                      .filter((n) => isNodeVisible(n))
-                      .map((n) => {
+                    {sceneNodes.map(({ n, b }) => {
+                        const visible = intersects(b, paintArea) || n.id === focusedCard || n.id === editingNodeId || n.id === pendingFocusRef.current;
                         if (n.window) {
-                          const b = nodeBox(n, lod, true);
+                          if (!visible) return null;
                           return (
                             <div
                               key={`stub-${n.id}`}
@@ -7751,48 +8347,17 @@ export function CanvasApp({
                             </div>
                           );
                         }
-                        return renderNodeCard(n, "canvas");
+                        return <ViewportCard key={n.id} node={n} visible={visible} compact={!!b.compact}
+                          render={renderNodeCard} snapshot={snapshot} incoming={edgeIndex.incoming.get(n.id)} />;
                       })}
                   </div>
 
                   {/* Edge Pill Tags & Waypoints Layer */}
-                  <div className="fs-tags-layer">
-                    {doc.edges.map((edge) => {
+                  <div className="fs-tags-layer fs-wire-labels">
+                    {wireLayouts.map(({ edge, geom, evState }) => {
                       if (connecting?.reconnectingEdge?.id === edge.id) {
                         return null;
                       }
-                      const srcNode = doc.nodes.find(
-                        (n) => n.id === edge.source,
-                      );
-                      const tgtNode = doc.nodes.find(
-                        (n) => n.id === edge.target,
-                      );
-                      if (
-                        !isNodeVisible(srcNode, true) ||
-                        !isNodeVisible(tgtNode, true)
-                      )
-                        return null;
-                      const a = endpoint(
-                        doc,
-                        edge.source,
-                        edge.kind,
-                        "out",
-                        lod,
-                        keepExpandedIds,
-                      );
-                      const sat = hubSatByEdgeId.get(edge.id);
-                      const rawB = endpoint(
-                        doc,
-                        edge.target,
-                        edge.kind,
-                        "in",
-                        lod,
-                        keepExpandedIds,
-                      );
-                      if (a.groupId && a.groupId === rawB.groupId) return null;
-                      const b = sat ? sat.wireIn : rawB;
-                      const geom = route(a, b, edge.waypoints);
-                      const evState = edgeVisualState(edge);
                       const waitingTok =
                         snapshot?.runs
                           .filter((r) =>
@@ -7951,6 +8516,8 @@ export function CanvasApp({
                       );
                     })}
 
+                  </div>
+                  <div className="fs-tags-layer">
                     {/* Exchange Count Pill Tags */}
                     {!lod &&
                       exchanges.map((ex) => {
@@ -8195,6 +8762,8 @@ export function CanvasApp({
                         </div>
                       )}
                   </div>
+                  </div>
+                  </div>
                 </div>
 
                 {/* Marquee Selection Box */}
@@ -8277,55 +8846,79 @@ export function CanvasApp({
 
               {/* Interactive SVG Minimap */}
               {routeName === "canvas" && minimapOpen && (() => {
-                const mw = 178,
-                  mh = 104;
-                const nodeBoxes = doc.nodes
-                  .filter((n) => isNodeVisible(n))
-                  .map((n) => ({
-                    n,
-                    b: nodeBox(n, lod, keepExpandedIds.has(n.id)),
-                  }));
+                const mw = 192;
+                const nodeBoxes = sceneNodes;
                 const visRect: Box = {
                   x: -view.x / view.zoom,
                   y: -view.y / view.zoom,
                   w: vpSize.width / view.zoom,
                   h: vpSize.height / view.zoom,
                 };
-                const full = bounds([...nodeBoxes.map((x) => x.b), visRect]);
-                full.x -= 36;
-                full.y -= 36;
-                full.w += 72;
-                full.h += 72;
+                /* Frame the content, not the camera: a zoomed-out view used to swallow the
+                   map in empty space. The camera only widens the frame once it has
+                   wandered off the content entirely, so "where am I" is never lost. */
+                const content = nodeBoxes.length
+                  ? bounds(nodeBoxes.map((x) => x.b))
+                  : visRect;
+                const pad = Math.max(24, Math.max(content.w, content.h) * 0.05);
+                let full: Box = {
+                  x: content.x - pad,
+                  y: content.y - pad,
+                  w: content.w + pad * 2,
+                  h: content.h + pad * 2,
+                };
+                const camOnContent =
+                  visRect.x < full.x + full.w &&
+                  visRect.x + visRect.w > full.x &&
+                  visRect.y < full.y + full.h &&
+                  visRect.y + visRect.h > full.y;
+                if (!camOnContent) full = bounds([full, visRect]);
+                // The map's height follows the content's aspect, so there is no letterbox.
+                const mh = Math.round(clamp((mw * full.h) / full.w, 64, 132));
                 const sc = Math.min(mw / full.w, mh / full.h);
                 const ox = (mw - full.w * sc) / 2;
                 const oy = (mh - full.h * sc) / 2;
+                const frame: MiniFrame = {
+                  x: full.x,
+                  y: full.y,
+                  sc,
+                  ox,
+                  oy,
+                  vw: vpSize.width,
+                  vh: vpSize.height,
+                  mw,
+                  mh,
+                };
+                miniFrameRef.current = frame;
+                const camRect = miniViewRect(frame, view);
                 const jumpMinimap = (clientX: number, clientY: number, svgEl: SVGSVGElement) => {
                   const r = svgEl.getBoundingClientRect();
                   const wx = full.x + (clientX - r.left - ox) / sc;
                   const wy = full.y + (clientY - r.top - oy) / sc;
-                  setViewportDirect(
+                  const z = docRef.current.viewport.zoom;
+                  animateView(
                     {
-                      x: vpSize.width / 2 - wx * view.zoom,
-                      y: vpSize.height / 2 - wy * view.zoom,
-                      zoom: view.zoom,
+                      x: vpSize.width / 2 - wx * z,
+                      y: vpSize.height / 2 - wy * z,
+                      zoom: z,
                     },
-                    300,
+                    MOTION.region,
                   );
                 };
                 return (
-                  <div className="fs-minimap">
-                    <header>
-                      <span>{t("minimap")}</span>
-                      <button
-                        type="button"
-                        className="icon-button"
-                        onClick={() => setMinimapOpen(false)}
-                      >
-                        <Icon name="x" />
-                      </button>
-                    </header>
+                  <div className="fs-minimap" aria-label={t("minimap")}>
+                    <button
+                      type="button"
+                      className="icon-button fs-minimap-close"
+                      title={t("close")}
+                      aria-label={t("close")}
+                      onClick={() => setMinimapOpen(false)}
+                    >
+                      <Icon name="x" />
+                    </button>
                     <svg
                       viewBox={`0 0 ${mw} ${mh}`}
+                      style={{ height: mh }}
                       onPointerDown={(ev) => {
                         const svgEl = ev.currentTarget;
                         jumpMinimap(ev.clientX, ev.clientY, svgEl);
@@ -8334,30 +8927,15 @@ export function CanvasApp({
                         );
                       }}
                     >
-                      {nodeBoxes.map(({ n, b }) => {
-                        const st =
-                          n.kind === "agent"
-                            ? nodeStatusOf(snapshot, n.id)
-                            : n.kind;
-                        return (
-                          <rect
-                            key={n.id}
-                            className={`mini-node mini-${st}`}
-                            x={(b.x - full.x) * sc + ox}
-                            y={(b.y - full.y) * sc + oy}
-                            width={Math.max(2, b.w * sc)}
-                            height={Math.max(2, b.h * sc)}
-                            rx={1.8}
-                          />
-                        );
-                      })}
+                      <MiniMapNodes boxes={nodeBoxes} snapshot={snapshot} x={full.x} y={full.y} scale={sc} offsetX={ox} offsetY={oy} />
                       <rect
+                        ref={miniViewportRef}
                         className="mini-viewport"
-                        x={(visRect.x - full.x) * sc + ox}
-                        y={(visRect.y - full.y) * sc + oy}
-                        width={Math.max(4, visRect.w * sc)}
-                        height={Math.max(4, visRect.h * sc)}
-                        rx={2}
+                        x={camRect.x}
+                        y={camRect.y}
+                        width={camRect.w}
+                        height={camRect.h}
+                        rx={3}
                       />
                     </svg>
                   </div>
@@ -8436,7 +9014,7 @@ export function CanvasApp({
                         if (!rect) return;
                         animateView(
                           zoomAt(
-                            view,
+                            docRef.current.viewport,
                             rect,
                             rect.left + rect.width / 2,
                             rect.top + rect.height / 2,
@@ -8450,21 +9028,23 @@ export function CanvasApp({
                     </button>
                     <button
                       type="button"
+                      ref={zoomLabelRef}
                       className="zoom-label"
                       onClick={() => {
                         const px = vpSize.width / 2,
                           py = vpSize.height / 2;
+                        const live = docRef.current.viewport;
                         animateView(
                           {
-                            x: px - (px - view.x) / view.zoom,
-                            y: py - (py - view.y) / view.zoom,
+                            x: px - (px - live.x) / live.zoom,
+                            y: py - (py - live.y) / live.zoom,
                             zoom: 1,
                           },
                           MOTION.region,
                         );
                       }}
                     >
-                      {Math.round(view.zoom * 100)}%
+                      {`${Math.round(view.zoom * 100)}%`}
                     </button>
                     <button
                       type="button"
@@ -8475,7 +9055,7 @@ export function CanvasApp({
                         if (!rect) return;
                         animateView(
                           zoomAt(
-                            view,
+                            docRef.current.viewport,
                             rect,
                             rect.left + rect.width / 2,
                             rect.top + rect.height / 2,
@@ -8515,7 +9095,7 @@ export function CanvasApp({
                 <div className="fs-floating-layer">
                   {doc.nodes
                     .filter((n) => !!n.window)
-                    .map((n) => renderNodeCard(n, "window"))}
+                    .map((n) => renderNodeCard(n, "window", snapshot))}
                 </div>
               )}
 
@@ -8577,14 +9157,7 @@ export function CanvasApp({
                 <SettingsSurface
                   doc={doc}
                   prefs={prefs}
-                  onUpdatePrefs={(changes) =>
-                    edit(
-                      (d) => {
-                        d.prefs = { ...d.prefs, ...changes };
-                      },
-                      { remember: false },
-                    )
-                  }
+                  onUpdatePrefs={updatePrefs}
                   onUpdateSettings={(changes) =>
                     edit((d) => {
                       d.settings = { ...d.settings, ...changes };
@@ -8655,7 +9228,7 @@ export function CanvasApp({
                   </header>
                   <div className="conversation-node-host">
                     {conversationFocusAgent ? (
-                      renderNodeCard(conversationFocusAgent, "conversation")
+                      renderNodeCard(conversationFocusAgent, "conversation", snapshot)
                     ) : (
                       <div className="surface-empty" style={{ width: "100%" }}>
                         <Icon name="agent" />
@@ -9423,6 +9996,7 @@ export function CanvasApp({
                 <MiniGraph
                   nodes={templatePreviewModal.nodes}
                   edges={templatePreviewModal.edges}
+                  wireRouting={prefs.wireRouting}
                 />
               </div>
               <div className="template-preview-list">

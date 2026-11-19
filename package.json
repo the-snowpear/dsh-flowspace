@@ -7,6 +7,7 @@
     "node": ">=24.9.0"
   },
   "scripts": {
+    "start": "node scripts/launcher.mjs",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p packages/flowspace/tsconfig.host.json --noEmit && tsc -p packages/flowspace/tsconfig.client.json --noEmit",
     "test": "tsx --test packages/flowspace/test/*.test.ts",

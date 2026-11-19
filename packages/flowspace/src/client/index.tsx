@@ -1,4 +1,4 @@
-import { t, tr } from "./i18n.ts";
+import { getLanguage, subscribeLanguage, t, tr } from "./i18n.ts";
 import type { Context } from "@deepseek-ai/cordis";
 import type {} from "@deepseek-ai/dsh-api-remotes/client";
 import type {} from "@deepseek-ai/dsh-api-session-controller/client";
@@ -15,7 +15,7 @@ import type {
   PropsRenderSlots,
 } from "@deepseek-ai/dsh-client-ui-slots";
 import type { SessionId } from "@deepseek-ai/dsh-session/types";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Pin, Quote, Workflow } from "lucide-react";
 import { TYPERT_REMOTE } from "../../lib/typert.remote-client.js";
 import { CanvasApp, detectHostDark } from "./CanvasApp.tsx";
@@ -49,16 +49,28 @@ export const inject = [
   "locale",
 ];
 const PANEL_ID = "flowspace" as MainPanelId;
+const HMR_RESTORE_KEY = "__flowspaceHmrRestoreUntil";
+const INITIAL_HASH_HANDLED_KEY = "__flowspaceInitialHashHandled";
+const hmrWindow = window as unknown as Record<string, number | undefined>;
+const bootUrlWantsCanvas =
+  typeof window !== "undefined" &&
+  (window.location.hash === "#flowspace" ||
+    new URLSearchParams(window.location.search).get("panel") === "flowspace");
+
 export function apply(ctx: Context): void {
-  ctx.remote.$mount(TYPERT_REMOTE);
+  void ctx.remote.$mount(TYPERT_REMOTE);
   ctx.inject(["remote.flowspace"], mountUi);
 }
 function mountUi(ctx: Context): void {
   const bridge = new FlowClient(ctx);
+  let mainRegistered = false;
+  let activeBeforeTeardown =
+    ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL_ID;
+
   ctx.effect(() => bridge.connect());
   ctx.effect(() => () => bridge.dispose());
-  ctx.slots.inject("main", () =>
-    ctx.slots.register(
+  ctx.slots.inject("main", () => {
+    const dispose = ctx.slots.register(
       {
         name: "main",
         key: PANEL_ID,
@@ -68,8 +80,50 @@ function mountUi(ctx: Context): void {
         inject: () => ({ bridge }),
       },
       Main,
-    ),
-  );
+    );
+    mainRegistered = true;
+    const restoreUntil = hmrWindow[HMR_RESTORE_KEY] ?? 0;
+    delete hmrWindow[HMR_RESTORE_KEY];
+    const shouldAutoOpenCanvas =
+      !hmrWindow[INITIAL_HASH_HANDLED_KEY] &&
+      (bootUrlWantsCanvas ||
+        window.location.hash === "#flowspace" ||
+        new URLSearchParams(window.location.search).get("panel") ===
+          "flowspace");
+    if (shouldAutoOpenCanvas) {
+      hmrWindow[INITIAL_HASH_HANDLED_KEY] = 1;
+    }
+    if (restoreUntil > Date.now() || shouldAutoOpenCanvas) {
+      activeBeforeTeardown = true;
+      queueMicrotask(() => {
+        if (mainRegistered) ctx.layout.selectPanel(PANEL_ID);
+      });
+    } else {
+      activeBeforeTeardown =
+        ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL_ID;
+    }
+    return () => {
+      if (ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL_ID) {
+        activeBeforeTeardown = true;
+      }
+      mainRegistered = false;
+      dispose();
+    };
+  });
+  ctx.effect(() => foldHostSidebar(ctx));
+  ctx.effect(() => {
+    const unsubscribe = ctx.layout.panelInfo.subscribe(() => {
+      if (!mainRegistered) return;
+      activeBeforeTeardown =
+        ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL_ID;
+    });
+    return () => {
+      unsubscribe();
+      if (activeBeforeTeardown) {
+        hmrWindow[HMR_RESTORE_KEY] = Date.now() + 5000;
+      }
+    };
+  });
   ctx.slots.inject("flowspace.conversation", () =>
     ctx.slots.register(
       {
@@ -116,6 +170,51 @@ function mountUi(ctx: Context): void {
     ),
   );
 }
+/**
+ * Folds DSH's sidebar to its icon rail whenever the canvas comes to the front, so the
+ * canvas opens full-bleed, and unfolds it again on the way out if FlowSpace was the one
+ * that folded it. ctx.layout only offers a toggle, so the current state is read from
+ * the frame's `data-sidebar-collapsed` attribute (present only while collapsed).
+ */
+function foldHostSidebar(ctx: Context): () => void {
+  let folded = false;
+  let wasActive = false;
+  let raf = 0;
+  const sync = () => {
+    const active = ctx.layout.panelInfo.getSnapshot().activePanelId === PANEL_ID;
+    if (active === wasActive) return;
+    wasActive = active;
+    cancelAnimationFrame(raf);
+    let tries = 0;
+    const apply = () => {
+      // AppFrame sets `data-sidebar-collapsed` only while collapsed; the sidebar's own
+      // toggle button tells us the frame has mounted at all.
+      if (!document.querySelector("[data-sidebar-collapsed], [data-sidebar-toggle]")) {
+        // The app frame may not have mounted yet on a cold boot straight into #flowspace.
+        if (++tries < 60) raf = requestAnimationFrame(apply);
+        return;
+      }
+      const collapsed = !!document.querySelector("[data-sidebar-collapsed]");
+      if (active) {
+        if (!collapsed) {
+          ctx.layout.toggleSidebar();
+          folded = true;
+        }
+      } else if (folded) {
+        folded = false;
+        if (collapsed) ctx.layout.toggleSidebar();
+      }
+    };
+    apply();
+  };
+  const unsubscribe = ctx.layout.panelInfo.subscribe(sync);
+  sync();
+  return () => {
+    unsubscribe();
+    cancelAnimationFrame(raf);
+  };
+}
+
 type MainProps = PropsRuntime<"main"> &
   PropsRenderSlots<"flowspace.conversation"> & { bridge: CanvasBridge };
 function Main({ bridge, SessionProvider, renderSlot }: MainProps) {
@@ -158,12 +257,14 @@ function FlowspaceComposerDock({
 }: PropsRuntime<"conversation.composer.dock"> & {
   bridge: CanvasBridge;
 }) {
-  const snapshot = bridge.useSnapshot();
   const [peek, setPeek] = useState<{
     edgeId: string;
     anchor: { x: number; y: number };
   } | null>(null);
-  const doc = snapshot?.document;
+  useSyncExternalStore(subscribeLanguage, getLanguage);
+  const snapshot = bridge.useValue(value => peek ? value : null);
+  const doc = bridge.useValue(value => value?.document);
+  const sourceVersions = bridge.useValue(value => value?.sourceVersions);
   const node = doc?.nodes.find((n) => n.sessionId === sessionId);
   if (!doc || !node) return null;
   const incomingRefs = doc.edges.filter(
@@ -189,7 +290,7 @@ function FlowspaceComposerDock({
     <div className="fs-native-dock-tray" aria-label={t("context")}>
       {incomingRefs.map((refEdge) => {
         const src = doc.nodes.find((x) => x.id === refEdge.source);
-        const state = capsuleStateOf(refEdge, snapshot?.sourceVersions);
+        const state = capsuleStateOf(refEdge, sourceVersions);
         const label = refEdge.snapshotTitle || src?.title || refEdge.source;
         return (
           <button
@@ -250,7 +351,9 @@ function ChatBadge({
 }: PropsRuntime<"conversation.session.header.actions"> & {
   bridge: CanvasBridge;
 }) {
-  const snapshot = bridge.useSnapshot();
+  useSyncExternalStore(subscribeLanguage, getLanguage);
+  const node = bridge.useValue(value => value?.document.nodes.find(item => item.sessionId === sessionId));
+  const nativeChatTriggers = bridge.useValue(value => value?.document.settings.nativeChatTriggers);
   const [selectedText, setSelectedText] = useState("");
   useEffect(() => {
     const onSelectionChange = () => {
@@ -262,11 +365,10 @@ function ChatBadge({
       document.removeEventListener("selectionchange", onSelectionChange);
   }, []);
 
-  const node = snapshot?.document.nodes.find((n) => n.sessionId === sessionId);
   if (!node) return null;
   const enabled =
     node.nativeTrigger === "inherit"
-      ? snapshot!.document.settings.nativeChatTriggers
+      ? nativeChatTriggers
       : node.nativeTrigger === "enabled";
   return (
     <span className="fs-chat-actions">

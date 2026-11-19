@@ -11,11 +11,14 @@ import type {
   GroupPort,
   RunStep,
   StartRequest,
+  WireRoutingMode,
   WorkflowTemplate,
   WorkspaceBrief,
 } from "../types.ts";
 import type { CanvasBridge } from "./bridge.ts";
-import { capsuleStateOf, inferGroupPorts, nodeBox } from "./geometry.ts";
+import { bounds, capsuleStateOf, inferGroupPorts, nodeBox, portY } from "./geometry.ts";
+import { route } from "./wireRouting.ts";
+import { runtimeIndex } from "./sceneModel.ts";
 import { getLanguage, t } from "./i18n.ts";
 import { BrandMark, Icon, kindIconName } from "./icons.tsx";
 import { PayloadPeekCard } from "./PayloadPeekPopover.tsx";
@@ -117,36 +120,8 @@ export function nodeStatusOf(
   snapshot: FlowspaceSnapshot | null,
   nodeId: string,
 ): string {
-  if (
-    snapshot?.runs.some(
-      (r) =>
-        ["running", "waiting", "paused"].includes(r.state) &&
-        r.tokens.some(
-          (tk) =>
-            !tk.ready &&
-            !tk.consumed &&
-            !tk.dismissed &&
-            r.graph.edges.find((e) => e.id === tk.edgeId)?.target === nodeId,
-        ),
-    )
-  ) {
-    return "waiting";
-  }
-  const live = snapshot?.live.find((l) => l.nodeId === nodeId);
-  if (live?.pendingInput.length) return "input";
-  if (live?.running) return "running";
-  const node = snapshot?.document.nodes.find((n) => n.id === nodeId);
-  if ((node?.participation as string | undefined) === "bypassed") {
-    return "bypassed";
-  }
-  const lastStep = snapshot?.runs
-    .flatMap((r) => r.steps)
-    .filter((s) => s.nodeId === nodeId)
-    .at(-1);
-  if (lastStep) return lastStep.state;
-  const hasSessionHistory =
-    (live?.seq ?? -1) >= 0 || Boolean(live?.output?.trim());
-  return node?.sessionId && hasSessionHistory ? "completed" : "draft";
+  const index = runtimeIndex(snapshot);
+  return index.statuses.get(nodeId) ?? (index.waiting.has(nodeId) ? "waiting" : index.steps.get(nodeId)?.at(-1)?.state ?? "draft");
 }
 
 function templateCapabilityBadges(tpl: WorkflowTemplate): {
@@ -195,86 +170,69 @@ export function MiniGraph({
   nodes,
   edges,
   snapshot,
+  wireRouting,
 }: {
   nodes: FlowNode[];
   edges: FlowEdge[];
   snapshot?: FlowspaceSnapshot | null;
+  wireRouting?: WireRoutingMode;
 }) {
   const shown = nodes.filter((n) => n.kind !== "group");
   if (!shown.length) return null;
   const boxes = new Map(
-    shown.map((n) => [n.id, nodeBox({ ...n, window: undefined }, false)]),
+    shown.map((node) => [node.id, { node, box: nodeBox(node) }]),
   );
-  const all = [...boxes.values()];
-  const wpPoints = edges.flatMap((e) => e.waypoints ?? []);
-  const pad = 44;
-  const left =
-    Math.min(...all.map((b) => b.x), ...wpPoints.map((p) => p.x)) - pad;
-  const top =
-    Math.min(...all.map((b) => b.y), ...wpPoints.map((p) => p.y)) - pad;
-  const width =
-    Math.max(...all.map((b) => b.x + b.w), ...wpPoints.map((p) => p.x)) +
-    pad -
-    left;
-  const height =
-    Math.max(...all.map((b) => b.y + b.h), ...wpPoints.map((p) => p.y)) +
-    pad -
-    top;
-
-  const renderWire = (edge: FlowEdge) => {
-    const a = boxes.get(edge.source),
-      b = boxes.get(edge.target);
-    if (!a || !b) return null;
-    const ax = a.x + a.w - left,
-      ay = a.y - top + (edge.kind === "reference" ? Math.min(72, a.h * 0.58) : Math.min(28, a.h / 2)),
-      bx = b.x - left,
-      by = b.y - top + (edge.kind === "reference" ? Math.min(72, b.h * 0.58) : Math.min(28, b.h / 2));
-    const cls =
-      edge.kind === "reference"
-        ? "mg-ref"
-        : `mg-flow ${edge.trigger === "confirm" ? "mg-confirm" : ""}`;
-
-    /* Smooth backward-loop arc when cyclic feedback wire routes right-to-left */
-    if (bx < ax - 20) {
-      const loopY =
-        edge.waypoints?.length
-          ? Math.max(...edge.waypoints.map((p) => p.y - top))
-          : Math.max(a.y + a.h, b.y + b.h) - top + 36;
-      const d = `M${ax} ${ay} C${ax + 54} ${ay}, ${ax + 54} ${loopY}, ${(ax + bx) / 2} ${loopY} C${bx - 54} ${loopY}, ${bx - 54} ${by}, ${bx} ${by}`;
-      return (
-        <path
-          key={edge.id}
-          className={cls}
-          vectorEffect="non-scaling-stroke"
-          d={d}
-        />
-      );
-    }
-
-    const reach = Math.max(40, Math.abs(bx - ax) * 0.45);
-    return (
-      <path
-        key={edge.id}
-        className={cls}
-        vectorEffect="non-scaling-stroke"
-        d={`M${ax} ${ay} C${ax + reach} ${ay}, ${bx - reach} ${by}, ${bx} ${by}`}
-      />
+  const obstacles = [...boxes.values()].map(({ box }) => box);
+  const wires = edges.flatMap((edge) => {
+    const source = boxes.get(edge.source);
+    const target = boxes.get(edge.target);
+    if (!source || !target) return [];
+    const a = source.box;
+    const b = target.box;
+    const geom = route(
+      { x: a.x + a.w, y: a.y + portY(source.node, edge.kind, !!a.compact), box: a },
+      { x: b.x, y: b.y + portY(target.node, edge.kind, !!b.compact), box: b },
+      { kind: edge.kind, mode: wireRouting, obstacles, waypoints: edge.waypoints },
     );
-  };
+    return [{ edge, geom }];
+  });
+  const cardBounds = bounds(obstacles);
+  let left = cardBounds.x;
+  let top = cardBounds.y;
+  let right = left + cardBounds.w;
+  let bottom = top + cardBounds.h;
+  for (const { geom } of wires) {
+    for (const leg of geom.legs) {
+      for (const { x, y } of leg) {
+        left = Math.min(left, x);
+        top = Math.min(top, y);
+        right = Math.max(right, x);
+        bottom = Math.max(bottom, y);
+      }
+    }
+  }
+  const pad = 44;
 
   return (
     <svg
       className="mini-graph"
-      viewBox={`0 0 ${width} ${height}`}
+      viewBox={`${left - pad} ${top - pad} ${right - left + pad * 2} ${bottom - top + pad * 2}`}
       preserveAspectRatio="xMidYMid meet"
       aria-hidden="true"
     >
-      {edges.filter((e) => e.kind === "reference").map(renderWire)}
-      {edges.filter((e) => e.kind === "continuation").map(renderWire)}
+      {(["reference", "continuation"] as const).map((kind) =>
+        wires.filter(({ edge }) => edge.kind === kind).map(({ edge, geom }) => (
+          <path
+            key={edge.id}
+            className={kind === "reference" ? "mg-ref" : `mg-flow ${edge.trigger === "confirm" ? "mg-confirm" : ""}`}
+            vectorEffect="non-scaling-stroke"
+            d={geom.path}
+          />
+        )),
+      )}
       {shown.map((n) => {
-        const b = boxes.get(n.id)!;
-        const x = b.x - left,
-          y = b.y - top;
+        const { box: b } = boxes.get(n.id)!;
+        const { x, y } = b;
         const st = snapshot ? nodeStatusOf(snapshot, n.id) : "draft";
         const mgState =
           n.kind !== "agent"
@@ -420,7 +378,7 @@ export function WelcomeStudio({
                 }}
               >
                 <div className="template-graph" style={{ height: 88 }}>
-                  <MiniGraph nodes={tpl.nodes} edges={tpl.edges} />
+                  <MiniGraph nodes={tpl.nodes} edges={tpl.edges} wireRouting={doc?.prefs?.wireRouting} />
                 </div>
                 <div style={{ padding: "10px 12px 12px" }}>
                   <b
@@ -1646,7 +1604,7 @@ export function WorkflowsSurface({
                     style={{ ["--i" as string]: idx }}
                   >
                     <div className="template-graph">
-                      <MiniGraph nodes={tpl.nodes} edges={tpl.edges} />
+                      <MiniGraph nodes={tpl.nodes} edges={tpl.edges} wireRouting={doc.prefs?.wireRouting} />
                     </div>
                     <div className="template-text">
                       <h3 className={tpl.builtin ? "" : "user-content"}>
@@ -1730,6 +1688,7 @@ export function WorkflowsSurface({
                     nodes={snap.nodes}
                     edges={snap.edges}
                     snapshot={snapshot}
+                    wireRouting={doc.prefs?.wireRouting}
                   />
                 </div>
                 <div className="template-text">
@@ -2811,7 +2770,7 @@ export function SettingsSurface({
   onLoadStarter,
 }: {
   doc: FlowspaceDocument;
-  prefs: Required<Pick<CanvasPrefs, "theme" | "wheel" | "snap" | "filter">>;
+  prefs: Required<Pick<CanvasPrefs, "theme" | "wheel" | "wireRouting" | "snap" | "filter">>;
   onUpdatePrefs: (changes: Partial<CanvasPrefs>) => void;
   onUpdateSettings: (changes: Partial<FlowspaceDocument["settings"]>) => void;
   onToggleLanguage: (lang: "zh" | "en") => void;
@@ -2875,6 +2834,30 @@ export function SettingsSurface({
 
         <section className="settings-section">
           <h2>{t("interaction")}</h2>
+          <div className="setting-row">
+            <div>
+              <b>{t("wireRouting")}</b>
+              <p>
+                {t(prefs.wireRouting === "avoid" ? "wireRoutingAvoidDescription" : "wireRoutingOverlapDescription")}
+              </p>
+            </div>
+            <div className="choice-buttons" role="group" aria-label={t("wireRouting")}>
+              {([
+                ["avoid", "wireRoutingAvoid"],
+                ["overlap", "wireRoutingOverlap"],
+              ] as const).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={prefs.wireRouting === mode}
+                  className={prefs.wireRouting === mode ? "selected" : ""}
+                  onClick={() => onUpdatePrefs({ wireRouting: mode })}
+                >
+                  {t(label)}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="setting-row">
             <b>{t("wheelBehavior")}</b>
             <div className="choice-buttons">
