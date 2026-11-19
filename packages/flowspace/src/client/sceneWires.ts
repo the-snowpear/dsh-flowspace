@@ -1,7 +1,32 @@
-import type { FlowEdge, WireRoutingMode } from "../types.ts";
+import type { FlowEdge, NativeAgentMessage, WireRoutingMode } from "../types.ts";
 import { bounds, type Box } from "./geometry.ts";
 import { encloses, intersects, padded } from "./sceneModel.ts";
 import { route, routePath, type WireRoute } from "./wireRouting.ts";
+
+export interface ExchangePair {
+  id: string;
+  from: string;
+  to: string;
+  items: { id: string; fromId: string; toId: string; text: string; at: number; seq: number }[];
+}
+
+export function groupExchanges(messages: NativeAgentMessage[], endpoint: (id: string) => string | undefined): ExchangePair[] {
+  const grouped = new Map<string, ExchangePair>();
+  for (const message of messages) {
+    const fromId = endpoint(message.fromSessionId);
+    const toId = endpoint(message.toSessionId);
+    if (!fromId || !toId || fromId === toId || !message.text.trim()) continue;
+    const [from, to] = fromId < toId ? [fromId, toId] : [toId, fromId];
+    const id = `${from}::${to}`;
+    let pair = grouped.get(id);
+    if (!pair) {
+      pair = { id, from, to, items: [] };
+      grouped.set(id, pair);
+    }
+    pair.items.push({ id: message.id, fromId, toId, text: message.text, at: message.time, seq: message.seq });
+  }
+  return [...grouped.values()];
+}
 
 type End = { x: number; y: number; box: Box };
 type CachedWire = { key: string; region: Box; geom: WireRoute; extent: Box };

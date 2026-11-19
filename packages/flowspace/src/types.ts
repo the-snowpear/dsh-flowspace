@@ -21,6 +21,127 @@ export type VisualFilter = "auto" | "running" | "3d" | "7d" | "all";
 export type WireRoutingMode = "avoid" | "overlap";
 export type GitPanelTab = "changes" | "history" | "branches";
 
+export interface TeamModel {
+  provider: string;
+  model: string;
+  reasoningEffort?: string;
+}
+
+export interface RoleDefinition {
+  id: string;
+  title: string;
+  description: string;
+  persona: string;
+  model: TeamModel;
+  revision: number;
+  archived?: boolean;
+}
+
+export interface TeamSlot {
+  slotId: string;
+  roleId: string;
+  label: string;
+  model?: TeamModel;
+  maxInstances?: number;
+}
+
+export interface TeamBlueprint {
+  id: string;
+  title: string;
+  lead: { persona: string; model: TeamModel };
+  slots: TeamSlot[];
+  norms: string;
+  revision: number;
+  archived?: boolean;
+}
+
+export type SaveRoleRequest = Omit<RoleDefinition, "archived">;
+export type SaveTeamRequest = Omit<TeamBlueprint, "archived">;
+export interface ArchiveTeamAssetRequest {
+  id: string;
+  revision: number;
+}
+
+export interface TeamModelRoute {
+  provider: string;
+  providerName: string;
+  model: string;
+  name: string;
+}
+
+export interface TeamReference {
+  teamId: string;
+  revision?: number;
+}
+
+export interface TeamDependencies {
+  teams: TeamBlueprint[];
+  roles: RoleDefinition[];
+}
+
+export interface TeamModelReplacement {
+  from: TeamModel;
+  to: TeamModel;
+}
+
+export interface WorkflowImportRequest {
+  document?: FlowspaceDocument;
+  template?: WorkflowTemplate;
+  dependencies?: TeamDependencies;
+  copyAssets?: boolean;
+  replacements?: TeamModelReplacement[];
+}
+
+export type WorkflowImportResult =
+  | { kind: "imported"; document: FlowspaceDocument }
+  | { kind: "missing-models"; models: TeamModel[] };
+
+export interface TeamSlotView {
+  slotId: string;
+  label: string;
+  roleTitle: string;
+  model: TeamModel;
+  maxInstances: number;
+}
+
+export interface TeamMemberView {
+  sessionId: string;
+  parentId: string;
+  depth: number;
+  name: string;
+  label: string;
+  activity: "running" | "idle";
+  mode: "continuable" | "one-shot" | "external";
+  slotId: string | null;
+  provider?: string;
+  model?: string;
+}
+
+export interface TeamTaskView {
+  id: string;
+  subject: string;
+  description: string;
+  status: "pending" | "in_progress" | "completed";
+  ownerId?: string;
+  ownerName?: string;
+  blockedBy: string[];
+  ready: boolean;
+}
+
+export interface TeamRuntimeBrief {
+  leadSessionId: string;
+  nodeId: string;
+  teamId: string;
+  title: string;
+  revision: number;
+  enabled: boolean;
+  leadModel: TeamModel;
+  slots: TeamSlotView[];
+  tasks: TeamTaskView[];
+  members: TeamMemberView[];
+  capacity: { active: number; max: number };
+}
+
 export interface GroupPort {
   id: string;
   kind: "reference" | "continuation";
@@ -74,6 +195,7 @@ export interface FlowNode {
   branch?: string;
   worktreePath?: string;
   agentPreset?: string;
+  teamRef?: TeamReference;
   planMode?: boolean;
   customTitle?: boolean;
   subAgentsExpanded?: boolean;
@@ -225,6 +347,7 @@ export interface StepTelemetry {
 export type StepState =
   | "queued"
   | "running"
+  | "settling"
   | "completed"
   | "error"
   | "aborted"
@@ -234,6 +357,7 @@ export interface RunStep {
   nodeId: string;
   requestId: string;
   sessionId?: string;
+  teamRef?: TeamReference;
   turn?: number;
   state: StepState;
   iteration: number;
@@ -467,6 +591,9 @@ export interface FlowspaceSnapshot {
   nativeMessages?: NativeAgentMessage[];
   subagents?: SubagentBrief[];
   sourceVersions?: Record<string, string>;
+  roles?: RoleDefinition[];
+  teamBlueprints?: TeamBlueprint[];
+  teams?: Record<string, TeamRuntimeBrief>;
 }
 export interface StartRequest {
   nodeIds: string[];

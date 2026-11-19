@@ -304,6 +304,8 @@ interface WireOptions {
 export interface WireRoute {
   path: string;
   label: Point;
+  /** Space between a short tag and the port rims, with clearance for its expanded pill. */
+  portLabel?: { fit: "inline" | "snug" | "above"; lift: number; idleWidth: number };
   tight: boolean;
   /** Sampled path for each interval between consecutive saved anchors. */
   legs: Point[][];
@@ -430,7 +432,28 @@ export function route(from: WireEnd, to: WireEnd, options: WireOptions = {}): Wi
       tight = !room || compact;
     }
   }
-  return { path, label, tight, legs: legs.map((leg) => leg.points) };
+  let portLabel: WireRoute["portLabel"];
+  if (tight) {
+    const reference = options.kind === "reference";
+    const rim = reference ? 7.5 : 6;
+    let room = Infinity;
+    let lift = 0;
+    for (const end of [from, to]) {
+      if (!end.box || Math.abs(label.y - end.y) >= 22) continue;
+      const distanceX = Math.abs(label.x - end.x);
+      if (distanceX >= 72) continue;
+      room = Math.min(room, 2 * (distanceX - rim));
+      lift = Math.max(lift, label.y - end.box.y + LABEL_HALF_HEIGHT + 2);
+    }
+    if (lift) {
+      // Widths of the original icon pill with regular and close-set spacing.
+      const regular = reference ? 27 : 46;
+      const snug = reference ? 17 : 31;
+      const fit = room >= regular ? "inline" : room >= snug ? "snug" : "above";
+      portLabel = { fit, lift, idleWidth: fit === "snug" ? snug : regular };
+    }
+  }
+  return { path, label, portLabel, tight, legs: legs.map((leg) => leg.points) };
 }
 
 export function insertWireWaypoint(waypoints: Point[], wire: WireRoute, click: Point): Point[] {

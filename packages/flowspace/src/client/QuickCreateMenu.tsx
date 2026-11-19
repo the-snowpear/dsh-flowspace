@@ -48,6 +48,9 @@ export type QuickCreateSelection =
     }
   | {
       action: "existing-session";
+    }
+  | {
+      action: "create-team";
     };
 
 interface QuickCreateEntry {
@@ -389,6 +392,13 @@ export function QuickCreateMenu({
         icon: "agent",
         category: "nodes",
         selection: { action: "create-node", nodeKind: "agent" },
+      },
+      {
+        id: "node-team",
+        label: t("newTeam"),
+        icon: "team",
+        category: "nodes",
+        selection: { action: "create-team" },
       },
       {
         id: "node-plan-agent",

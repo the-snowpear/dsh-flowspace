@@ -258,9 +258,30 @@
   border-color: var(--cap-always-border);
   background: color-mix(in oklab, var(--teal) 9%, var(--surface));
 }
-.fs-root .tight-tag:not(:hover):not(.selected) > button > span,
-.fs-root .tight-tag:not(:hover):not(.selected) > button > small {
+.fs-root .tight-tag:not(:hover, :focus-within, .selected) > button > span,
+.fs-root .tight-tag:not(:hover, :focus-within, .selected) > button > small {
   display: none;
+}
+/* Keep the original pill on the wire as long as both port rims fit beside it. */
+.fs-root .snug-tag:not(:hover, :focus-within, .selected) > button:first-child {
+  gap: 1.5px;
+  padding-inline: 2px;
+}
+.fs-root .snug-tag:not(:hover, :focus-within, .selected) .trigger-indicator {
+  padding-left: 1.5px;
+}
+.fs-root .edge-tag.near-ports:is(:hover, :focus-within, .selected, .above-ports) {
+  margin-top: calc(0px - var(--tag-lift));
+}
+/* Bridge the resting and expanded positions while the pointer moves up to the actions. */
+.fs-root .near-ports:not(.above-ports):hover::before {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  translate: -50% 0;
+  width: var(--tag-idle-width);
+  height: var(--tag-lift);
 }
 .fs-root .edge-tag.edge-dim {
   opacity: 0.25;

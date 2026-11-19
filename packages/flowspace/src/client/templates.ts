@@ -6,6 +6,8 @@ import type {
   FlowspaceDocument,
   FlowspaceSnapshot,
   GroupPort,
+  TeamBlueprint,
+  TeamDependencies,
   WorkflowTemplate,
 } from "../types.ts";
 import {
@@ -994,6 +996,7 @@ export function captureTemplate(
   groupId: string,
   title: string,
   description: string,
+  teams: TeamBlueprint[] = [],
 ): WorkflowTemplate {
   const group = doc.nodes.find((n) => n.id === groupId && n.kind === "group");
   if (!group) throw new Error(t("groupNotFound"));
@@ -1010,6 +1013,8 @@ export function captureTemplate(
     .map((n) => {
       const slot = slotOf.get(n.id)!;
       const clone = structuredClone(n);
+      const revision = clone.teamRef && teams.find((team) => team.id === clone.teamRef?.teamId)?.revision;
+      if (clone.teamRef && revision !== undefined) clone.teamRef.revision = revision;
       /* Strip all machine/session-bound state so exported templates stay portable */
       delete clone.sessionId;
       delete clone.lastSubmittedTask;
@@ -1089,6 +1094,24 @@ export function captureTemplate(
     edges,
     ports,
   };
+}
+
+export function teamDependenciesFor(nodes: FlowNode[], snapshot: FlowspaceSnapshot | null): TeamDependencies {
+  const teamIds = new Set(nodes.flatMap((node) => node.teamRef ? [node.teamRef.teamId] : []));
+  const teams = (snapshot?.teamBlueprints ?? []).filter((team) => teamIds.has(team.id));
+  const roleIds = new Set(teams.flatMap((team) => team.slots.map((slot) => slot.roleId)));
+  const roles = (snapshot?.roles ?? []).filter((role) => roleIds.has(role.id));
+  return { teams, roles };
+}
+
+export function teamRevisionDifferences(template: WorkflowTemplate, teams: TeamBlueprint[] = []) {
+  const references = new Map(template.nodes.flatMap((node) => node.teamRef
+    ? [[node.teamRef.teamId, node.teamRef.revision] as const] : []));
+  return teams.flatMap((team) => {
+    const saved = references.get(team.id);
+    return saved !== undefined && team.revision > saved
+      ? [{ id: team.id, title: team.title, saved, current: team.revision }] : [];
+  });
 }
 
 export function instantiateTemplate(
@@ -1266,6 +1289,7 @@ export function synchronizeTemplate(
         existing.continuationPrompt = src.continuationPrompt;
         existing.text = src.text;
         existing.planMode = src.planMode;
+        existing.teamRef = structuredClone(src.teamRef);
         existing.roleLabel = src.roleLabel;
         existing.participation = src.participation;
         existing.rerun = src.rerun;

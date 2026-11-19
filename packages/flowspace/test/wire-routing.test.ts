@@ -63,3 +63,21 @@ test("adding a waypoint uses the leg that was hit and preserves saved anchors", 
   assert.deepEqual(result.slice(1), waypoints);
   assert.deepEqual(wire.legs.map((leg) => leg.at(-1)), [...waypoints, { x: 850, y: 30 }]);
 });
+
+test("short wires keep the pill centred inline and only lift it at rest when its icons cannot fit", () => {
+  const from = { x: 280, y: 64, box: { x: 0, y: 40, w: 280, h: 118 } };
+  for (const mode of ["overlap", "avoid"] as const) {
+    for (const gap of [16, 44, 80, 180]) {
+      const to = { x: from.x + gap, y: from.y, box: { ...from.box, x: from.x + gap } };
+      const wire = route(from, to, { mode });
+      assert.deepEqual(wire.label, { x: from.x + gap / 2, y: from.y });
+      assert.equal(wire.tight, gap < 128);
+      const fit = gap === 16 ? "above" : gap === 44 ? "snug" : gap === 80 ? "inline" : undefined;
+      assert.equal(wire.portLabel?.fit, fit);
+      if (wire.portLabel) assert.ok(wire.label.y - wire.portLabel.lift + 11 < from.box.y);
+    }
+    const to = { x: 336, y: from.y, box: { ...from.box, x: 336 } };
+    assert.equal(route(from, to, { mode, kind: "reference" }).portLabel?.fit, "inline");
+    assert.equal(route(from, to, { mode, kind: "continuation" }).portLabel?.fit, "snug");
+  }
+});

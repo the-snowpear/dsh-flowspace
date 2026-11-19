@@ -26,6 +26,9 @@ import type {
   NodeKind,
   SessionBrief,
   StartRequest,
+  TeamDependencies,
+  TeamModel,
+  WorkflowImportRequest,
   WorkflowTemplate,
   WorkspaceBrief,
   WorkspaceFilePreview,
@@ -39,9 +42,10 @@ import {
   newEdge,
   newNode,
   uid,
+  workflowNodes,
 } from "../core/document.ts";
 import type { CanvasBridge } from "./bridge.ts";
-import { BrandMark, Icon, kindIconName } from "./icons.tsx";
+import { BrandMark, Icon, PortMark, kindIconName } from "./icons.tsx";
 import { getLanguage, setLanguage, subscribeLanguage, t, tr } from "./i18n.ts";
 import {
   LOD_ZOOM,
@@ -73,7 +77,7 @@ import {
 } from "./geometry.ts";
 import { DEFAULT_WIRE_ROUTING, insertWireWaypoint, route } from "./wireRouting.ts";
 import { startThemeTransition } from "./themeTransition.ts";
-import { pathExtent, pathTouches, SceneWires } from "./sceneWires.ts";
+import { groupExchanges, pathExtent, pathTouches, SceneWires, type ExchangePair } from "./sceneWires.ts";
 import { StructureWireLayer } from "./StructureWireLayer.tsx";
 import { paintLayer, settleLayer } from "./cameraFrame.ts";
 import { applyGeometry, byId, encloses, indexEdges, indexNodes, intersects, padded, runtimeIndex, shareSnapshotValue, viewportBox, type GeometryEdit } from "./sceneModel.ts";
@@ -83,6 +87,8 @@ import {
   captureTemplate,
   computeSyncPlan,
   instantiateTemplate,
+  teamDependenciesFor,
+  teamRevisionDifferences,
   localizedStarterDocument,
   synchronizeTemplate,
   type SyncPlan,
@@ -106,6 +112,8 @@ import {
 import { PayloadPeekPopover } from "./PayloadPeekPopover.tsx";
 import { installHostStyleGuard } from "./hostStyleGuard.ts";
 import { CanvasDialog } from "./CanvasDialog.tsx";
+import { TeamView } from "./TeamView.tsx";
+import { WorkflowImportDialog } from "./WorkflowImportDialog.tsx";
 import {
   alignNodes,
   distributeNodes,
@@ -129,7 +137,7 @@ import {
   TerminalNodeBody,
 } from "./ToolNodeViews.tsx";
 
-type RouteId = "canvas" | "conversation" | "workflows" | "activity" | "settings";
+type RouteId = "canvas" | "conversation" | "workflows" | "activity" | "settings" | "team";
 
 interface MenuItem {
   heading?: string;
@@ -156,20 +164,6 @@ interface PaletteEntry {
   section: string;
   icon: string;
   fn: () => void;
-}
-
-interface ExchangePair {
-  id: string;
-  from: string;
-  to: string;
-  items: {
-    id: string;
-    fromId: string;
-    toId: string;
-    text: string;
-    at: number;
-    seq?: number;
-  }[];
 }
 
 /**
@@ -457,6 +451,11 @@ const ViewportCard = memo(function ViewportCard({ node, visible, compact, render
   if (before.snapshot === after.snapshot) return true;
   const node = after.node;
   if (node.kind === "changes") return before.snapshot?.live === after.snapshot?.live;
+  if (node.teamRef) {
+    const teamId = node.teamRef.teamId;
+    if (before.snapshot?.teamBlueprints?.find((team) => team.id === teamId) !== after.snapshot?.teamBlueprints?.find((team) => team.id === teamId) ||
+        (node.sessionId && before.snapshot?.teams?.[node.sessionId] !== after.snapshot?.teams?.[node.sessionId])) return false;
+  }
   const old = runtimeIndex(before.snapshot), current = runtimeIndex(after.snapshot);
   const sameNode = (id: string) => {
     if (old.live.get(id) !== current.live.get(id) || old.statuses.get(id) !== current.statuses.get(id)) return false;
@@ -487,7 +486,7 @@ export function CanvasApp({
 }: {
   bridge: CanvasBridge;
   renderConversation: (
-    node: FlowNode,
+    node: FlowNode | undefined,
     reference: SessionReference,
   ) => ReactNode;
 }) {
@@ -501,7 +500,7 @@ export function CanvasApp({
   const [gesture, setGesture] = useState<GeometryEdit | null>(null);
   const gestureRef = useRef<GeometryEdit | null>(null);
   const doc = useMemo(() => applyGeometry(baseDoc, gesture), [baseDoc, gesture]);
-  const { nodesById, collapsed, membersOf } = useMemo(() => indexNodes(doc.nodes), [doc.nodes]);
+  const { nodesById, collapsed, membersOf, referenceSources } = useMemo(() => indexNodes(doc.nodes), [doc.nodes]);
   const edgeIndex = useMemo(() => indexEdges(doc.edges), [doc.edges]);
   const endpointIndex = useMemo(() => ({ nodes: nodesById, ancestors: collapsed, ports: new Map<string, GroupPort[]>() }), [nodesById, collapsed, doc.edges]);
   const runtime = runtimeIndex(snapshot);
@@ -523,8 +522,13 @@ export function CanvasApp({
   const toastTimer = useRef<ReturnType<typeof setTimeout>>();
 
   const [routeName, setRouteName] = useState<RouteId>("canvas");
+  const [teamNodeId, setTeamNodeId] = useState<string>();
+  const openTeam = useCallback((nodeId: string) => {
+    setTeamNodeId(nodeId);
+    setRouteName("team");
+  }, []);
   const [libraryTab, setLibraryTab] = useState<
-    "patterns" | "mine" | "snapshots"
+    "patterns" | "mine" | "snapshots" | "teams"
   >("patterns");
   const [activityTab, setActivityTab] = useState<
     "runs" | "outputs" | "waiting"
@@ -646,6 +650,8 @@ export function CanvasApp({
   const [helpModal, setHelpModal] = useState(false);
   /* ComfyUI interaction layer */
   const [quickCreate, setQuickCreate] = useState<QuickCreateState | null>(null);
+  const [teamPicker, setTeamPicker] = useState<{ at?: { x: number; y: number } } | null>(null);
+  const [workflowImport, setWorkflowImport] = useState<{ request: WorkflowImportRequest; missing?: TeamModel[] }>();
   const [payloadPeek, setPayloadPeek] = useState<PayloadPeekState | null>(null);
   /** Subgraph clipboard lives in memory only: it is a draft document fragment, never runtime state. */
   const clipboardRef = useRef<SubgraphClipboard | null>(null);
@@ -1292,7 +1298,7 @@ export function CanvasApp({
       return;
     }
     const elements = worldRef.current.querySelectorAll<HTMLElement>(
-      ".fs-card-slot:not([hidden]) :is(.port,.compact .node-heading strong,.compact-status .status,.compact .node-avatar),.group-header > strong",
+      ".fs-card-slot:not([hidden]) :is(.port,.compact .node-heading strong,.compact-status .status,.compact-status .fs-team-node-summary,.compact .node-avatar),.group-header > strong",
     );
     typeElements.current = Array.from(elements);
     const scale = String(typeScaleFor(docRef.current.viewport.zoom));
@@ -1428,7 +1434,7 @@ export function CanvasApp({
       if (node.kind === "agent" && prefs.filter !== "all") {
         const runtime = runtimeIndex(filterSnapshot);
         const st = nodeStatusOf(filterSnapshot, node.id);
-        const active = ["running", "waiting", "queued", "input"].includes(st);
+        const active = ["running", "settling", "waiting", "queued", "input"].includes(st);
         if (prefs.filter === "running") return active;
         const liveItem = runtime.live.get(node.id);
         const lastStepAt = runtime.steps.get(node.id)?.at(-1)?.createdAt ?? 0;
@@ -1501,7 +1507,7 @@ export function CanvasApp({
     const visibleNodes = doc.nodes.filter((n) => isNodeVisible(n));
     const runningIds = new Set(
       doc.nodes
-        .filter((n) => n.kind === "agent" && nodeStatusOf(snapshot, n.id) === "running")
+        .filter((n) => n.kind === "agent" && ["running", "settling"].includes(nodeStatusOf(snapshot, n.id)))
         .map((n) => n.id),
     );
     const waitingIds = new Set(waitingAgentNodes.map((n) => n.id));
@@ -1513,7 +1519,7 @@ export function CanvasApp({
       visibleNodes,
       lod,
       keepExpandedIds,
-      subagents: snapshot?.subagents ?? [],
+      subagents: (snapshot?.subagents ?? []).filter((member) => !snapshot?.teams?.[member.parentSessionId]),
       runningNodeIds: runningIds,
       waitingNodeIds: waitingIds,
     });
@@ -1626,7 +1632,7 @@ export function CanvasApp({
         if (collapsedAncestor(curDoc, n.id)) return false;
         if (curFilter === "running" && n.kind === "agent") {
           const st = nodeStatusOf(snapshot, n.id);
-          if (!["running", "waiting", "queued", "input"].includes(st))
+          if (!["running", "settling", "waiting", "queued", "input"].includes(st))
             return false;
         }
         return true;
@@ -2703,9 +2709,10 @@ export function CanvasApp({
         opts?.link?.(d, grp);
       });
       focusCreatedGroup(createdGroupId);
-      showToast(t("templateAdded"));
+      const [changed] = teamRevisionDifferences(tpl, snapshot?.teamBlueprints);
+      showToast(changed ? t("teamRevisionDifference", changed) : t("templateAdded"));
     },
-    [activeWorkspaceId, activeWorkspaceCwd, edit, focusCreatedGroup, showToast],
+    [activeWorkspaceId, activeWorkspaceCwd, edit, focusCreatedGroup, showToast, snapshot?.teamBlueprints],
   );
 
   const handleSaveTemplateDialog = useCallback(
@@ -2719,7 +2726,7 @@ export function CanvasApp({
         secondaryInitial: "",
         onSubmit: (name, desc) => {
           edit((d) => {
-            const captured = captureTemplate(d, groupId, name, desc ?? "");
+            const captured = captureTemplate(d, groupId, name, desc ?? "", snapshot?.teamBlueprints);
             d.templates = [...(d.templates ?? []), captured];
             const target = d.nodes.find((n) => n.id === groupId);
             if (target) {
@@ -2731,7 +2738,7 @@ export function CanvasApp({
         },
       });
     },
-    [edit, showToast],
+    [edit, showToast, snapshot?.teamBlueprints],
   );
 
   const handleSaveNewTemplateVersion = useCallback(
@@ -2747,6 +2754,7 @@ export function CanvasApp({
           groupId,
           src.builtin ? t(src.title) : src.title,
           src.builtin ? t(src.description) : src.description,
+          snapshot?.teamBlueprints,
         );
         if (!src.builtin) {
           captured.id = src.id;
@@ -2766,7 +2774,7 @@ export function CanvasApp({
       });
       showToast(t("templateSaved"));
     },
-    [edit, showToast],
+    [edit, showToast, snapshot?.teamBlueprints],
   );
 
   const handleOpenSyncTemplate = useCallback(
@@ -2905,6 +2913,11 @@ export function CanvasApp({
           fn: () => createCanvasNode("agent", worldPt),
         },
         {
+          label: t("newTeam"),
+          icon: "team",
+          fn: () => setTeamPicker({ at: worldPt }),
+        },
+        {
           label: t("existingSession"),
           icon: "chat",
           fn: () =>
@@ -3005,6 +3018,10 @@ export function CanvasApp({
 
       if (sel.action === "existing-session") {
         void bridge.sessions().then(setSessionModal).catch(reportError);
+        return;
+      }
+      if (sel.action === "create-team") {
+        setTeamPicker({ at: world });
         return;
       }
 
@@ -3113,6 +3130,11 @@ export function CanvasApp({
         },
       ];
       if (node.kind === "agent") {
+        if (node.teamRef) items.push({
+          label: t("teamEnter"),
+          icon: "team",
+          fn: () => openTeam(node.id),
+        });
         items.push(
           {
             label: t("runSingle"),
@@ -3138,7 +3160,7 @@ export function CanvasApp({
             fn: () => forkHypothesis(node.id),
           },
         );
-        if (nodeStatusOf(snapshot, node.id) === "running") {
+        if (["running", "settling"].includes(nodeStatusOf(snapshot, node.id))) {
           items.push({
             label: t("stopAgent"),
             icon: "stop",
@@ -3278,6 +3300,7 @@ export function CanvasApp({
       openAnchoredMenu,
       runFromHere,
       runToHere,
+      openTeam,
       forkHypothesis,
       stopNode,
       snapshot,
@@ -4487,6 +4510,7 @@ export function CanvasApp({
         return;
       }
 
+      if (target?.closest(".fs-team-dialog")) return;
       if (mod && (ev.key.toLowerCase() === "k" || ev.key.toLowerCase() === "f")) {
         if (!target?.closest(".fs-embedded")) {
           ev.preventDefault();
@@ -4495,7 +4519,7 @@ export function CanvasApp({
         }
       }
 
-      if (typing || isTypingTarget(document.activeElement)) return;
+      if (typing || isTypingTarget(document.activeElement) || target?.closest(".fs-team-page, .fs-team-view")) return;
       /* Quick-create & payload popovers own their keyboard while open */
       if (quickCreate || payloadPeek) return;
 
@@ -4778,42 +4802,21 @@ export function CanvasApp({
 
   /* Computed Read-Only Message Wires strictly from DSH Native Agent Messages (M11) */
   const exchanges = useMemo<ExchangePair[]>(() => {
-    const map = new Map<string, ExchangePair>();
+    const teams = new Map<string, string>();
+    for (const team of Object.values(snapshot?.teams ?? {})) {
+      for (const member of team.members) teams.set(member.sessionId, team.nodeId);
+    }
     const nodeIdForSession = (sid: string): string | undefined => {
       const direct = doc.nodes.find((n) => n.sessionId === sid)?.id;
       if (direct) return direct;
+      if (teams.has(sid)) return teams.get(sid);
       const sub = snapshot?.subagents?.find((s) => s.sessionId === sid);
       if (sub) {
         return doc.nodes.find((n) => n.sessionId === sub.parentSessionId)?.id;
       }
       return undefined;
     };
-    for (const msg of snapshot?.nativeMessages ?? []) {
-      const fromNodeId = nodeIdForSession(msg.fromSessionId);
-      const toNodeId = nodeIdForSession(msg.toSessionId);
-      if (!fromNodeId || !toNodeId || fromNodeId === toNodeId) continue;
-      const [a, b] =
-        fromNodeId < toNodeId
-          ? [fromNodeId, toNodeId]
-          : [toNodeId, fromNodeId];
-      const key = `${a}::${b}`;
-      let entry = map.get(key);
-      if (!entry) {
-        entry = { id: key, from: fromNodeId, to: toNodeId, items: [] };
-        map.set(key, entry);
-      }
-      if (msg.text.trim()) {
-        entry.items.push({
-          id: msg.id,
-          fromId: fromNodeId,
-          toId: toNodeId,
-          text: msg.text,
-          at: msg.time,
-          seq: msg.seq,
-        });
-      }
-    }
-    return [...map.values()].filter(
+    return groupExchanges(snapshot?.nativeMessages ?? [], nodeIdForSession).filter(
       (ex) =>
         ex.items.length > 0 &&
         isNodeVisible(
@@ -4825,7 +4828,7 @@ export function CanvasApp({
           true,
         ),
     );
-  }, [snapshot?.nativeMessages, snapshot?.subagents, doc.nodes, isNodeVisible]);
+  }, [snapshot?.nativeMessages, snapshot?.subagents, snapshot?.teams, doc.nodes, isNodeVisible]);
 
   /* Multi-input hover fan-out layout (one satellite mini-node per incoming wire) */
   const activeHubLayout = useMemo(
@@ -5019,6 +5022,7 @@ export function CanvasApp({
     if (!targetId) {
       const cmds: [string, string, () => void][] = [
         ["newAgent", "agent", () => createCanvasNode("agent")],
+        ["newTeam", "team", () => setTeamPicker({})],
         [
           "existingSession",
           "chat",
@@ -5175,38 +5179,66 @@ export function CanvasApp({
   ]);
 
   /* Export / Import JSON */
-  const handleExportJson = useCallback(() => {
-    const blob = new Blob([JSON.stringify(docRef.current, null, 2)], {
+  const downloadWorkflow = (name: string, data: unknown) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], {
       type: "application/json",
     });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${docRef.current.title || "flowspace"}.json`;
+    link.download = `${name}.json`;
     document.body.appendChild(link);
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 500);
-  }, []);
+  };
 
+  const handleExportJson = () => {
+    const copy = structuredClone(docRef.current);
+    const nodes = workflowNodes(copy);
+    for (const node of nodes) {
+      if (!node.teamRef) continue;
+      delete node.sessionId;
+      delete node.lastSubmittedTask;
+    }
+    const dependencies = teamDependenciesFor(nodes, snapshot);
+    downloadWorkflow(copy.title || "flowspace", { ...copy, ...(dependencies.teams.length ? { dependencies } : {}) });
+  };
+  const handleExportTemplate = (template: WorkflowTemplate) => {
+    const dependencies = teamDependenciesFor(template.nodes, snapshot);
+    downloadWorkflow(template.title, { kind: "flowspace-template", version: 1, template, dependencies });
+  };
+  const finishImport = useCallback((savedDoc: FlowspaceDocument, template: boolean) => {
+    docRef.current = savedDoc;
+    setDoc(savedDoc);
+    setWorkflowImport(undefined);
+    setRouteName(template ? "workflows" : "canvas");
+    if (template) setLibraryTab("mine");
+    else setTimeout(() => fitView(true), 60);
+    showToast(t("workflowImported"));
+  }, [fitView, showToast]);
   const handleImportFile = useCallback(
     async (file: File) => {
       try {
-        const parsed = JSON.parse(await file.text()) as FlowspaceDocument;
-        const savedDoc = await bridge.save({
-          ...parsed,
-          version: 1,
-          id: "main",
-        });
-        docRef.current = savedDoc;
-        setDoc(savedDoc);
-        setRouteName("canvas");
-        setTimeout(() => fitView(true), 60);
+        const parsed = JSON.parse(await file.text()) as FlowspaceDocument & {
+          kind?: string; template?: WorkflowTemplate; dependencies?: TeamDependencies;
+        };
+        const request: WorkflowImportRequest = parsed.kind === "flowspace-template"
+          ? { template: parsed.template, dependencies: parsed.dependencies }
+          : { document: { ...parsed, version: 1, id: "main" }, dependencies: parsed.dependencies };
+        await flush();
+        if (request.dependencies) {
+          setWorkflowImport({ request });
+        } else {
+          const result = await bridge.importWorkflow(request);
+          if (result.kind === "imported") finishImport(result.document, !!request.template);
+          else setWorkflowImport({ request, missing: result.models });
+        }
       } catch (err) {
         reportError(err);
       }
     },
-    [bridge, fitView, reportError],
+    [bridge, finishImport, flush, reportError],
   );
 
   /* Selected objects for Inspector & Header */
@@ -5247,6 +5279,7 @@ export function CanvasApp({
     );
     return explicit ?? doc.nodes.find((n) => n.kind === "agent");
   }, [doc.nodes, lastAgentId]);
+  const openTeamNode = teamNodeId ? doc.nodes.find((node) => node.id === teamNodeId && node.teamRef) : undefined;
 
   const leftSnapped = doc.nodes.some((n) => n.window?.snap === "left");
   const rightSnapped = doc.nodes.some((n) => n.window?.snap === "right");
@@ -5307,19 +5340,61 @@ export function CanvasApp({
       };
     }
 
-    const linkedPort = (
-      pKind: "reference" | "continuation",
-      dir: "in" | "out",
-    ) =>
-      (dir === "in" ? edgeIndex.incoming : edgeIndex.outgoing).get(node.id)?.some(
-        (e) =>
-          e.kind === pKind &&
-          (dir === "in" ? e.target === node.id : e.source === node.id),
-      ) ||
-      (pKind === "reference" &&
-        dir === "in" &&
-        (node.kind === "display" || node.kind === "detail") &&
-        !!node.sourceNodeId);
+    const renderPort = (kind: FlowEdge["kind"], direction: "in" | "out") => {
+      const input = direction === "in";
+      const edges = (input ? edgeIndex.incoming : edgeIndex.outgoing).get(node.id) ?? [];
+      const incoming = input && node.kind === "agent"
+        ? edges.filter(edge => edge.kind === kind && isNodeVisible(nodesById.get(edge.source), true))
+        : [];
+      const lastEdge = incoming.at(-1);
+      const multi = incoming.length > 1;
+      const linked = edges.some(edge => edge.kind === kind) || (kind === "reference" &&
+        (input ? node.kind === "display" && !!node.sourceNodeId : referenceSources.has(node.id)));
+      const fromHere = connecting?.fromIds.includes(node.id);
+      const target = connecting?.kind === kind && input && node.kind === "agent" && !fromHere;
+      const name = kind === "reference"
+        ? t(input ? "refInput" : "refOutput")
+        : t(input ? "contInput" : "contOutput");
+      const title = lastEdge ? `${name} (${incoming.length}) · ${t("dragInputTip")}` : name;
+      return (
+        <button
+          type="button"
+          data-node-id={node.id}
+          data-port-kind={kind}
+          data-port-direction={direction}
+          className={[
+            "port", `port-${kind}`, `port-${direction}`,
+            linked && "is-linked",
+            lastEdge && !connecting && "is-draggable-in",
+            multi && "is-multi",
+            multi && activeHubLayout?.nodeId === node.id && activeHubLayout.kind === kind && "is-hub-open",
+            !input && fromHere && connecting?.kind === kind && "is-dragging-origin",
+            target && "port-target",
+            target && connecting.snappedTarget?.nodeIds.includes(node.id) && "is-snap-locked",
+          ].filter(Boolean).join(" ")}
+          style={{ "--port-y": `${portY(node, kind, compact)}px` } as React.CSSProperties}
+          title={title}
+          aria-label={title}
+          onPointerEnter={() => {
+            if (connecting || isDragging || !lastEdge) return;
+            if (multi) openInputHub(node.id, kind);
+            else setHoveredEdgeId(lastEdge.id);
+          }}
+          onPointerLeave={() => {
+            if (multi) scheduleCloseInputHub();
+            else if (lastEdge) setHoveredEdgeId(prev => prev === lastEdge.id ? null : prev);
+          }}
+          onPointerDown={ev => {
+            if (!input) startPortDrag(ev, [node.id], kind);
+            else if (lastEdge) startInputEdgeDrag(ev, lastEdge);
+          }}
+        >
+          {multi
+            ? <span className="port-multi-count">{incoming.length}</span>
+            : <PortMark kind={kind} />}
+        </button>
+      );
+    };
 
     const activeTab: AgentTab = node.tab ?? "task";
     const nodeSteps = runtime.steps.get(node.id) ?? [];
@@ -5351,7 +5426,15 @@ export function CanvasApp({
                 <i />
                 {t(state)}
               </span>
-              <span>{wsName}</span>
+              {team ? <small className="fs-team-node-summary">
+                <span title={t("teamCapacity", team.capacity)} aria-label={t("teamCapacity", team.capacity)}>
+                  <Icon name="person" />{team.capacity.active}/{team.capacity.max}
+                </span>
+                <span title={t("teamTaskProgress", { done: completedTasks, total: team.tasks.length })}
+                  aria-label={t("teamTaskProgress", { done: completedTasks, total: team.tasks.length })}>
+                  <Icon name="board" />{completedTasks}/{team.tasks.length}
+                </span>
+              </small> : <span>{wsName}</span>}
             </div>
             <p className="compact-summary user-content">{summary}</p>
             {waitingGates.length > 0 && (
@@ -5718,9 +5801,14 @@ export function CanvasApp({
                   {t("planMode")}
                 </button>
               )}
+              {node.teamRef && (
+                <button type="button" className="fs-plan-chip fs-team-enter" onClick={() => openTeam(node.id)}>
+                  <Icon name="team" /><span>{t("teamEnter")}</span><Icon name="chev" />
+                </button>
+              )}
               {node.sessionId && (
                 <>
-                  {childSubs.length > 0 && (
+                  {!node.teamRef && childSubs.length > 0 && (
                     <button
                       type="button"
                       className={`fs-plan-chip ${node.subAgentsExpanded ? "active" : ""}`}
@@ -6611,6 +6699,13 @@ export function CanvasApp({
     const roleText = node.roleLabel
       ? dictRoleLabel(node.roleLabel)
       : undefined;
+    const team = node.sessionId ? snapshot?.teams?.[node.sessionId] : undefined;
+    const blueprint = node.teamRef
+      ? snapshot?.teamBlueprints?.find((team) => team.id === node.teamRef?.teamId)
+      : undefined;
+    const teamModel = team?.leadModel ?? blueprint?.lead.model;
+    const completedTasks = team?.tasks.filter((task) => task.status === "completed").length ?? 0;
+    const teamSlotCount = t("teamSlotCount", { count: team?.slots.length ?? blueprint?.slots.length ?? 0 });
 
     return (
       <section
@@ -6622,10 +6717,12 @@ export function CanvasApp({
         className={[
           "node",
           `node-${node.kind}`,
+          node.teamRef ? "node-team" : "",
           compact ? "compact" : "full",
           placement === "window" ? "floating-window" : "",
           placement === "conversation" ? "conversation-agent" : "",
           isSelected ? "selected" : "",
+          connecting?.fromIds.includes(node.id) ? "is-dragging-source" : "",
           state ? `status-${state}` : "",
           node.pinned ? "is-pinned" : "",
           waitingGates.length ? "needs-confirmation" : "",
@@ -6677,7 +6774,7 @@ export function CanvasApp({
           openNodeContextMenu(node, { x: ev.clientX, y: ev.clientY });
         }}
       >
-        {state === "running" && (
+        {(state === "running" || state === "settling") && (
           /* A comet of light travelling the rounded border at constant speed:
              a long faint tail plus a bright head, both dash-offset animated. */
           <svg className="node-aura" aria-hidden="true">
@@ -6691,16 +6788,19 @@ export function CanvasApp({
             if ((ev.target as HTMLElement).closest("button")) return;
             startNodeMove(ev, node.id);
           }}
-          onDoubleClick={() => toggleNodeForm(node.id)}
+          onDoubleClick={() => node.teamRef ? openTeam(node.id) : toggleNodeForm(node.id)}
         >
-          <span
+          {node.teamRef ? <button type="button" className="node-avatar fs-team-avatar" title={t("teamEnter")}
+            aria-label={t("teamEnter")} onClick={() => openTeam(node.id)}><Icon name="team" /></button> : <span
             className={`node-avatar ${node.kind === "agent" ? "agent-avatar" : ""}`}
           >
             <Icon name={kindIconName(node.kind)} />
-          </span>
+          </span>}
           <div className="node-heading">
             <strong>{node.title}</strong>
-            {!compact && roleText && <small>{roleText}</small>}
+            {node.teamRef ? !(team && compact) && <small className="fs-team-node-summary">
+              <span>{teamSlotCount}</span>{teamModel && <span title={teamModel.provider + "/" + teamModel.model}>{teamModel.model}</span>}
+            </small> : !compact && roleText && <small>{roleText}</small>}
           </div>
           {node.kind === "agent" &&
             (node.participation === "bypassed" ||
@@ -6717,7 +6817,7 @@ export function CanvasApp({
               </span>
             )}
           <div className="node-actions">
-            {node.kind === "agent" && state === "running" && (
+            {node.kind === "agent" && (state === "running" || state === "settling") && (
               <button
                 type="button"
                 className="icon-button node-stop-button"
@@ -6798,209 +6898,12 @@ export function CanvasApp({
           preserve={placement === "canvas" && node.expanded && !node.pinned}
           full={renderFullBody} summary={renderCompactBody} />
 
-        {/* Ports (Canvas cards only) */}
         {placement === "canvas" && node.kind !== "detail" && (
           <>
-            {node.kind === "agent" && (() => {
-              const inContEdges = (edgeIndex.incoming.get(node.id) ?? []).filter(
-                (e) =>
-                  e.target === node.id &&
-                  e.kind === "continuation" &&
-                  isNodeVisible(
-                    nodesById.get(e.source),
-                    true,
-                  ),
-              );
-              const isContHubOpen =
-                activeHubLayout?.nodeId === node.id &&
-                activeHubLayout.kind === "continuation";
-              const isContSnapLocked =
-                connecting?.kind === "continuation" &&
-                Boolean(connecting.snappedTarget?.nodeIds.includes(node.id));
-              return (
-                <>
-                  <button
-                    type="button"
-                    data-port-kind="continuation"
-                    data-port-direction="in"
-                    data-node-id={node.id}
-                    className={[
-                      "port port-continuation port-in",
-                      linkedPort("continuation", "in") ? "is-linked" : "",
-                      inContEdges.length >= 1 && !connecting
-                        ? "is-draggable-in"
-                        : "",
-                      inContEdges.length >= 2 ? "is-multi" : "",
-                      isContHubOpen ? "is-hub-open" : "",
-                      connecting?.kind === "continuation" ? "port-target" : "",
-                      isContSnapLocked ? "is-snap-locked" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    style={
-                      {
-                        ["--port-y" as string]: `${portY(node, "continuation", compact)}px`,
-                      } as React.CSSProperties
-                    }
-                    title={
-                      inContEdges.length
-                        ? `${t("contInput")} (${inContEdges.length}) · ${t("dragInputTip")}`
-                        : t("contInput")
-                    }
-                    onPointerEnter={() => {
-                      if (connecting || isDragging) return;
-                      if (inContEdges.length >= 2) {
-                        openInputHub(node.id, "continuation");
-                      } else if (inContEdges.length === 1) {
-                        setHoveredEdgeId(inContEdges[0].id);
-                      }
-                    }}
-                    onPointerLeave={() => {
-                      if (inContEdges.length >= 2) {
-                        scheduleCloseInputHub();
-                      } else if (inContEdges.length === 1) {
-                        setHoveredEdgeId((prev) =>
-                          prev === inContEdges[0].id ? null : prev,
-                        );
-                      }
-                    }}
-                    onPointerDown={
-                      inContEdges.length >= 1
-                        ? (ev) =>
-                            startInputEdgeDrag(
-                              ev,
-                              inContEdges[inContEdges.length - 1],
-                            )
-                        : undefined
-                    }
-                  >
-                    <i />
-                    {inContEdges.length >= 2 && (
-                      <em className="port-multi-count">{inContEdges.length}</em>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    data-port-kind="continuation"
-                    data-port-direction="out"
-                    data-node-id={node.id}
-                    className={`port port-continuation port-out ${linkedPort("continuation", "out") ? "is-linked" : ""}`}
-                    style={
-                      {
-                        ["--port-y" as string]: `${portY(node, "continuation", compact)}px`,
-                      } as React.CSSProperties
-                    }
-                    title={t("contOutput")}
-                    onPointerDown={(ev) =>
-                      startPortDrag(ev, [node.id], "continuation")
-                    }
-                  >
-                    <i />
-                  </button>
-                </>
-              );
-            })()}
-            {(node.kind === "agent" || node.kind === "display") && (() => {
-              const inRefEdges =
-                node.kind === "agent"
-                  ? (edgeIndex.incoming.get(node.id) ?? []).filter(
-                      (e) =>
-                        e.target === node.id &&
-                        e.kind === "reference" &&
-                        isNodeVisible(
-                          nodesById.get(e.source),
-                          true,
-                        ),
-                    )
-                  : [];
-              const isRefHubOpen =
-                activeHubLayout?.nodeId === node.id &&
-                activeHubLayout.kind === "reference";
-              const isRefSnapLocked =
-                connecting?.kind === "reference" &&
-                node.kind === "agent" &&
-                Boolean(connecting.snappedTarget?.nodeIds.includes(node.id));
-              return (
-                <button
-                  type="button"
-                  data-port-kind="reference"
-                  data-port-direction="in"
-                  data-node-id={node.id}
-                  className={[
-                    "port port-reference port-in",
-                    linkedPort("reference", "in") ? "is-linked" : "",
-                    inRefEdges.length >= 1 && !connecting
-                      ? "is-draggable-in"
-                      : "",
-                    inRefEdges.length >= 2 ? "is-multi" : "",
-                    isRefHubOpen ? "is-hub-open" : "",
-                    connecting?.kind === "reference" && node.kind === "agent"
-                      ? "port-target"
-                      : "",
-                    isRefSnapLocked ? "is-snap-locked" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  style={
-                    {
-                      ["--port-y" as string]: `${portY(node, "reference", compact)}px`,
-                    } as React.CSSProperties
-                  }
-                  title={
-                    inRefEdges.length
-                      ? `${t("refInput")} (${inRefEdges.length}) · ${t("dragInputTip")}`
-                      : t("refInput")
-                  }
-                  onPointerEnter={() => {
-                    if (connecting || isDragging) return;
-                    if (inRefEdges.length >= 2) {
-                      openInputHub(node.id, "reference");
-                    } else if (inRefEdges.length === 1) {
-                      setHoveredEdgeId(inRefEdges[0].id);
-                    }
-                  }}
-                  onPointerLeave={() => {
-                    if (inRefEdges.length >= 2) {
-                      scheduleCloseInputHub();
-                    } else if (inRefEdges.length === 1) {
-                      setHoveredEdgeId((prev) =>
-                        prev === inRefEdges[0].id ? null : prev,
-                      );
-                    }
-                  }}
-                  onPointerDown={
-                    inRefEdges.length >= 1
-                      ? (ev) =>
-                          startInputEdgeDrag(
-                            ev,
-                            inRefEdges[inRefEdges.length - 1],
-                          )
-                      : undefined
-                  }
-                >
-                  <i />
-                  {inRefEdges.length >= 2 && (
-                    <em className="port-multi-count">{inRefEdges.length}</em>
-                  )}
-                </button>
-              );
-            })()}
-            <button
-              type="button"
-              data-port-kind="reference"
-              data-port-direction="out"
-              data-node-id={node.id}
-              className={`port port-reference port-out ${linkedPort("reference", "out") ? "is-linked" : ""}`}
-              style={
-                {
-                  ["--port-y" as string]: `${portY(node, "reference", compact)}px`,
-                } as React.CSSProperties
-              }
-              title={t("refOutput")}
-              onPointerDown={(ev) => startPortDrag(ev, [node.id], "reference")}
-            >
-              <i />
-            </button>
+            {node.kind === "agent" && renderPort("continuation", "in")}
+            {node.kind === "agent" && renderPort("continuation", "out")}
+            {(node.kind === "agent" || node.kind === "display") && renderPort("reference", "in")}
+            {renderPort("reference", "out")}
           </>
         )}
 
@@ -7022,9 +6925,9 @@ export function CanvasApp({
         )}
       </section>
     );
-  }, [cardDocument, cardActions, edgeIndex, nodesById, selection.nodes, lod, keepExpandedIds, vpSize, workspaces,
+  }, [cardDocument, cardActions, edgeIndex, nodesById, referenceSources, selection.nodes, lod, keepExpandedIds, vpSize, workspaces,
     bridge, reportError, quoteState, renderConversation, onPresenceChange, projectStructures, activeWorkspaceId,
-    workspaceFilesList, fileInputDrafts, activeWorkspaceCwd, isNodeVisible, activeHubLayout, connecting, isDragging, languageRevision]);
+    workspaceFilesList, fileInputDrafts, activeWorkspaceCwd, isNodeVisible, activeHubLayout, connecting, isDragging, languageRevision, openTeam]);
 
   /* Workspace groupings for Left Explorer Sidebar */
   const sidebarWorkspaceBuckets = useMemo(() => {
@@ -7340,7 +7243,7 @@ export function CanvasApp({
                 })
               }
             >
-              {routeName === "canvas" ? doc.title : t(routeName)}
+              {routeName === "canvas" ? doc.title : t(routeName === "team" ? "teamLibrary" : routeName)}
             </button>
           </div>
 
@@ -7763,7 +7666,7 @@ export function CanvasApp({
                           : rawBox;
                       if (!intersects(box, paintArea) && !selection.groups.includes(grp.id)) return null;
                       const runningCnt = memberNodes.filter(
-                        (n) => nodeStatusOf(snapshot, n.id) === "running",
+                        (n) => ["running", "settling"].includes(nodeStatusOf(snapshot, n.id)),
                       ).length;
                       const waitingCnt = memberNodes.filter((n) =>
                         ["waiting", "input"].includes(
@@ -7898,9 +7801,7 @@ export function CanvasApp({
                                                   : undefined
                                             }
                                           >
-                                            <i
-                                              className={`proxy-pin proxy-${port.kind}`}
-                                            />
+                                            <PortMark kind={port.kind} proxy />
                                             <span>{port.name}</span>
                                           </button>
                                         );
@@ -8375,6 +8276,12 @@ export function CanvasApp({
                               .map((token) => ({ run: r, token })),
                           )[0] ?? null;
                       const isSpotlight = hoveredEdgeId === edge.id;
+                      const modeLabel = edge.kind === "continuation"
+                        ? t(edge.mode)
+                        : t(edge.always ? "always" : evState);
+                      const tagTitle = edge.kind === "continuation"
+                        ? `${modeLabel} · ${t(edge.trigger === "auto" ? "automatic" : edge.trigger)}`
+                        : modeLabel;
                       const dimmed = hoveredEdgeId
                         ? !isSpotlight
                         : selection.edge
@@ -8392,6 +8299,9 @@ export function CanvasApp({
                               `edge-state-${evState}`,
                               dimmed ? "edge-dim" : "",
                               geom.tight ? "tight-tag" : "",
+                              geom.portLabel && "near-ports",
+                              geom.portLabel?.fit === "snug" && "snug-tag",
+                              geom.portLabel && (geom.portLabel.fit === "above" || waitingTok) && "above-ports",
                               selection.edge === edge.id ? "selected" : "",
                             ]
                               .filter(Boolean)
@@ -8399,10 +8309,14 @@ export function CanvasApp({
                             style={{
                               left: geom.label.x,
                               top: geom.label.y,
-                            }}
+                              "--tag-lift": geom.portLabel && `${geom.portLabel.lift}px`,
+                              "--tag-idle-width": geom.portLabel && `${geom.portLabel.idleWidth}px`,
+                            } as React.CSSProperties}
                           >
                             <button
                               type="button"
+                              title={tagTitle}
+                              aria-label={tagTitle}
                               onClick={(ev) => {
                                 ev.stopPropagation();
                                 setSelection({
@@ -8424,11 +8338,7 @@ export function CanvasApp({
                                     : "at"
                                 }
                               />
-                              <span>
-                                {edge.kind === "continuation"
-                                  ? t(edge.mode)
-                                  : t(edge.always ? "always" : evState)}
-                              </span>
+                              <span>{modeLabel}</span>
                               {edge.kind === "continuation" && (
                                 <i className="trigger-indicator">
                                   <Icon
@@ -8463,6 +8373,8 @@ export function CanvasApp({
                               <button
                                 type="button"
                                 className="edge-release"
+                                title={t("release")}
+                                aria-label={t("release")}
                                 onClick={(ev) => {
                                   ev.stopPropagation();
                                   void bridge
@@ -9100,14 +9012,28 @@ export function CanvasApp({
               )}
 
               {/* Full-Page Surfaces */}
+              {routeName === "team" && (openTeamNode ? (
+                <TeamView key={openTeamNode.id} node={openTeamNode} snapshot={snapshot}
+                  status={nodeStatusOf(snapshot, openTeamNode.id)} bridge={bridge}
+                  leadConversation={<EmbeddedSession node={openTeamNode} bridge={bridge}
+                    renderConversation={renderConversation} onError={reportError} onPresenceChange={onPresenceChange} />}
+                  renderConversation={renderConversation}
+                  onBindLead={() => bindAgentSession(openTeamNode)}
+                  onError={reportError}
+                  onBack={() => setRouteName("canvas")}
+                />
+              ) : <button type="button" className="button" onClick={() => setRouteName("canvas")}>{t("returnCanvas")}</button>)}
               {routeName === "workflows" && (
                 <WorkflowsSurface
                   tab={libraryTab}
                   onTabChange={setLibraryTab}
+                  bridge={bridge}
                   doc={doc}
                   snapshot={snapshot}
                   onInstantiate={handleInstantiateTemplate}
                   onPreviewTemplate={setTemplatePreviewModal}
+                  onExportTemplate={handleExportTemplate}
+                  onImport={() => importInputRef.current?.click()}
                   onDeleteTemplate={(id) =>
                     edit((d) => {
                       d.templates = (d.templates ?? []).filter(
@@ -9403,6 +9329,38 @@ export function CanvasApp({
           onSelect={handleQuickCreateSelect}
           onClose={() => setQuickCreate(null)}
         />
+      )}
+      {teamPicker && (
+        <CanvasDialog title={t("teamPickBlueprint")} className="fs-team-dialog" onClose={() => setTeamPicker(null)} closeLabel={t("close")}>
+          <div className="fs-team-picker">
+            {(snapshot?.teamBlueprints ?? []).filter((team) => !team.archived).map((team) => (
+              <button type="button" className="fs-team-link-row" key={team.id} onClick={() => {
+                const created = createCanvasNode("agent", teamPicker.at, undefined, false, { patch: {
+                  title: team.title, customTitle: true, teamRef: { teamId: team.id, revision: team.revision },
+                } });
+                pendingFocusRef.current = created.id;
+                setTeamPicker(null);
+              }}>
+                <span className="fs-team-mark"><Icon name="team" /></span><span className="fs-team-row-copy">
+                  <strong className="user-content">{team.title}</strong>
+                  <small>{team.lead.model.model} · {t("teamSlotCount", { count: team.slots.length })}</small>
+                </span><Icon name="plus" />
+              </button>
+            ))}
+          </div>
+          {!(snapshot?.teamBlueprints ?? []).some((team) => !team.archived) && <p className="fs-team-muted">{t("teamNoBlueprint")}</p>}
+          <button type="button" className="text-button fs-team-library-link" onClick={() => {
+            setTeamPicker(null);
+            setLibraryTab("teams");
+            setRouteName("workflows");
+          }}>{t("teamOpenLibrary")}<Icon name="chev" /></button>
+        </CanvasDialog>
+      )}
+      {workflowImport && (
+        <WorkflowImportDialog request={workflowImport.request} bridge={bridge}
+          initialMissing={workflowImport.missing}
+          onClose={() => setWorkflowImport(undefined)}
+          onImported={(imported) => finishImport(imported, !!workflowImport.request.template)} />
       )}
 
       {/* ---------- Wire / Capsule Payload X-Ray ---------- */}
@@ -9999,6 +9957,9 @@ export function CanvasApp({
                   wireRouting={prefs.wireRouting}
                 />
               </div>
+              {teamRevisionDifferences(templatePreviewModal, snapshot?.teamBlueprints).map((change) => (
+                <p key={change.id} className="fs-team-muted">{t("teamRevisionDifference", change)}</p>
+              ))}
               <div className="template-preview-list">
                 {templatePreviewModal.nodes
                   .filter((n) => n.kind === "agent")

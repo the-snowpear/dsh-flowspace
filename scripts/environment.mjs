@@ -74,7 +74,8 @@ export function canBindPort(port, host = "127.0.0.1") {
       resolveBind({ ok: false, code: err?.code || "ERROR" });
     });
     server.listen(Number(port), host, () => {
-      server.close(() => resolveBind({ ok: true, code: null }));
+      const boundPort = server.address().port;
+      server.close(() => resolveBind({ ok: true, code: null, port: boundPort }));
     });
   });
 }
@@ -88,11 +89,14 @@ export async function findAvailablePort(
     const candidate = Number(startPort) + offset;
     const bindCheck = await canBindPort(candidate, host);
     if (bindCheck.ok) {
-      return candidate;
+      return bindCheck.port;
     }
   }
+  // Windows can reserve consecutive ranges larger than the nearby scan.
+  const automatic = await canBindPort(0, host);
+  if (automatic.ok) return automatic.port;
   throw new Error(
-    `No bindable port found between ${startPort} and ${Number(startPort) + maxTries - 1}`,
+    `No bindable port found near ${startPort}; automatic allocation failed (${automatic.code})`,
   );
 }
 

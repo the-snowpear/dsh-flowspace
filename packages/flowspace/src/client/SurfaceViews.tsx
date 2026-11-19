@@ -20,9 +20,10 @@ import { bounds, capsuleStateOf, inferGroupPorts, nodeBox, portY } from "./geome
 import { route } from "./wireRouting.ts";
 import { runtimeIndex } from "./sceneModel.ts";
 import { getLanguage, t } from "./i18n.ts";
-import { BrandMark, Icon, kindIconName } from "./icons.tsx";
+import { BrandMark, Icon, PortMark, kindIconName } from "./icons.tsx";
 import { PayloadPeekCard } from "./PayloadPeekPopover.tsx";
-import { allTemplates, builtinTemplates } from "./templates.ts";
+import { allTemplates, builtinTemplates, teamRevisionDifferences } from "./templates.ts";
+import { TeamLibrary } from "./TeamLibrary.tsx";
 
 export type AlignMode =
   | "left"
@@ -780,7 +781,7 @@ export function InspectorPanel({
                 ).map(([mode, glyph]) => {
                   const disabled =
                     mode === "fork" &&
-                    (!!targetNode?.sessionId ||
+                    (!!targetNode?.sessionId || !!targetNode?.teamRef ||
                       doc.edges.some(
                         (e) =>
                           e.id !== selectedEdge.id &&
@@ -793,7 +794,7 @@ export function InspectorPanel({
                       type="button"
                       className={selectedEdge.mode === mode ? "selected" : ""}
                       disabled={disabled}
-                      title={disabled ? t("draftOnly") : undefined}
+                      title={disabled ? t(targetNode?.teamRef ? "teamInboundModes" : "draftOnly") : undefined}
                       onClick={() => onEditEdge(selectedEdge.id, { mode })}
                     >
                       <Icon name={glyph} />
@@ -1031,7 +1032,7 @@ export function InspectorPanel({
                 key={port.id}
                 className={`port-editor-row ${port.hidden ? "port-hidden" : ""}`}
               >
-                <i className={`proxy-pin proxy-${port.kind}`} />
+                <PortMark kind={port.kind} proxy />
                 <div>
                   <small>
                     {t(port.kind)} ·{" "}
@@ -1521,21 +1522,27 @@ export function InspectorPanel({
 export function WorkflowsSurface({
   tab,
   onTabChange,
+  bridge,
   doc,
   snapshot,
   onInstantiate,
   onPreviewTemplate,
+  onExportTemplate,
+  onImport,
   onDeleteTemplate,
   onRestoreSnapshot,
   onDeleteSnapshot,
   onReturnCanvas,
 }: {
-  tab: "patterns" | "mine" | "snapshots";
-  onTabChange: (next: "patterns" | "mine" | "snapshots") => void;
+  tab: "patterns" | "mine" | "snapshots" | "teams";
+  onTabChange: (next: "patterns" | "mine" | "snapshots" | "teams") => void;
+  bridge: CanvasBridge;
   doc: FlowspaceDocument;
   snapshot: FlowspaceSnapshot | null;
   onInstantiate: (template: WorkflowTemplate) => void;
   onPreviewTemplate: (template: WorkflowTemplate) => void;
+  onExportTemplate: (template: WorkflowTemplate) => void;
+  onImport: () => void;
   onDeleteTemplate: (templateId: string) => void;
   onRestoreSnapshot: (snap: CanvasSnapshot) => void;
   onDeleteSnapshot: (snapId: string) => void;
@@ -1548,12 +1555,15 @@ export function WorkflowsSurface({
   const snapshots = doc.snapshots ?? [];
 
   return (
-    <div className="fs-surface">
-      <div className="surface-page">
+    <div className={tab === "teams" ? "fs-surface fs-team-shelf" : "fs-surface"}>
+      <div className={tab === "teams" ? "surface-page fs-team-page" : "surface-page"}>
         <header className="surface-page-header">
-          <span className="eyebrow">FLOWSPACE · STUDIO</span>
-          <h1>{t("workflowLibrary")}</h1>
-          <p>{t("libraryDescription")}</p>
+          {tab !== "teams" && <span className="eyebrow">FLOWSPACE · STUDIO</span>}
+          <h1>{t(tab === "teams" ? "teamLibraryTitle" : "workflowLibrary")}</h1>
+          <p>{t(tab === "teams" ? "teamLibraryDescription" : "libraryDescription")}</p>
+          <button type="button" className="button" onClick={onImport}>
+            <Icon name="upload" />{t("workflowImport")}
+          </button>
         </header>
 
         <div className="surface-tabs" role="tablist">
@@ -1587,9 +1597,13 @@ export function WorkflowsSurface({
             {t("snapshots")}
             <span>{snapshots.length}</span>
           </button>
+          <button type="button" role="tab" aria-selected={tab === "teams"}
+            className={tab === "teams" ? "selected" : ""} onClick={() => onTabChange("teams")}>
+            {t("teamLibrary")}
+          </button>
         </div>
 
-        <div className="template-list">
+        {tab === "teams" ? <TeamLibrary bridge={bridge} snapshot={snapshot} /> : <div className="template-list">
           {tab !== "snapshots" ? (
             shownTemplates.length ? (
               shownTemplates.map((tpl, idx) => {
@@ -1597,6 +1611,7 @@ export function WorkflowsSurface({
                   (e) => e.kind === "continuation",
                 ).length;
                 const badges = templateCapabilityBadges(tpl);
+                const teamChanges = teamRevisionDifferences(tpl, snapshot?.teamBlueprints);
                 return (
                   <article
                     key={tpl.id}
@@ -1627,6 +1642,9 @@ export function WorkflowsSurface({
                             {b.label}
                           </span>
                         ))}
+                        {teamChanges.map((change) => (
+                          <span key={change.id} className="warn">{t("teamRevisionDifference", change)}</span>
+                        ))}
                         <span>v{tpl.revision}</span>
                       </div>
                     </div>
@@ -1648,14 +1666,12 @@ export function WorkflowsSurface({
                         <Icon name="eye" />
                       </button>
                       {!tpl.builtin && (
-                        <button
-                          type="button"
-                          className="icon-button danger"
-                          title={t("delete")}
-                          onClick={() => onDeleteTemplate(tpl.id)}
-                        >
-                          <Icon name="trash" />
-                        </button>
+                        <>
+                          <button type="button" className="icon-button" title={t("workflowExport")}
+                            onClick={() => onExportTemplate(tpl)}><Icon name="download" /></button>
+                          <button type="button" className="icon-button danger" title={t("delete")}
+                            onClick={() => onDeleteTemplate(tpl.id)}><Icon name="trash" /></button>
+                        </>
                       )}
                     </div>
                   </article>
@@ -1766,7 +1782,7 @@ export function WorkflowsSurface({
               </button>
             </div>
           )}
-        </div>
+        </div>}
       </div>
     </div>
   );
@@ -1829,7 +1845,7 @@ function summarizeRunSteps(
     (s) => s.state === "completed" || s.state === "bypassed",
   ).length;
   const blocker = stepItems.find((s) => s.state === "waiting");
-  const active = stepItems.find((s) => ["running", "queued"].includes(s.state));
+  const active = stepItems.find((s) => ["running", "queued", "settling"].includes(s.state));
   return { stepItems, total, done, blocker, active };
 }
 

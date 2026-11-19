@@ -107,3 +107,19 @@ DSH `0.2.2-rc.3` 没有内置通用 Git 仓库管理面板与分支/worktree 枚
 - 改动卡片与交付物预览：[`@deepseek-ai/dsh-client-ui-deliverables`](../node_modules/.pnpm/@deepseek-ai+dsh-web-app@0._90406528c7e2dde7b3a27b37f5226a01/node_modules/@deepseek-ai/dsh-client-ui-deliverables/src/client/index.ts)
 - 工作区归属与有效工作目录：[`@deepseek-ai/dsh-workspace`](../packages/flowspace/node_modules/@deepseek-ai/dsh-workspace/src/entity.ts)、[`@deepseek-ai/dsh-working-directory`](../node_modules/.pnpm/@deepseek-ai+dsh-experiment_4079ff947db550c7b13fdaac259161cb/node_modules/@deepseek-ai/dsh-working-directory/src/index.ts)
 - 终端控制器：[`@deepseek-ai/dsh-api-terminal-controller`](../node_modules/.pnpm/@deepseek-ai+dsh-api-termin_85cde0b3bbd9e2480af2995f31357fe7/node_modules/@deepseek-ai/dsh-api-terminal-controller/src/types.ts)
+
+## 5. 原生团队验证（0.2.2-rc.3）
+
+运行 `pnpm build` 后，用 `node scripts/team-spike.mjs` 复跑。脚本以两个独立进程启动已发布的 DSH Web Profile，使用确定性模型执行工具调用和冷恢复。
+
+| 项目 | rc.3 结果 |
+| --- | --- |
+| 主管工具 | Host 可全局注册并用 `when` 按 Session ID 筛选。真实模型回合的工具执行收到调用方 Agent。主管作用域也可覆盖工具 schema 以提供岗位枚举，但需要为每个重建的 Agent 重新绑定。FlowSpace 使用一次全局条件注册，冷启动时先恢复主管绑定。 |
+| 角色模型 | `startActivation` 接受与主管不同的 `agentOptions`。原生 `subagent` 的路由白名单由该工具校验，程序化启动成功使用了另一个模型并将其写入成员 descriptor。 |
+| 工具限制 | 标准 Web 配置可在主管作用域限制 `subagent`、`subagent_fork`、`workflow`，普通会话仍可用。已验证成员作用域也可限制继承的工具。原生来源的其他子会话仍按编制外成员展示。 |
+| 审批 | 原生启动写入 `never`，仅显式继承父会话的 `auto` 或 `danger-full-access`。测试 Profile 没有注册 `auto`，已验证完全访问的继承及 `workspace-write` 按原生默认策略处理。 |
+| 工具卡 | `presentationMeta` 持久化角色和模型，`presentResult` 可生成完成卡的标题。 |
+| 成员对话 | 原生 `sessions.retain` 接收子会话地址。嵌入对话从保留的 Session 获取输入接口，带子会话地址时该接口调用 `subagents/prompt`，支持 Queue 和 Steer。 |
+| 收敛与冷恢复 | 成员释放容量、通知主管后才发出 `subagent/end`。新进程能从持久标记恢复条件工具和 Team 模式，继续原成员时由 descriptor 恢复模型，首条任务保留角色指令。 |
+
+主管路由通过 `Agent.model.select` 应用到原生会话，快照中的总容量读取 rc.3 的 `maxActiveSubagents` 配置。原生运行时负责实际分配和拒绝超额请求。

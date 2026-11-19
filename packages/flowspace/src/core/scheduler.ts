@@ -9,6 +9,7 @@ import type {
   FlowToken,
   RunStep,
   StartRequest,
+  TeamReference,
 } from "../types.ts";
 import {
   members,
@@ -38,6 +39,8 @@ export interface RuntimeAdapter {
   reconcile?(step: RunStep): Promise<Partial<RunStep>>;
   running?(): string[];
   isPlanModeActive?(sessionId: string): boolean | Promise<boolean>;
+  teamReference?(sessionId: string): TeamReference | undefined;
+  waitForTeam?(sessionId: string): Promise<void>;
 }
 export interface SchedulerStore {
   document(): FlowspaceDocument;
@@ -54,11 +57,15 @@ export interface SchedulerStore {
   ): Promise<void>;
 }
 
+const activeStep = (step: RunStep) =>
+  step.state === "queued" || step.state === "running" || step.state === "settling";
+
 /** Durable run ownership. A promise queue serializes commands, never model execution. */
 export class Scheduler {
   readonly runs: FlowspaceRun[];
   private serial: Promise<unknown> = Promise.resolve();
   private disposed = false;
+  private teamSettlements = new Set<string>();
   constructor(
     private runtime: RuntimeAdapter,
     private store: SchedulerStore,
@@ -76,7 +83,7 @@ export class Scheduler {
     return new Set([
       ...this.runs.flatMap((r) =>
         r.steps
-          .filter((s) => s.state === "running" || s.state === "queued")
+          .filter(activeStep)
           .map((s) => s.nodeId),
       ),
       ...this.store
@@ -341,6 +348,7 @@ export class Scheduler {
         nodeId: node.id,
         requestId,
         sessionId,
+        ...(node.teamRef ? { teamRef: node.teamRef } : {}),
         state: "queued",
         iteration: 1,
         task,
@@ -352,7 +360,7 @@ export class Scheduler {
     });
   }
 
-  claim(requestId: string, turn: number): Promise<void> {
+  claim(requestId: string, turn: number, teamRef?: TeamReference): Promise<void> {
     return this.transact(async () => {
       const step = this.runs
         .flatMap((r) => r.steps)
@@ -376,6 +384,7 @@ export class Scheduler {
         return;
       }
       step.turn = turn;
+      if (teamRef) step.teamRef = teamRef;
       step.state = "running";
       await this.store.changed();
     });
@@ -397,7 +406,7 @@ export class Scheduler {
         (s) =>
           s.sessionId === sessionId &&
           !s.endedAt &&
-          (s.turn === turn || s.turn === undefined),
+          (s.turn === turn || s.turn === undefined || s.state === "settling"),
       );
     if (!step) return false;
     step.telemetry ??= { stepCount: 0, inputTokens: 0, outputTokens: 0 };
@@ -590,56 +599,72 @@ export class Scheduler {
     seq: number,
     output: string,
     error?: string,
+    teamFollowup = false,
   ): Promise<void> {
     return this.transact(async () => {
-      const run = this.runs.find((r) =>
-        r.steps.some(
-          (s) => s.sessionId === sessionId && s.turn === turn && !s.endedAt,
-        ),
-      );
-      const step = run?.steps.find(
-        (s) => s.sessionId === sessionId && s.turn === turn && !s.endedAt,
-      );
-      if (!run || !step) return;
-      step.endedAt = Date.now();
+      const matches = (s: RunStep) => s.sessionId === sessionId && !s.endedAt && s.turn === turn;
+      const settling = (s: RunStep) => s.sessionId === sessionId && s.state === "settling";
+      const run = this.runs.find((r) => r.steps.some(matches)) ??
+        (teamFollowup ? this.runs.findLast((r) => r.steps.some(settling)) : undefined);
+      const step = run?.steps.find(matches) ?? run?.steps.findLast(settling);
+      if (!run || !step || seq <= (step.endSeq ?? -1)) return;
+      step.turn = turn;
       step.endSeq = seq;
-      step.output = output;
-      step.telemetry ??= { stepCount: 1, inputTokens: 0, outputTokens: 0 };
-      if (step.telemetry.stepCount === 0) step.telemetry.stepCount = 1;
-      step.telemetry.durationMs = Math.max(0, step.endedAt - step.createdAt);
-      step.state =
-        ending === "completed"
-          ? "completed"
-          : ending === "aborted"
-            ? "aborted"
-            : ending === "interrupted"
-              ? "interrupted"
-              : "error";
-      step.error = error ?? (step.state === "error" ? ending : undefined);
-
-      // Capture each edge before any downstream dispatch. No live URI is left in the queue.
-      if (
-        step.state === "completed" &&
-        !["cancelled", "interrupted"].includes(run.state)
-      ) {
-        const node = run.graph.nodes.find((n) => n.id === step.nodeId)!;
-        const planGateActive = Boolean(
-          await this.runtime.isPlanModeActive?.(sessionId),
-        );
-        await this.emitDownstreamTokens(
-          run,
-          step,
-          node,
-          sessionId,
-          seq,
-          output,
-          planGateActive,
-        );
+      if (output || step.output === undefined) step.output = output;
+      if (step.teamRef && ending === "completed" && this.runtime.waitForTeam) {
+        step.state = "settling";
         await this.store.changed();
-        if (!["paused", "error"].includes(run.state)) await this.advance(run);
+        this.waitForTeam(run, step, sessionId);
+      } else {
+        await this.finishStep(run, step, sessionId, ending, error);
       }
-      this.settle(run);
+    });
+  }
+
+  private waitForTeam(run: FlowspaceRun, step: RunStep, sessionId: string): void {
+    if (this.teamSettlements.has(step.id)) return;
+    this.teamSettlements.add(step.id);
+    const finish = (ending: string, error?: string) => this.transact(async () => {
+      this.teamSettlements.delete(step.id);
+      if (step.state === "settling") await this.finishStep(run, step, sessionId, ending, error);
+    });
+    void this.runtime.waitForTeam!(sessionId).then(
+      () => finish("completed"),
+      (error) => finish("error", String(error)),
+    ).catch((error) => console.error("FlowSpace team settlement:", error));
+  }
+
+  private async finishStep(
+    run: FlowspaceRun, step: RunStep, sessionId: string, ending: string, error?: string,
+  ): Promise<void> {
+    step.endedAt = Date.now();
+    step.telemetry ??= { stepCount: 1, inputTokens: 0, outputTokens: 0 };
+    if (step.telemetry.stepCount === 0) step.telemetry.stepCount = 1;
+    step.telemetry.durationMs = Math.max(0, step.endedAt - step.createdAt);
+    step.state = ending === "completed" || ending === "aborted" || ending === "interrupted" ? ending : "error";
+    step.error = error ?? (step.state === "error" ? ending : undefined);
+
+    // Capture each edge at the settled lead turn before any downstream dispatch.
+    if (step.state === "completed" && !["cancelled", "interrupted"].includes(run.state)) {
+      const node = run.graph.nodes.find((n) => n.id === step.nodeId)!;
+      const planGateActive = Boolean(await this.runtime.isPlanModeActive?.(sessionId));
+      await this.emitDownstreamTokens(run, step, node, sessionId, step.endSeq, step.output ?? "", planGateActive);
       await this.store.changed();
+      if (!["paused", "error"].includes(run.state)) await this.advance(run);
+    }
+    this.settle(run);
+    await this.store.changed();
+  }
+
+  stopSettlingTeam(sessionId: string): Promise<void> {
+    return this.transact(async () => {
+      for (const run of this.runs) {
+        for (const step of run.steps) {
+          if (step.sessionId === sessionId && step.state === "settling") {
+            await this.finishStep(run, step, sessionId, "aborted");
+          }
+        }
+      }
     });
   }
 
@@ -899,6 +924,7 @@ export class Scheduler {
         node.sessionId ? undefined : fork,
       );
       node.sessionId = step.sessionId;
+      if (node.teamRef) step.teamRef = this.runtime.teamReference?.(step.sessionId) ?? node.teamRef;
       await this.store.bound(nodeId, step.sessionId, fork);
       if (fork)
         for (const e of run.graph.edges.filter(
@@ -976,9 +1002,7 @@ export class Scheduler {
         this.settle(run);
       } else {
         run.state = "cancelled";
-        for (const step of run.steps.filter((s) =>
-          ["queued", "running"].includes(s.state),
-        )) {
+        for (const step of run.steps.filter(activeStep)) {
           await this.runtime.cancel(step).catch(() => {});
           step.state = "aborted";
           step.endedAt = Date.now();
@@ -997,7 +1021,7 @@ export class Scheduler {
       if (!["running", "waiting", "paused"].includes(run.state)) continue;
       run.state = "interrupted";
       for (const step of run.steps) {
-        if (["queued", "running"].includes(step.state)) {
+        if (activeStep(step)) {
           await this.runtime.cancel(step).catch(() => {});
           step.state = "interrupted";
           step.endedAt = Date.now();
@@ -1017,7 +1041,7 @@ export class Scheduler {
       if (["running", "waiting", "paused"].includes(run.state)) {
         run.state = "interrupted";
         for (const step of run.steps) {
-          if (["queued", "running"].includes(step.state)) {
+          if (activeStep(step)) {
             let patch: Partial<RunStep>;
             try {
               patch = this.runtime.reconcile
@@ -1078,9 +1102,7 @@ export class Scheduler {
         ["running", "waiting", "paused"].includes(r.state),
       )) {
         run.state = "interrupted";
-        for (const step of run.steps.filter((s) =>
-          ["queued", "running"].includes(s.state),
-        )) {
+        for (const step of run.steps.filter(activeStep)) {
           await this.runtime.cancel(step).catch(() => {});
           step.state = "interrupted";
           step.endedAt = Date.now();
@@ -1098,7 +1120,7 @@ export class Scheduler {
 
   private settle(run: FlowspaceRun): void {
     if (["paused", "cancelled", "interrupted"].includes(run.state)) return;
-    if (run.steps.some((s) => s.state === "queued" || s.state === "running"))
+    if (run.steps.some(activeStep))
       run.state = "running";
     else if (
       run.steps.some((s) =>

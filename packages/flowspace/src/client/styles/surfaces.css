@@ -1744,7 +1744,8 @@
     i,
     svg,
     path,
-    circle
+    circle,
+    rect.port-rim
   ),
 .fs-root[data-perf-tier="L1"] :where(div, button, span, i, dialog)::before,
 .fs-root[data-perf-tier="L1"] :where(div, button, span, i, dialog)::after,

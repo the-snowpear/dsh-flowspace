@@ -16,6 +16,7 @@ import {
   syncUntitledAgentNode,
   syncUntitledAgentTitles,
   uid,
+  workflowNodes,
 } from "./core/document.ts";
 import { Scheduler } from "./core/scheduler.ts";
 import {
@@ -25,12 +26,16 @@ import {
   plainText,
 } from "./host/runtime.ts";
 import { HostGitService, isSubPath, sameFsPath } from "./host/git.ts";
+import { TeamAssets } from "./host/teamAssets.ts";
+import { TeamRuntime } from "./host/teamRuntime.ts";
 import {
   checkDocument,
   documentSchema,
   flowspaceDomain,
+  workflowTemplateSchema,
 } from "./host/storage.ts";
 import type {
+  ArchiveTeamAssetRequest,
   BindRequest,
   ContextSnapshot,
   DraftRequest,
@@ -52,8 +57,11 @@ import type {
   NativeAgentMessage,
   ReleaseRequest,
   RerunFailedRequest,
+  RoleDefinition,
   RestoreSnapshotRequest,
   RunCommand,
+  SaveRoleRequest,
+  SaveTeamRequest,
   SessionBrief,
   SessionChangeDiffRequest,
   SessionChangesRequest,
@@ -64,9 +72,13 @@ import type {
   SourceRequest,
   StartRequest,
   SubagentBrief,
+  TeamBlueprint,
+  TeamModelRoute,
   TerminalScreenReadRequest,
   TerminalScreenSnapshot,
   WorkspaceBrief,
+  WorkflowImportRequest,
+  WorkflowImportResult,
   WorkspaceFilePreview,
   WorkspaceFilesRequest,
   WorkspaceStructureBrief,
@@ -172,6 +184,10 @@ export class FlowspaceService extends TypertRemoteService {
     "storageDomain",
     "workspaceRegistry",
     "fs",
+    "llm",
+    "tools",
+    "subagents",
+    "sessionProjections",
   ];
   private state = {
     doc: emptyDocument(),
@@ -186,6 +202,9 @@ export class FlowspaceService extends TypertRemoteService {
     injectedSteps: new Set<string>(),
   };
   private domain!: Domain<typeof flowspaceDomain>;
+  private teamAssets!: TeamAssets;
+  private teams!: TeamRuntime;
+  private teamBriefTurns = new Map<string, number>();
   private scheduler!: Scheduler;
   private runtime!: DshRuntime;
   private git = new HostGitService();
@@ -198,6 +217,8 @@ export class FlowspaceService extends TypertRemoteService {
 
   protected async [Service.init](): Promise<void> {
     this.domain = await this.ctx.storageDomain.open(flowspaceDomain);
+    this.teamAssets = new TeamAssets(this.domain, this.ctx.llm);
+    this.teams = new TeamRuntime(this.ctx, this.domain, this.teamAssets, () => this.publish());
     const storedDoc = sanitizeDocumentForWire(
       structuredClone(
         this.domain.table("documents").get("main") ?? emptyDocument(),
@@ -236,8 +257,9 @@ export class FlowspaceService extends TypertRemoteService {
       .map(([, r]) => structuredClone(r))
       .sort((a, b) => a.createdAt - b.createdAt);
 
-    this.runtime = new DshRuntime(this.ctx, (id) =>
-      this.state.doc.nodes.find((n) => n.id === id),
+    this.runtime = new DshRuntime(this.ctx,
+      (id) => this.state.doc.nodes.find((n) => n.id === id),
+      this.teams,
     );
     this.scheduler = new Scheduler(
       this.runtime,
@@ -286,6 +308,7 @@ export class FlowspaceService extends TypertRemoteService {
     await this.hydrateBoundSessions().catch((e) =>
       this.ctx.logger.warn("FlowSpace session hydration: %s", e),
     );
+    await this.teams.hydrate();
 
     const report = (promise: Promise<unknown>): void => {
       void promise.catch((e) => this.ctx.logger.error("FlowSpace: %s", e));
@@ -388,17 +411,30 @@ export class FlowspaceService extends TypertRemoteService {
               : message;
           }),
         );
+        const sessionId = payload.agent.id;
+        if (this.teams.isLead(sessionId) && messages.length && this.teamBriefTurns.get(sessionId) !== payload.turn) {
+          const brief = await this.teams.brief(sessionId);
+          if (brief) {
+            this.teamBriefTurns.set(sessionId, payload.turn);
+            messages[0] = {
+              ...messages[0],
+              content: [...messages[0].content, { type: "text", text: brief }],
+            };
+          }
+        }
         return { ...decision, messages };
       },
       { prepend: true },
     );
 
-    this.ctx.on("agent/inbox/claimed", ({ message, turn }) => {
+    this.ctx.on("agent/inbox/claimed", ({ agent, message, turn }) => {
+      this.teams.claim(agent, turn, message.source.kind === "user");
       if (message.source.kind === "user")
         report(
           this.scheduler.claim(
             "rpcId" in message.source ? message.source.rpcId : message.id,
             turn,
+            this.teams.reference(agent.id),
           ),
         );
     });
@@ -913,6 +949,7 @@ export class FlowspaceService extends TypertRemoteService {
           event.data.reason.kind === "error"
             ? event.data.reason.error.message
             : undefined,
+          this.teams.isFollowup(sessionId, event.data.turn),
         ),
       );
   }
@@ -1057,57 +1094,140 @@ export class FlowspaceService extends TypertRemoteService {
       ),
       subagents: [...this.state.subagents.values()],
       sourceVersions,
+      roles: this.teamAssets.listRoles(),
+      teamBlueprints: this.teamAssets.listTeams(),
+      teams: this.teams.snapshot(),
     };
   }
 
   @Remote
-  async save(document: FlowspaceDocument): Promise<FlowspaceDocument> {
+  listRoles(): RoleDefinition[] {
+    return this.teamAssets.listRoles();
+  }
+
+  @Remote
+  async saveRole(request: SaveRoleRequest): Promise<RoleDefinition> {
     return this.scheduler.transact(async () => {
-      const sanitized = sanitizeDocumentForWire(document);
-      const next = documentSchema.parse(sanitized);
-      const previousNodes = new Map(this.state.doc.nodes.map(node => [node.id, node]));
-      const previousEdges = new Map(this.state.doc.edges.map(edge => [edge.id, edge]));
-      for (const node of next.nodes) {
-        const old = previousNodes.get(node.id);
-        if (old?.sessionId) {
-          node.sessionId = old.sessionId;
-          node.cwd = old.cwd;
-          node.workspaceId = old.workspaceId;
-          node.branch = old.branch;
-          node.worktreePath = old.worktreePath;
-        }
-        if (old) node.lastSubmittedTask = old.lastSubmittedTask;
-        syncUntitledAgentNode(node);
-        if (node.worktreePath) {
-          this.state.knownWorktrees.add(resolve(node.worktreePath));
-        }
-        // Keep bound live Agent Plan Mode in sync when toggled in canvas UI
-        if (
-          node.kind === "agent" &&
-          node.sessionId &&
-          old &&
-          old.planMode !== node.planMode
-        ) {
-          void this.runtime.ensure(node).catch(() => {});
-        }
+      const role = await this.teamAssets.saveRole(request);
+      this.publish();
+      return role;
+    });
+  }
+
+  @Remote
+  async archiveRole(request: ArchiveTeamAssetRequest): Promise<RoleDefinition> {
+    return this.scheduler.transact(async () => {
+      const role = await this.teamAssets.archiveRole(request);
+      this.publish();
+      return role;
+    });
+  }
+
+  @Remote
+  listTeams(): TeamBlueprint[] {
+    return this.teamAssets.listTeams();
+  }
+
+  @Remote
+  async saveTeam(request: SaveTeamRequest): Promise<TeamBlueprint> {
+    return this.scheduler.transact(async () => {
+      const team = await this.teamAssets.saveTeam(request);
+      this.publish();
+      return team;
+    });
+  }
+
+  @Remote
+  async archiveTeam(request: ArchiveTeamAssetRequest): Promise<TeamBlueprint> {
+    return this.scheduler.transact(async () => {
+      const team = await this.teamAssets.archiveTeam(request);
+      this.publish();
+      return team;
+    });
+  }
+
+  @Remote
+  async listModelRoutes(): Promise<TeamModelRoute[]> {
+    return this.teamAssets.listModelRoutes();
+  }
+
+  @Remote
+  async save(document: FlowspaceDocument): Promise<FlowspaceDocument> {
+    return this.scheduler.transact(() =>
+      this.saveDocument(documentSchema.parse(sanitizeDocumentForWire(document))),
+    );
+  }
+
+  private async saveDocument(next: FlowspaceDocument, portable = false): Promise<FlowspaceDocument> {
+    const previousNodes = new Map(this.state.doc.nodes.map((node) => [node.id, node]));
+    const previousEdges = new Map(this.state.doc.edges.map((edge) => [edge.id, edge]));
+    for (const node of next.nodes) {
+      const prior = previousNodes.get(node.id);
+      const old = portable && prior?.teamRef?.teamId !== node.teamRef?.teamId ? undefined : prior;
+      if (old?.sessionId) {
+        node.sessionId = old.sessionId;
+        node.teamRef = old.teamRef;
+        node.cwd = old.cwd;
+        node.workspaceId = old.workspaceId;
+        node.branch = old.branch;
+        node.worktreePath = old.worktreePath;
       }
-      for (const edge of next.edges) {
-        const old = previousEdges.get(edge.id);
-        if (old?.originMode === "fork") {
-          edge.originMode = "fork";
-          edge.mode = old.mode;
-        }
-        if (old && edge.sentVersion === undefined && old.sentVersion) {
-          // Preserve sentVersion unless the client explicitly cleared it (re-arming a sent capsule via sentVersion: "")
-          edge.sentVersion = old.sentVersion;
-        } else if (edge.sentVersion === "") {
-          delete edge.sentVersion;
-        }
+      if (node.sessionId) {
+        const boundTeam = this.teams.reference(node.sessionId);
+        if (boundTeam?.teamId !== node.teamRef?.teamId || (boundTeam && !this.teams.ownsNode(node.sessionId, node.id)))
+          throw new Error("团队主管会话必须由对应的画布团队节点创建");
+      }
+      if (old) node.lastSubmittedTask = old.lastSubmittedTask;
+      syncUntitledAgentNode(node);
+      if (node.worktreePath) this.state.knownWorktrees.add(resolve(node.worktreePath));
+      if (node.kind === "agent" && node.sessionId && old && old.planMode !== node.planMode) {
+        void this.runtime.ensure(node).catch(() => {});
+      }
+    }
+    for (const edge of next.edges) {
+      const old = previousEdges.get(edge.id);
+      if (old?.originMode === "fork") {
+        edge.originMode = "fork";
+        edge.mode = old.mode;
+      }
+      if (old && edge.sentVersion === undefined && old.sentVersion) {
+        edge.sentVersion = old.sentVersion;
+      } else if (edge.sentVersion === "") {
+        delete edge.sentVersion;
+      }
+    }
+    checkDocument(next);
+    this.state.doc = sanitizeDocumentForWire(next);
+    await this.persist();
+    return structuredClone(this.state.doc);
+  }
+
+  @Remote
+  async importWorkflow(request: WorkflowImportRequest): Promise<WorkflowImportResult> {
+    return this.scheduler.transact(async () => {
+      if (!!request.document === !!request.template) throw new Error("Choose one canvas or workflow template to import.");
+      const template = request.template && workflowTemplateSchema.parse(request.template);
+      const next = request.document
+        ? documentSchema.parse(sanitizeDocumentForWire(request.document))
+        : structuredClone(this.state.doc);
+      if (template) {
+        if (next.templates?.some((existing) => existing.id === template.id)) template.id = uid();
+        delete template.builtin;
+        next.templates = [...(next.templates ?? []), template];
+      }
+      const nodes = template?.nodes ?? workflowNodes(next);
+      const refs = new Set(nodes.flatMap((node) => node.teamRef ? [node.teamRef.teamId] : []));
+      const plan = await this.teamAssets.prepareImport(request, refs);
+      if (plan.missing.length) return { kind: "missing-models", models: plan.missing };
+      for (const node of nodes) {
+        if (!node.teamRef) continue;
+        node.teamRef.teamId = plan.teamIds.get(node.teamRef.teamId) ?? node.teamRef.teamId;
+        delete node.sessionId;
+        delete node.lastSubmittedTask;
       }
       checkDocument(next);
-      this.state.doc = sanitizeDocumentForWire(next);
-      await this.persist();
-      return structuredClone(this.state.doc);
+      await this.teamAssets.addImported(plan.additions);
+      return { kind: "imported", document: await this.saveDocument(next, !!request.document) };
     });
   }
 
@@ -1178,7 +1298,7 @@ export class FlowspaceService extends TypertRemoteService {
       const liveNodes = this.state.doc.nodes;
       const restoredNodes = structuredClone(snap.nodes).map((n) => {
         const cur = liveNodes.find((x) => x.id === n.id);
-        return cur?.sessionId
+        return cur?.sessionId && cur.teamRef?.teamId === n.teamRef?.teamId
           ? {
               ...n,
               sessionId: cur.sessionId,
@@ -1385,6 +1505,8 @@ export class FlowspaceService extends TypertRemoteService {
         this.state.knownWorktrees.add(resolve(node.worktreePath));
       }
       if (request.sessionId) {
+        if (node.teamRef || this.teams.isLead(request.sessionId))
+          throw new Error("团队主管会话必须由对应的画布团队节点创建");
         using observation = await this.ctx.sessionQuery.observeSession(
           request.sessionId as SessionId,
         );
@@ -1829,12 +1951,12 @@ export class FlowspaceService extends TypertRemoteService {
   }
 
   @Remote
-  stopNode(nodeId: string): void {
+  async stopNode(nodeId: string): Promise<void> {
     const node = this.node(nodeId);
-    if (node.sessionId)
-      this.ctx.sessionController.cancel({
-        sessionId: node.sessionId as SessionId,
-      });
+    if (!node.sessionId) return;
+    if (node.teamRef) await this.scheduler.stopSettlingTeam(node.sessionId);
+    this.ctx.sessionController.cancel({ sessionId: node.sessionId as SessionId });
+    if (node.teamRef) await this.teams.interruptMembers(node.sessionId);
   }
 
   @Remote({ mode: "stream" })

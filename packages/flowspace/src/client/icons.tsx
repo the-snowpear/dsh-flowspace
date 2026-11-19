@@ -1,4 +1,4 @@
-import type { NodeKind } from "../types.ts";
+import type { FlowEdge, NodeKind } from "../types.ts";
 
 export const ICONS: Record<string, string> = {
   bench: "M2 3h12v10H2z M6 3v10 M6 8h8",
@@ -12,6 +12,12 @@ export const ICONS: Record<string, string> = {
   server: "M3 3h10v4H3z M3 9h10v4H3z M5.5 5h.01 M5.5 11h.01",
   gear: "M12.933 10 a1.1 1.1 0 0 0 0.22 1.213 l0.04 0.04 a1.333 1.333 0 0 1 0 1.887 1.333 1.333 0 0 1 -1.887 0 l-0.04 -0.04 a1.1 1.1 0 0 0 -1.213 -0.22 1.1 1.1 0 0 0 -0.667 1.007 V14 a1.333 1.333 0 0 1 -1.333 1.333 1.333 1.333 0 0 1 -1.333 -1.333 v-0.06 A1.1 1.1 0 0 0 6 12.933 a1.1 1.1 0 0 0 -1.213 0.22 l-0.04 0.04 a1.333 1.333 0 0 1 -1.887 0 1.333 1.333 0 0 1 0 -1.887 l0.04 -0.04 a1.1 1.1 0 0 0 0.22 -1.213 1.1 1.1 0 0 0 -1.007 -0.667 H2 a1.333 1.333 0 0 1 -1.333 -1.333 1.333 1.333 0 0 1 1.333 -1.333 h0.06 A1.1 1.1 0 0 0 3.067 6 a1.1 1.1 0 0 0 -0.22 -1.213 l-0.04 -0.04 a1.333 1.333 0 0 1 0 -1.887 1.333 1.333 0 0 1 1.887 0 l0.04 0.04 a1.1 1.1 0 0 0 1.213 0.22 H6 a1.1 1.1 0 0 0 0.667 -1.007 V2 a1.333 1.333 0 0 1 1.333 -1.333 1.333 1.333 0 0 1 1.333 1.333 v0.06 a1.1 1.1 0 0 0 0.667 1.007 1.1 1.1 0 0 0 1.213 -0.22 l0.04 -0.04 a1.333 1.333 0 0 1 1.887 0 1.333 1.333 0 0 1 0 1.887 l-0.04 0.04 a1.1 1.1 0 0 0 -0.22 1.213 V6 a1.1 1.1 0 0 0 1.007 0.667 H14 a1.333 1.333 0 0 1 1.333 1.333 1.333 1.333 0 0 1 -1.333 1.333 h-0.06 a1.1 1.1 0 0 0 -1.007 0.667 z M6 8a2 2 0 1 0 4 0a2 2 0 1 0 -4 0",
   agent: "M3.5 6h9v6.5h-9z M8 6V3.5 M6.2 9.2h.01 M9.8 9.2h.01",
+  team: "M6 2h4v3.5H6z M8 5.5v3 M3.5 10.5v-2h9v2 M1.8 10.5h3.4V14H1.8z M10.8 10.5h3.4V14h-3.4z",
+  person: "M8 2.2a2.6 2.6 0 1 0 0 5.2a2.6 2.6 0 0 0 0-5.2z M2.7 13.6v-1.1c0-2 2.3-3.5 5.3-3.5s5.3 1.5 5.3 3.5v1.1",
+  lead: "M8 1.8l4.6 4.6L8 11 3.4 6.4z M2.6 10.2L8 14l5.4-3.8",
+  edit: "M3 10.6l7.7-7.7 2.4 2.4L5.4 13l-3 .6z M9.4 4.3l2.4 2.4",
+  archive: "M2.5 3h11v3h-11z M3.6 6v7h8.8V6 M6.5 8.5h3",
+  shield: "M8 1.8l5 2v3.5c0 3-2.1 5.4-5 7-2.9-1.6-5-4-5-7V3.8z M6 7.8l1.4 1.4 2.8-3",
   project: "M2 4h4l1.5 2H14v7H2z",
   branch: "M5 3v10 M11 3v2.5c0 3-6 2-6 5",
   worktree: "M8 2v12 M8 6l4-2 M8 9L4 7 M8 12l4-2",
@@ -92,6 +98,43 @@ export function Icon({
     <svg className={className} viewBox="0 0 16 16" aria-hidden="true">
       <path d={ICONS[name] ?? ""} />
     </svg>
+  );
+}
+
+export function PortMark({ kind, proxy = false }: { kind: FlowEdge["kind"]; proxy?: boolean }) {
+  return (
+    <i className={proxy ? `port-mark proxy-pin proxy-${kind}` : "port-mark"} aria-hidden="true">
+      <svg
+        className="port-symbol"
+        viewBox="-10 -10 20 20"
+        width="20"
+        height="20"
+        fill="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {kind === "continuation" ? (
+          <>
+            <rect className="port-rim" x="-3.5" y="-7" width="7" height="14" rx="3.5" />
+            <path className="port-well" d="M0 -3.5 L0 0 L0 3.5" strokeWidth="5" />
+            <path
+              className="port-core"
+              d={proxy ? "M0 -3.5 L0 0 L0 3.5" : "M0 -2.5 L0 0 L0 2.5"}
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap={proxy ? "butt" : "round"}
+            />
+          </>
+        ) : (
+          <>
+            <circle className="port-rim" r="5" />
+            <circle className="port-well" r="4" />
+            <circle className="port-core" r="2" />
+            {!proxy && <circle className="port-halo" r="9" fill="none" stroke="currentColor" />}
+          </>
+        )}
+      </svg>
+    </i>
   );
 }
 

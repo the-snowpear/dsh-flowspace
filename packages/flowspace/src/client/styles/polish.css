@@ -713,157 +713,149 @@
 .fs-root .node-note > .port {
   --ko: var(--note-bg);
 }
-/* The host squircles every corner; sockets must stay true circles / capsules. */
-.fs-root .port > i,
-.fs-root .port > i::before,
-.fs-root .port > i::after,
-.fs-root .port-multi-count,
-.fs-root .proxy-pin {
+/* Match the 20px hit area so hover scaling never rounds a half-pixel layout offset. */
+.fs-root .port-mark {
+  position: relative;
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  pointer-events: none;
+  transition: scale 320ms var(--ease-spring);
+}
+.fs-root .port-mark,
+.fs-root .port-mark::before,
+.fs-root .port-multi-count {
   corner-shape: round;
 }
-.fs-root .port > i,
-.fs-root .node-note > .port > i {
-  position: relative;
-  width: 10px;
-  height: 10px;
-  border: 1.5px solid currentColor;
-  border-radius: 50%;
-  background: var(--ko);
-  box-shadow: 0 0 0 2.5px var(--ko);
-  clip-path: none;
-  rotate: none;
-  scale: 1;
-  animation: none;
-  transition:
-    scale 420ms var(--ease-spring),
-    width 320ms var(--ease-spring),
-    height 320ms var(--ease-spring),
-    background-color 180ms var(--ease),
-    border-color 180ms var(--ease),
-    box-shadow 240ms var(--ease);
+.fs-root .port-symbol {
+  display: block;
+  overflow: visible;
 }
-/* Core: a bead that seats inside the socket once something is plugged in */
-.fs-root .port > i::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 4px;
-  height: 4px;
-  border-radius: inherit;
-  background: currentColor;
+/* Paint the knockout behind the rim. The well and the linked core sit on the same origin. */
+.fs-root .port-rim {
+  stroke: var(--ko);
+  stroke-width: 5;
+  paint-order: stroke fill;
+}
+.fs-root rect.port-rim {
+  transition-property: x, y, width, height, rx;
+}
+.fs-root .port-well,
+.fs-root .port-core {
+  transition-property: d, r, stroke-width, stroke, fill, scale;
+}
+.fs-root rect.port-rim,
+.fs-root .port-well,
+.fs-root .port-core {
+  transition-duration: var(--dur);
+  transition-timing-function: var(--ease);
+}
+.fs-root path.port-well,
+.fs-root path.port-core {
+  fill: none;
+}
+.fs-root path.port-well {
+  stroke: var(--port-well-color, var(--ko));
+}
+.fs-root circle.port-well {
+  fill: var(--port-well-color, var(--ko));
+}
+.fs-root .port .port-core {
+  transform-box: fill-box;
+  transform-origin: center;
   scale: 0;
-  transition:
-    scale 360ms var(--ease-spring),
-    background-color 180ms var(--ease);
 }
-/* Halo: a hairline orbit that wakes on hover and ripples while it is a drop target */
-.fs-root .port > i::before {
+.fs-root .port.is-linked .port-core {
+  scale: 1;
+}
+
+/* The round well closes around a pinhole. Both strokes of the capsule bend
+   along the same three points as the coloured bar recedes into the chevron. */
+.fs-root .port:is(:hover, .port-target) > .port-mark,
+.fs-root .port-target > .proxy-pin {
+  scale: 1.28;
+}
+.fs-root .port-reference:is(:hover, .port-target) .port-well {
+  r: 2px;
+}
+.fs-root .port-reference:is(:hover, .port-target) .port-core {
+  r: 0px;
+}
+.fs-root .port-continuation:is(:hover, .port-target) > .port-mark {
+  scale: 1.12;
+}
+.fs-root .port-continuation:is(:hover, .port-target) .port-rim {
+  x: -5px;
+  y: -8px;
+  width: 10px;
+  height: 16px;
+  rx: 5px;
+}
+.fs-root .port-continuation:is(:hover, .port-target) :is(.port-well, .port-core) {
+  d: path("M-1.5 -3 L1.5 0 L-1.5 3");
+}
+.fs-root .port-continuation:is(:hover, .port-target) .port-well {
+  stroke-width: 0.875;
+}
+.fs-root .port-continuation:is(:hover, .port-target) .port-core {
+  stroke-width: 0;
+}
+.fs-root .node > .port:hover {
+  color: var(--accent);
+}
+
+/* Scale the reference halo around the same SVG origin as the rim and well. */
+.fs-root .port-halo {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.fs-root .port-continuation > .port-mark::before {
   content: "";
   position: absolute;
-  inset: -5.5px;
-  border-radius: inherit;
+  inset: -2px 0.5px;
   border: 1px solid currentColor;
+  border-radius: 8px;
+}
+.fs-root .port-halo,
+.fs-root .port-continuation > .port-mark::before {
   opacity: 0;
   scale: 0.55;
   pointer-events: none;
   transition:
     opacity 220ms var(--ease),
-    scale 420ms var(--ease-spring);
+    scale 420ms var(--ease-spring),
+    filter 240ms var(--ease),
+    box-shadow 240ms var(--ease);
 }
-
-/* Control socket: an upright capsule; its core is a short bar (the baton) */
-.fs-root .port-continuation > i {
-  width: 7px;
-  height: 14px;
-  border-radius: 4px;
-}
-.fs-root .port-continuation > i::after {
-  width: 2px;
-  height: 7px;
-  border-radius: 1px;
-}
-.fs-root .port-continuation > i::before {
-  inset: -5px -5.5px;
-  border-radius: 8px;
-}
-
-/* Linked: the socket fills with the wire's colour and the core seats */
-.fs-root .port.is-linked > i {
-  background: var(--ko);
-  border-color: currentColor;
-}
-.fs-root .port.is-linked > i::after {
-  scale: 1;
-}
-
-/* Hover: socket swells and fills; the core turns into a pinhole (context)
-   or a forward chevron (control) so the direction of flow is legible. */
-.fs-root .port:hover > i,
-.fs-root .port-target > i {
-  scale: 1.28;
-  background: currentColor;
-  box-shadow: 0 0 0 2.5px var(--ko);
-}
-.fs-root .port-continuation:hover > i,
-.fs-root .port-continuation.port-target > i {
-  width: 10px;
-  height: 16px;
-  border-radius: 5px;
-  scale: 1.12;
-}
-.fs-root .port:hover > i::after,
-.fs-root .port-target > i::after {
-  scale: 1;
-  background: var(--ko);
-}
-.fs-root .port-continuation:hover > i::after,
-.fs-root .port-continuation.port-target > i::after {
-  width: 4px;
-  height: 4px;
-  background: transparent;
-  border-top: 1.6px solid var(--ko);
-  border-right: 1.6px solid var(--ko);
-  border-radius: 0.5px;
-  rotate: 45deg;
-  translate: -0.8px 0;
-}
-.fs-root .node > .port:hover {
-  color: var(--accent);
-}
-.fs-root .port:hover > i::before {
+.fs-root .port:hover .port-halo,
+.fs-root .port-continuation:hover > .port-mark::before {
   opacity: 0.5;
   scale: 1;
 }
-
-/* Drop candidates while dragging a wire: a calm sonar ripple */
-.fs-root .connecting-reference .node:not(.is-invalid-target) > .port-reference.port-in > i,
-.fs-root .connecting-continuation .node:not(.is-invalid-target) > .port-continuation.port-in > i {
-  animation: none;
-}
-.fs-root .connecting-reference .node:not(.is-invalid-target) > .port-reference.port-in > i::before,
-.fs-root .connecting-continuation .node:not(.is-invalid-target) > .port-continuation.port-in > i::before {
+.fs-root .connecting-reference .node:not(.is-invalid-target) > .port-reference.port-in:not(.is-snap-locked) .port-halo,
+.fs-root .connecting-continuation .node:not(.is-invalid-target) > .port-continuation.port-in:not(.is-snap-locked) > .port-mark::before {
   animation: fs-port-sonar 1.6s var(--ease-out) infinite;
 }
-
-/* Magnetic lock: the halo snaps tight around a solid, glowing socket */
-.fs-root .port-in.is-snap-locked > i {
-  scale: 1.5;
-  background: var(--accent);
-  border-color: var(--accent);
-  box-shadow:
-    0 0 0 2.5px var(--ko),
-    0 0 14px 1px color-mix(in oklab, var(--accent) 55%, transparent);
+.fs-root .port-in.is-snap-locked {
+  --port-well-color: var(--on-accent, #fff);
+  --port-glow-color: color-mix(in oklab, var(--accent) 55%, transparent);
 }
-.fs-root .port-in.is-snap-locked > i::before {
-  animation: none;
+.fs-root .port.port-in.is-snap-locked > .port-mark {
+  scale: 1.5;
+}
+.fs-root .port-in.is-snap-locked .port-halo,
+.fs-root .port-continuation.port-in.is-snap-locked > .port-mark::before {
   opacity: 0.7;
   scale: 0.86;
-  border-width: 1.5px;
 }
-.fs-root .port-in.is-snap-locked > i::after {
-  scale: 1;
-  background: var(--on-accent, #fff);
+.fs-root .port-in.is-snap-locked .port-halo {
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 7px var(--port-glow-color));
+}
+.fs-root .port-continuation.port-in.is-snap-locked > .port-mark::before {
+  border-width: 1.5px;
+  box-shadow: 0 0 14px 1px var(--port-glow-color);
 }
 
 /* Live sockets: the control output reports what the node is doing */
@@ -875,20 +867,20 @@
 .fs-root .node.status-running > .port-continuation.port-out {
   color: var(--running);
 }
-.fs-root .node.status-running > .port-continuation.port-out > i {
-  background: color-mix(in oklab, var(--running) 22%, var(--ko));
+.fs-root .node.status-running > .port-continuation.port-out:not(:hover) {
+  --port-well-color: color-mix(in oklab, var(--running) 22%, var(--ko));
 }
-.fs-root .node.status-running > .port-continuation.port-out > i::after {
+.fs-root .node.status-running > .port-continuation.port-out .port-core {
   scale: 1;
   animation: fs-port-charge 1.4s var(--ease-loop) infinite;
 }
-.fs-root .node.status-running > .port-continuation.port-out > i::before {
+.fs-root .node.status-running > .port-continuation.port-out > .port-mark::before {
   animation: fs-port-sonar 1.8s var(--ease-out) infinite;
 }
 .fs-root .node.status-waiting > .port-continuation.port-out {
   color: var(--amber);
 }
-.fs-root .node.status-waiting > .port-continuation.port-out > i::before {
+.fs-root .node.status-waiting > .port-continuation.port-out > .port-mark::before {
   animation: fs-port-breathe 2.4s var(--ease-loop) infinite;
 }
 .fs-root .node.status-completed > .port-continuation.port-out.is-linked {
@@ -910,22 +902,39 @@
   border-radius: 6px;
 }
 
-/* Group proxy pins speak the same shape code */
+/* Group pins enlarge in place. Drag targets close their well to a solid pin. */
 .fs-root .proxy-pin {
-  width: 10px;
-  height: 10px;
-  border: 1.5px solid var(--cap-pending);
-  background: radial-gradient(circle, var(--cap-pending) 0 1.9px, var(--surface) 2.4px);
-  box-shadow: 0 0 0 2.5px var(--surface);
+  --ko: var(--surface);
+  flex: none;
+  color: var(--cap-pending);
+  transition: scale var(--dur) var(--ease-spring);
 }
 .fs-root .proxy-continuation {
+  color: var(--text-2);
+}
+/* The visible pin extends outside its row and can start a drag there. */
+.fs-root .composite-port-row .port-rim {
+  pointer-events: fill;
+}
+/* Reserve the original inline space beside the inspector's port names. */
+.fs-root .port-editor-row .proxy-pin {
+  width: 10px;
+  height: 10px;
+}
+.fs-root .port-editor-row .proxy-continuation {
   width: 7px;
   height: 14px;
-  border: 1.5px solid var(--text-2);
-  border-radius: 4px;
-  clip-path: none;
-  background: linear-gradient(var(--text-2), var(--text-2)) center / 2px 7px no-repeat,
-    var(--surface);
+}
+.fs-root .port-editor-row .port-symbol {
+  position: absolute;
+  left: calc(50% - 10px);
+  top: calc(50% - 10px);
+}
+.fs-root .port-target > .proxy-reference .port-well {
+  r: 0px;
+}
+.fs-root .port-target > .proxy-continuation .port-well {
+  stroke-width: 0;
 }
 
 @keyframes fs-port-sonar {
@@ -2173,9 +2182,9 @@
   .fs-root .edge-message,
   .fs-root .fs-structure-edge,
   .fs-root .fs-struct-subagent.is-running::after,
-  .fs-root .port > i,
-  .fs-root .port > i::before,
-  .fs-root .port > i::after {
+  .fs-root .port-mark::before,
+  .fs-root .port-halo,
+  .fs-root .port-core {
     animation: none !important;
   }
   .fs-root .fx-ripple {

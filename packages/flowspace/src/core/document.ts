@@ -5,6 +5,14 @@ import type {
   FlowspaceDocument,
 } from "../types.ts";
 
+export function workflowNodes(document: FlowspaceDocument): FlowNode[] {
+  return [
+    ...document.nodes,
+    ...(document.templates ?? []).flatMap((template) => template.nodes),
+    ...(document.snapshots ?? []).flatMap((snapshot) => snapshot.nodes),
+  ];
+}
+
 export const uid = (): string => crypto.randomUUID();
 
 export const DEFAULT_AGENT_TITLES = new Set(["新 Agent", "New Agent", ""]);

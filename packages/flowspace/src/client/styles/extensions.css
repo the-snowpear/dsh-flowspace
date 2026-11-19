@@ -623,8 +623,6 @@
 .fs-root .port-in.is-multi {
   width: 24px;
   height: 22px;
-  left: -13px;
-  top: calc(var(--port-y) - 11px);
   z-index: 7;
 }
 .fs-root .port-in.is-multi > i {
@@ -674,15 +672,6 @@
   color: var(--accent) !important;
   z-index: 9;
 }
-.fs-root .port-in.is-snap-locked > i {
-  scale: 1.55;
-  background: var(--accent);
-  border-color: var(--accent);
-  box-shadow:
-    0 0 0 5px var(--accent-soft),
-    0 0 16px var(--accent);
-}
-
 /* Spotlight & Unplugged Ghost Wire States */
 .fs-root .edge-path.edge-spotlight {
   stroke: var(--accent) !important;

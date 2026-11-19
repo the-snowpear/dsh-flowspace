@@ -34,7 +34,7 @@ declare module "@deepseek-ai/dsh-client-ui-slots" {
     "flowspace.conversation": {
       kind: "single";
       scope: "session";
-      owner: { nodeId: string };
+      owner: { nodeId?: string };
     };
   }
 }
@@ -59,7 +59,7 @@ const bootUrlWantsCanvas =
 
 export function apply(ctx: Context): void {
   void ctx.remote.$mount(TYPERT_REMOTE);
-  ctx.inject(["remote.flowspace"], mountUi);
+  ctx.inject(["remote.flowspace", "remote.subagents"], mountUi);
 }
 function mountUi(ctx: Context): void {
   const bridge = new FlowClient(ctx);
@@ -223,7 +223,7 @@ function Main({ bridge, SessionProvider, renderSlot }: MainProps) {
       bridge={bridge}
       renderConversation={(node, reference) => (
         <SessionProvider session={reference}>
-          {renderSlot("flowspace.conversation", { nodeId: node.id })}
+          {renderSlot("flowspace.conversation", { nodeId: node?.id })}
         </SessionProvider>
       )}
     />
@@ -238,7 +238,7 @@ function Conversation({
   useSession,
 }: ConversationProps) {
   const blank = useSession((s) => s.blank);
-  useEffect(() => watchDraft(nodeId), [nodeId, watchDraft]);
+  useEffect(() => nodeId ? watchDraft(nodeId) : undefined, [nodeId, watchDraft]);
   return (
     <div className="fs-embedded">
       {renderFactorySlot("conversation.content", {

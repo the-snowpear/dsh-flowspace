@@ -48,6 +48,7 @@ function sanitizeClonedNode(
 ): FlowNode {
   const clone = structuredClone(raw);
   clone.id = newId;
+  // The team reference belongs to the canvas document. Session identity is per instance.
   delete clone.sessionId;
   delete clone.lastSubmittedTask;
   delete clone.window;

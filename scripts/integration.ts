@@ -7,6 +7,7 @@ import {
   newNode,
   newEdge,
 } from "../packages/flowspace/src/core/document.ts";
+import { captureTemplate, instantiateTemplate, teamDependenciesFor } from "../packages/flowspace/src/client/templates.ts";
 const environmentName = `integration-${Date.now()}`;
 const integrationPort = await findAvailablePort(3192);
 const { ctx, shutdown, workspace, profile } = await boot({
@@ -15,8 +16,8 @@ const { ctx, shutdown, workspace, profile } = await boot({
   port: integrationPort,
 });
 const report: { name: string; passed: boolean }[] = [];
-async function until(test: () => boolean, description: string): Promise<void> {
-  const end = Date.now() + 20000;
+async function until(test: () => boolean, description: string, timeoutMs = 20_000): Promise<void> {
+  const end = Date.now() + timeoutMs;
   while (!test() && Date.now() < end)
     await new Promise((r) => setTimeout(r, 100));
   assert.ok(test(), description);
@@ -24,6 +25,23 @@ async function until(test: () => boolean, description: string): Promise<void> {
 try {
   const service = ctx.flowspace;
   assert.ok(service, "FlowSpace service loaded");
+  const route = { provider: "flowspace-test", model: "deterministic" };
+  const workerRoute = { ...route, model: "deterministic-worker" };
+  assert.ok((await service.listModelRoutes()).some((entry) => entry.model === workerRoute.model));
+  const reviewer = await service.saveRole({
+    id: "review-role", title: "Reviewer", description: "Check a sample",
+    persona: "TEAM_REVIEW_PERSONA", model: workerRoute, revision: 0,
+  });
+  let blueprint = await service.saveTeam({
+    id: "review-team", title: "Review team", lead: { persona: "Coordinate reviews", model: route },
+    slots: [{ slotId: "reviewer", roleId: reviewer.id, label: "Reviewer" }], norms: "Keep reports brief", revision: 0,
+  });
+  await assert.rejects(service.saveRole({ ...reviewer, model: { ...route, model: "missing" } }), /Model unavailable/);
+  await assert.rejects(service.saveTeam({ ...blueprint, revision: 0 }), /Revision changed/);
+  const archivedRole = await service.archiveRole({ id: reviewer.id, revision: reviewer.revision });
+  assert.equal(archivedRole.archived, true);
+  assert.equal(service.snapshot().teamBlueprints?.[0].revision, 1);
+  report.push({ name: "Global role and team RPCs, model catalog validation and archiving", passed: true });
   const doc = emptyDocument();
   doc.nodes = ["Analyze", "Review", "Summarize"].map((title, i) => ({
     ...newNode("agent", 80 + i * 420, 120, title),
@@ -418,6 +436,118 @@ try {
     passed: true,
   });
 
+  const teamDoc = service.snapshot().document;
+  const upstream = { ...newNode("agent", 180, 1270, "Prepare a sample"), task: "Prepare a sample", cwd: workspace };
+  const leadNode = { ...newNode("agent", 600, 1270, "Review team"), task: "FLOWSPACE_TEST_DELEGATE", cwd: workspace,
+    teamRef: { teamId: blueprint.id, revision: blueprint.revision } };
+  const downstream = { ...newNode("agent", 1020, 1270, "Consume team report"), task: "Use the team report", cwd: workspace };
+  teamDoc.nodes.push(upstream, leadNode, downstream);
+  teamDoc.edges.push(newEdge(upstream.id, leadNode.id, "continuation"), newEdge(leadNode.id, downstream.id, "continuation"));
+  await service.save(teamDoc);
+  const teamRun = await service.start({ kind: "single", nodeIds: [upstream.id] });
+  const teamRunState = () => service.snapshot().runs.find((run) => run.id === teamRun.id)!;
+  await until(() => teamRunState().steps[1]?.state === "settling", "team waits for its active member");
+  assert.equal(teamRunState().steps.length, 2);
+  const leadId = teamRunState().steps[1].sessionId!;
+  const teamView = () => service.snapshot().teams?.[leadId];
+  await until(() => teamView()?.members[0]?.slotId === "reviewer", "member is mapped to its slot");
+  assert.equal(teamView()?.enabled, true);
+  assert.equal(teamView()?.members[0]?.model, workerRoute.model);
+  const memberId = teamView()!.members[0].sessionId;
+  const runningRevision = blueprint.revision;
+  blueprint = await service.saveTeam({
+    ...blueprint, lead: { ...blueprint.lead, model: workerRoute },
+    slots: [{ ...blueprint.slots[0], maxInstances: 2 }],
+  });
+  assert.equal(teamView()?.revision, runningRevision);
+  await until(() => teamRunState().state === "completed", "team report continues downstream");
+  assert.equal(teamRunState().steps[1].output, "TEAM_FINAL_REVIEW");
+  assert.equal(teamRunState().steps[2].sources[0].text, "TEAM_FINAL_REVIEW");
+  assert.equal(teamRunState().steps[1].teamRef?.revision, runningRevision);
+  assert.equal(service.snapshot().runs.filter((run) => run.steps.some((step) => step.sessionId === leadId)).length, 1);
+  report.push({ name: "Native team delegation, configured member model and settled conclusion continuation", passed: true });
+
+  const teamSignal = AbortSignal.timeout(20_000);
+  const { agent: teamLead } = await ctx.sessionController.resolveAgent(leadId);
+  await ctx.sessionController.prompt({
+    sessionId: leadId, requestId: crypto.randomUUID(), mode: "queue",
+    content: [{ type: "text", text: "Check the next team revision." }],
+  }, teamSignal);
+  await teamLead.whenIdle();
+  await until(() => teamView()?.revision === blueprint.revision, "next lead turn picks up the latest roster");
+  assert.equal(teamLead.model.current().model, workerRoute.model);
+  const delegate = ctx.tools.get("team_delegate", teamLead);
+  await assert.rejects(delegate.execute({ slot: "outsider", task: "Review" }, { agent: teamLead, signal: teamSignal }), /Unknown team slot/);
+  const assigned = await delegate.execute({ slot: "reviewer", task: "FLOWSPACE_TEAM_WORKER: second review." },
+    { agent: teamLead, signal: teamSignal });
+  assert.equal(assigned.name, "reviewer-2");
+  const outsider = await ctx.subagents.startActivation({
+    provider: "spawn", parent: teamLead, name: "off-roster",
+    label: "Outside reviewer", delivery: "caller", agentOptions: workerRoute, signal: teamSignal,
+    prompt: [{ type: "text", text: "FLOWSPACE_TEAM_WORKER: outside review." }],
+  });
+  await until(() => teamView()?.members.length === 3, "team shows both slot occupants and an outside member");
+  const second = teamView()!.members.find((member) => member.name === assigned.name)!;
+  assert.equal(second.slotId, "reviewer");
+  assert.equal(teamView()?.members.find((member) => member.sessionId === outsider.childId)?.slotId, null);
+  await ctx.subagents.sendMessage(ctx.agents.get(second.sessionId), outsider.childId, [
+    { type: "text", text: "Native peer message for the team view." },
+  ], { signal: teamSignal });
+  const task = await ctx.agentTeams.createTask(teamLead, { subject: "Review task", description: "Check the sample" });
+  const work = await ctx.agentTeams.updateTask(teamLead, {
+    taskId: task.id, expectedRevision: task.revision, action: "reassign", owner: second.sessionId,
+  });
+  const blocked = await ctx.agentTeams.createTask(teamLead, {
+    subject: "Publish report", description: "Wait for review", blockedBy: [task.id],
+  });
+  await until(() => teamView()?.tasks.some((item) => item.id === blocked.id && !item.ready), "team shows a blocked task");
+  await ctx.agentTeams.updateTask(teamLead, { taskId: task.id, expectedRevision: work.revision, action: "complete" });
+  await until(() => teamView()?.tasks.some((item) => item.id === blocked.id && item.ready), "team projects task dependency readiness");
+  assert.equal(teamView()?.tasks.find((item) => item.id === task.id)?.ownerName, assigned.name);
+  await until(() => service.snapshot().nativeMessages?.some((message) =>
+    message.fromSessionId === second.sessionId && message.toSessionId === outsider.childId) ?? false, "team captures native peer message");
+  await outsider.result;
+  await ctx.subagents.waitForTreeWork(teamLead);
+  await teamLead.whenIdle();
+  await until(() => teamView()?.capacity.active === 0, "settled members release native capacity");
+  report.push({ name: "Team revisions, native member messages, outside roster, capacity and task projection", passed: true });
+
+  const haltDoc = service.snapshot().document;
+  const halt = {
+    ...newNode("agent", 600, 1670, "Interrupt review"), cwd: workspace,
+    task: "FLOWSPACE_TEST_DELEGATE FLOWSPACE_TEST_HOLD_TEAM", teamRef: { teamId: blueprint.id },
+  };
+  haltDoc.nodes.push(halt);
+  haltDoc.edges.push(newEdge(halt.id, downstream.id, "continuation"));
+  await service.save(haltDoc);
+  const haltedRun = await service.start({ kind: "single", nodeIds: [halt.id] });
+  const halted = () => service.snapshot().runs.find((run) => run.id === haltedRun.id)!;
+  await until(() => halted().steps[0]?.state === "settling", "the team can be stopped while settling");
+  const haltLeadId = halted().steps[0].sessionId!;
+  const haltTeam = () => service.snapshot().teams?.[haltLeadId];
+  await until(() => haltTeam()?.members[0]?.activity === "running", "the member is still active");
+  await service.stopNode(halt.id);
+  await until(() => haltTeam()?.capacity.active === 0, "stopping the team also stops its member");
+  assert.equal(halted().steps[0].state, "aborted");
+  assert.equal(halted().steps.length, 1);
+  report.push({ name: "Stopping a settling team interrupts native members without continuing downstream", passed: true });
+
+  blueprint = await service.archiveTeam({ id: blueprint.id, revision: blueprint.revision });
+  const source = service.snapshot();
+  const group = newNode("group", 100, 1210, "Portable review");
+  const chain = [upstream.id, leadNode.id, downstream.id];
+  const portableDoc = {
+    ...source.document,
+    nodes: [group, ...source.document.nodes.filter((node) => chain.includes(node.id)).map(
+      (node) => ({ ...node, parentId: group.id }),
+    )],
+  };
+  const template = captureTemplate(portableDoc, group.id, group.title, "", source.teamBlueprints);
+  assert.ok(template.nodes.every((node) => !node.sessionId));
+  const bundle = JSON.parse(JSON.stringify({
+    template, dependencies: teamDependenciesFor(template.nodes, source),
+  }));
+
   const countBeforeRestart = service.snapshot().runs.length;
   const finalDocBeforeRestart = service.snapshot().document;
   finalDocBeforeRestart.nodes[0].draft = "Persisted draft";
@@ -444,9 +574,24 @@ try {
   const restored = await boot({
     name: environmentName,
     mock: true,
-    port: 3192,
+    port: integrationPort,
   });
   try {
+    assert.deepEqual(restored.ctx.flowspace.listRoles(), [archivedRole]);
+    assert.deepEqual(restored.ctx.flowspace.listTeams(), [blueprint]);
+    assert.equal(restored.ctx.flowspace.snapshot().teams?.[leadId]?.members[0]?.sessionId, memberId);
+    assert.equal(restored.ctx.flowspace.snapshot().teams?.[leadId]?.tasks.length, 2);
+    const { agent: resumedLead } = await restored.ctx.sessionController.resolveAgent(leadId);
+    const tools = await restored.ctx.tools.resolve({
+      agent: resumedLead, modelSelection: resumedLead.model.current(), signal: AbortSignal.timeout(10_000),
+    });
+    try {
+      const names = restored.ctx.tools.schemas(resumedLead, tools).map((entry) => entry.name);
+      assert.ok(names.includes("team_delegate"));
+      assert.ok(!names.some((name) => ["subagent", "subagent_fork", "workflow"].includes(name)));
+    } finally {
+      tools.dispose();
+    }
     assert.equal(
       restored.ctx.flowspace.snapshot().document.nodes[0].draft,
       "Persisted draft",
@@ -469,12 +614,61 @@ try {
         .snapshot()
         .runs.some((r) => r.state === "interrupted"),
     );
+    const resumedSignal = AbortSignal.timeout(15_000);
+    await restored.ctx.subagents.prompt({
+      childSessionId: memberId, requestId: crypto.randomUUID(), delivery: "steer",
+      content: [{ type: "text", text: "Cold member continuation." }],
+    }, resumedSignal);
+    await restored.ctx.subagents.waitForTreeWork(resumedLead);
+    using memberLog = await restored.ctx.sessionQuery.observeSession(memberId);
+    assert.ok(memberLog.events.some((event) => event.type === "user/message" && JSON.stringify(event.data).includes("Cold member continuation.")));
+    assert.ok(memberLog.events.some((event) => event.type === "subagent/descriptor" && event.data.agentModel === workerRoute.model));
     report.push({
       name: "Host restart preserves draft, layout and run identity without replay",
       passed: true,
     });
   } finally {
     await restored.shutdown.shutdown(0);
+  }
+
+  const fresh = await boot({ name: `${environmentName}-portable`, mock: true, port: integrationPort });
+  try {
+    const imported = fresh.ctx.flowspace;
+    assert.deepEqual(imported.listTeams(), []);
+    assert.deepEqual(imported.listRoles(), []);
+    const missingModel = { provider: "offline-provider", model: "unavailable" };
+    bundle.dependencies.roles[0].model = missingModel;
+    assert.deepEqual(await imported.importWorkflow(bundle), { kind: "missing-models", models: [missingModel] });
+    assert.deepEqual(imported.listRoles(), []);
+    const replacements = [{ from: missingModel, to: workerRoute }];
+    const restored = await imported.importWorkflow({ ...bundle, replacements });
+    assert.equal(restored.kind, "imported");
+    const rebuilt = restored.document;
+    const tpl = rebuilt.templates[0];
+    assert.equal(tpl.nodes.find((node) => node.teamRef)?.teamRef.teamId, blueprint.id);
+    assert.deepEqual(imported.listRoles()[0].model, workerRoute);
+    assert.equal((await imported.importWorkflow(bundle)).kind, "imported");
+    assert.equal(imported.listTeams().length, 1);
+    const copied = await imported.importWorkflow({ ...bundle, replacements, copyAssets: true });
+    assert.equal(copied.kind, "imported");
+    const clone = copied.document.templates.at(-1);
+    const cloneRef = clone.nodes.find((node) => node.teamRef).teamRef;
+    const cloneTeam = imported.listTeams().find((team) => team.id === cloneRef.teamId);
+    assert.notEqual(cloneTeam.id, blueprint.id);
+    assert.notEqual(cloneTeam.slots[0].roleId, reviewer.id);
+
+    const newDoc = copied.document;
+    const instance = instantiateTemplate(newDoc, clone, 200, 140, clone.title, { cwd: fresh.workspace });
+    const input = newDoc.nodes.find((node) => node.parentId === instance.id && node.title === upstream.title);
+    await imported.save(newDoc);
+    const launch = await imported.start({ kind: "single", nodeIds: [input.id] });
+    const restoredRun = () => imported.snapshot().runs.find((run) => run.id === launch.id);
+    await until(() => ["completed", "error"].includes(restoredRun()?.state), "imported team workflow settles from an empty library", 45_000);
+    assert.equal(restoredRun().state, "completed", JSON.stringify(restoredRun().steps.map((step) => step.error)));
+    assert.equal(restoredRun().steps[1].output, "TEAM_FINAL_REVIEW");
+    report.push({ name: "Exported team workflow, blank-library import, model replacement, reuse, copy and execution", passed: true });
+  } finally {
+    await fresh.shutdown.shutdown(0);
   }
   console.log(
     JSON.stringify(

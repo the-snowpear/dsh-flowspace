@@ -978,12 +978,12 @@
   padding: 0 11px;
 }
 
-/* ---------- Ports: Continuation Diamond (Header) & Reference Circle (Below) ---------- */
+/* Port coordinates are measured from the outer edge of the 1px card border. */
 .fs-root .port {
   position: absolute;
   width: 20px;
   height: 20px;
-  top: calc(var(--port-y) - 10px);
+  top: calc(var(--port-y) - 1px);
   z-index: 5;
   display: grid;
   place-items: center;
@@ -1002,13 +1002,15 @@
   inset: -5px;
 }
 .fs-root .port-in {
-  left: -11px;
+  left: -1px;
+  translate: -50% -50%;
 }
 .fs-root .port-in::before {
   inset: -5px -1px -5px -8px;
 }
 .fs-root .port-out {
-  right: -11px;
+  right: -1px;
+  translate: 50% -50%;
 }
 .fs-root .port-out::before {
   inset: -5px -8px -5px -1px;
@@ -1031,40 +1033,6 @@
 .fs-root .node.selected > .port,
 .fs-root .port.is-linked {
   color: var(--pc);
-}
-.fs-root .port > i {
-  display: block;
-  width: 10px;
-  height: 10px;
-  background: var(--surface);
-  border: 1.75px solid currentColor;
-  border-radius: 50%;
-  transition:
-    scale var(--dur) var(--ease-spring),
-    background-color var(--dur-fast) var(--ease),
-    box-shadow var(--dur-fast) var(--ease);
-}
-.fs-root .node-note > .port > i {
-  background: var(--note-bg);
-}
-.fs-root .port.is-linked > i {
-  background: currentColor;
-}
-.fs-root .port-continuation > i {
-  width: 12px;
-  height: 12px;
-  border: 0;
-  border-radius: 0;
-  background: currentColor;
-  clip-path: polygon(50% 4%, 96% 50%, 50% 96%, 4% 50%);
-}
-.fs-root .port:hover > i,
-.fs-root .port-target > i {
-  scale: 1.45;
-  background: currentColor;
-  box-shadow:
-    0 0 0 5px color-mix(in oklab, currentColor 24%, transparent),
-    0 0 14px color-mix(in oklab, currentColor 65%, transparent);
 }
 .fs-root .port:hover,
 .fs-root .port-target {
@@ -1104,10 +1072,6 @@
   color: var(--accent);
   opacity: 1;
   scale: 1.2;
-}
-.fs-root .connecting-reference .node:not(.is-invalid-target) > .port-reference.port-in > i,
-.fs-root .connecting-continuation .node:not(.is-invalid-target) > .port-continuation.port-in > i {
-  animation: omp-pulse var(--loop-pulse) var(--ease-loop) infinite;
 }
 .fs-root .semantic-zoom .port {
   scale: var(--type-scale, 1);
@@ -1563,7 +1527,7 @@
 .fs-root .composite-ports {
   display: flex;
   gap: 14px;
-  padding: 18px 12px 12px;
+  padding: 19px 12px 12px;
 }
 .fs-root .composite-ports > div {
   flex: 1;
@@ -1590,6 +1554,10 @@
 .fs-root .composite-out {
   flex-direction: row-reverse;
   text-align: right;
+  transform-origin: calc(100% + 13px) 50%;
+}
+.fs-root .composite-in {
+  transform-origin: -13px 50%;
 }
 .fs-root .composite-summary {
   display: flex;
@@ -1601,33 +1569,20 @@
   right: 12px;
   bottom: 8px;
 }
-.fs-root .proxy-pin {
-  width: 10px;
-  height: 10px;
-  border: 1.75px solid var(--cap-pending);
-  background: var(--surface);
-  border-radius: 50%;
-  flex: none;
-  transition: scale var(--dur) var(--ease-spring);
-}
-.fs-root .proxy-continuation {
-  border: 0;
-  background: var(--text-2);
-  clip-path: polygon(50% 4%, 96% 50%, 50% 96%, 4% 50%);
-  width: 12px;
-  height: 12px;
-  border-radius: 0;
-}
 .fs-root .composite-port-row:hover .proxy-pin {
   scale: 1.4;
 }
 .fs-root .composite-in .proxy-pin {
   position: absolute;
-  left: -18px;
+  left: -13px;
+  top: 50%;
+  translate: -50% -50%;
 }
 .fs-root .composite-out .proxy-pin {
   position: absolute;
-  right: -18px;
+  right: -13px;
+  top: 50%;
+  translate: 50% -50%;
 }
 .fs-root .template-association {
   position: absolute;

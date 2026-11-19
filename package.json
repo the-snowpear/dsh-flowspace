@@ -13,6 +13,8 @@
     "test": "tsx --test packages/flowspace/test/*.test.ts",
     "check": "pnpm build && pnpm typecheck && pnpm test",
     "test:real": "tsx scripts/real-smoke.ts",
+    "test:team:spike": "node scripts/team-spike.mjs",
+    "test:team:real": "tsx scripts/team-real-smoke.ts",
     "dev": "node --expose-internals scripts/dev.mjs",
     "dev:mock": "node --expose-internals scripts/dev.mjs --mock",
     "sandbox": "node scripts/sandbox.mjs",

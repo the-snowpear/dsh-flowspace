@@ -5,6 +5,7 @@ import type { MainPanelId } from "@deepseek-ai/dsh-client-ui-layout/client";
 import { useSyncExternalStore } from "react";
 import { sanitizeDocumentForWire } from "../core/document.ts";
 import type {
+  ArchiveTeamAssetRequest,
   BindRequest,
   EdgePayloadPreview,
   ExtendLoopRequest,
@@ -17,20 +18,29 @@ import type {
   GitRepoStatus,
   InspectEdgeRequest,
   LaunchPlan,
+  RoleDefinition,
+  SaveRoleRequest,
+  SaveTeamRequest,
   SessionBrief,
   SessionChangeTurn,
   SessionFileDiffView,
   SessionTerminalBrief,
   SourceRequest,
   StartRequest,
+  TeamBlueprint,
+  TeamMemberView,
+  TeamModelRoute,
   TerminalScreenSnapshot,
   WorkspaceBrief,
+  WorkflowImportRequest,
+  WorkflowImportResult,
   WorkspaceFilePreview,
   WorkspaceStructureBrief,
 } from "../types.ts";
 import type { RemoteResult } from "@deepseek-ai/dsh-typert-protocol";
 import type {} from "../../lib/typert.remote-client.js";
 import type {} from "@deepseek-ai/dsh-client-locale/client";
+import type {} from "@deepseek-ai/dsh-subagent/remote";
 import { setLanguage } from "./i18n.ts";
 import { shareSnapshotValue } from "./sceneModel.ts";
 
@@ -41,6 +51,14 @@ export interface CanvasBridge {
   useValue<T>(read: (snapshot: FlowspaceSnapshot | null) => T): T;
   connect(): () => void;
   save(doc: FlowspaceDocument): Promise<FlowspaceDocument>;
+  importWorkflow(request: WorkflowImportRequest): Promise<WorkflowImportResult>;
+  listRoles(): Promise<RoleDefinition[]>;
+  saveRole(request: SaveRoleRequest): Promise<RoleDefinition>;
+  archiveRole(request: ArchiveTeamAssetRequest): Promise<RoleDefinition>;
+  listTeams(): Promise<TeamBlueprint[]>;
+  saveTeam(request: SaveTeamRequest): Promise<TeamBlueprint>;
+  archiveTeam(request: ArchiveTeamAssetRequest): Promise<TeamBlueprint>;
+  listModelRoutes(): Promise<TeamModelRoute[]>;
   plan(req: StartRequest): Promise<LaunchPlan>;
   start(req: StartRequest): Promise<void>;
   rerunFailed(runId: string): Promise<void>;
@@ -73,6 +91,8 @@ export interface CanvasBridge {
   workspaceFiles(cwd?: string): Promise<string[]>;
   readWorkspaceFile(path: string, cwd?: string): Promise<WorkspaceFilePreview>;
   retain(node: FlowNode): SessionReference;
+  retainTeamMember(member: TeamMemberView): SessionReference;
+  interruptTeamMember(sessionId: string): Promise<void>;
   openChat(sessionId: string): void;
   openCanvas(nodeId?: string): void;
   presence(ids: string[]): void;
@@ -197,6 +217,30 @@ export class FlowClient implements CanvasBridge {
   async save(doc: FlowspaceDocument): Promise<FlowspaceDocument> {
     const clean = sanitizeDocumentForWire(doc);
     return value(await this.ctx.remote.flowspace.save(clean));
+  }
+  async importWorkflow(request: WorkflowImportRequest): Promise<WorkflowImportResult> {
+    return value(await this.ctx.remote.flowspace.importWorkflow(request));
+  }
+  async listRoles(): Promise<RoleDefinition[]> {
+    return value(await this.ctx.remote.flowspace.listRoles());
+  }
+  async saveRole(request: SaveRoleRequest): Promise<RoleDefinition> {
+    return value(await this.ctx.remote.flowspace.saveRole(request));
+  }
+  async archiveRole(request: ArchiveTeamAssetRequest): Promise<RoleDefinition> {
+    return value(await this.ctx.remote.flowspace.archiveRole(request));
+  }
+  async listTeams(): Promise<TeamBlueprint[]> {
+    return value(await this.ctx.remote.flowspace.listTeams());
+  }
+  async saveTeam(request: SaveTeamRequest): Promise<TeamBlueprint> {
+    return value(await this.ctx.remote.flowspace.saveTeam(request));
+  }
+  async archiveTeam(request: ArchiveTeamAssetRequest): Promise<TeamBlueprint> {
+    return value(await this.ctx.remote.flowspace.archiveTeam(request));
+  }
+  async listModelRoutes(): Promise<TeamModelRoute[]> {
+    return value(await this.ctx.remote.flowspace.listModelRoutes());
   }
   async plan(req: StartRequest): Promise<LaunchPlan> {
     await Promise.all([...this.draftSavers.values()].map((save) => save()));
@@ -333,6 +377,16 @@ export class FlowClient implements CanvasBridge {
       });
     });
     return reference;
+  }
+  retainTeamMember(member: TeamMemberView): SessionReference {
+    return this.ctx.sessions.retain({
+      parentSessionId: member.parentId as SessionId,
+      childSessionId: member.sessionId as SessionId,
+      mode: member.mode === "external" ? "unknown" : member.mode,
+    }, { source: "flowspace" });
+  }
+  async interruptTeamMember(sessionId: string): Promise<void> {
+    value(await this.ctx.remote.subagents.interruptByUser(sessionId as SessionId));
   }
   watchDraft(actx: Context, nodeId: string): () => void {
     const input = this.ctx.conversation.input.for(actx);

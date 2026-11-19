@@ -219,14 +219,15 @@ export function toWorld(
   };
 }
 
-/** Continuation ports sit on the header row; reference ports sit below it. */
+/** World-space offsets include the card border above the header and body. */
 export function portY(
   node: FlowNode,
   kind: "reference" | "continuation",
   compact: boolean,
 ): number {
-  if (kind === "continuation") return compact ? 21 : 24;
-  return compact ? (node.kind === "agent" ? 78 : 56) : 62;
+  const border = 1;
+  if (kind === "continuation") return border + (compact ? 21 : 24);
+  return border + (compact ? (node.kind === "agent" ? 78 : 56) : 62);
 }
 
 export function inferGroupPorts(

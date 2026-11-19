@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 const require = createRequire(
   new URL("../packages/flowspace/package.json", import.meta.url),
 );
@@ -15,6 +16,11 @@ export function apply(ctx) {
           provider,
           id: "deterministic",
           name: "FlowSpace integration fixture",
+        },
+        {
+          provider,
+          id: "deterministic-worker",
+          name: "FlowSpace member fixture",
         },
       ];
     }
@@ -38,6 +44,34 @@ export function apply(ctx) {
           .filter((b) => b.type === "text")
           .map((b) => b.text)
           .join("\n") ?? "";
+      const recent = options.messages.slice(options.messages.lastIndexOf(last) + 1);
+      const fixtureCall = input.includes("FLOWSPACE_TEAM_SPIKE")
+        ? { name: "flowspace_team_spike", args: { slot: "reviewer" } }
+        : input.includes("FLOWSPACE_TEST_DELEGATE")
+          ? { name: "team_delegate", args: {
+              slot: "reviewer",
+              task: input.includes("FLOWSPACE_TEST_HOLD_TEAM")
+                ? "FLOWSPACE_TEAM_HOLD: Review this sample."
+                : "FLOWSPACE_TEAM_WORKER: Review this sample.",
+            } }
+          : undefined;
+      const tool = options.tools?.find((candidate) => candidate.name === fixtureCall?.name);
+      const settled = recent.some((message) => message.source?.kind === "subagent-settled");
+      if (tool && !settled && !recent.some((message) => message.content.some(
+            (block) => block.type === "tool-call" && block.name === tool.name,
+          ))) {
+        const block = {
+          type: "tool-call",
+          id: `fixture-${crypto.randomUUID()}`,
+          name: tool.name,
+          arguments: JSON.stringify(fixtureCall.args),
+        };
+        yield { type: "block-start", index: 0, blockType: block.type };
+        yield { type: "tool-call-delta", index: 0, id: block.id, name: block.name, argumentsDelta: block.arguments };
+        yield { type: "block-end", index: 0, block };
+        yield { type: "finish", reason: "tool-calls" };
+        return;
+      }
       if (input.includes("FLOWSPACE_APPROVAL") && options.sessionId) {
         const agent = ctx.agents.get(options.sessionId);
         await ctx.approval.request({
@@ -47,7 +81,11 @@ export function apply(ctx) {
           signal: options.signal,
         });
       }
-      const text = `【测试模型】已收到任务：${input.slice(0, 600)}`;
+      if (input.includes("FLOWSPACE_TEAM_WORKER")) await delay(1500, undefined, { signal: options.signal });
+      if (input.includes("FLOWSPACE_TEAM_HOLD")) await delay(25_000, undefined, { signal: options.signal });
+      const text = tool?.name === "team_delegate"
+        ? (settled ? "TEAM_FINAL_REVIEW" : "Review assigned.")
+        : `【测试模型】已收到任务：${input.slice(0, 600)}`;
       yield { type: "block-start", index: 0, blockType: "text" };
       for (let i = 0; i < text.length; i += 25) {
         await new Promise((r) => setTimeout(r, 35));

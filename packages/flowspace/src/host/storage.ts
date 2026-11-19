@@ -5,10 +5,87 @@ import type {
   CanvasSnapshot,
   FlowspaceDocument,
   FlowspaceRun,
+  RoleDefinition,
+  TeamBlueprint,
   WorkflowTemplate,
 } from "../types.ts";
 
 export { sanitizeDocumentForWire };
+
+const assetId = z.string().trim().min(1);
+export const teamModelSchema = z.object({
+  provider: assetId,
+  model: assetId,
+  reasoningEffort: assetId.optional(),
+});
+
+export const saveRoleSchema = z.object({
+  id: assetId,
+  title: assetId,
+  description: z.string(),
+  persona: z.string(),
+  model: teamModelSchema,
+  revision: z.number().int().nonnegative(),
+});
+
+export const maxTeamSlots = 8;
+export const saveTeamSchema = z.object({
+  id: assetId,
+  title: assetId,
+  lead: z.object({ persona: z.string(), model: teamModelSchema }),
+  slots: z.array(z.object({
+    slotId: z.string().regex(/^(?!lead$)[a-z][a-z0-9-]{0,31}$/, "Invalid native subagent slot name"),
+    roleId: assetId,
+    label: assetId,
+    model: teamModelSchema.optional(),
+    maxInstances: z.number().int().positive().optional(),
+  })).min(1).max(maxTeamSlots),
+  norms: z.string(),
+  revision: z.number().int().nonnegative(),
+}).refine((team) => new Set(team.slots.map((slot) => slot.slotId)).size === team.slots.length, {
+  path: ["slots"],
+  message: "Slot names must be unique",
+});
+
+const revisionFields = {
+  revision: z.number().int().positive(),
+  archived: z.boolean().optional(),
+};
+export const roleDefinitionSchema: z.ZodType<RoleDefinition> = saveRoleSchema.extend(revisionFields);
+export const teamBlueprintSchema: z.ZodType<TeamBlueprint> = saveTeamSchema.safeExtend(revisionFields);
+export const archiveTeamAssetSchema = z.object({
+  id: assetId,
+  revision: revisionFields.revision,
+});
+export const teamReferenceSchema = z.object({
+  teamId: assetId,
+  revision: revisionFields.revision.optional(),
+});
+export const teamDependenciesSchema = z.object({
+  teams: z.array(teamBlueprintSchema),
+  roles: z.array(roleDefinitionSchema),
+}).refine(({ teams, roles }) =>
+  new Set(teams.map((team) => team.id)).size === teams.length &&
+  new Set(roles.map((role) => role.id)).size === roles.length,
+  "Team dependency IDs must be unique",
+);
+export const teamModelReplacementSchema = z.array(z.object({ from: teamModelSchema, to: teamModelSchema }));
+const teamSessionSchema = z.object({
+  leadSessionId: assetId,
+  nodeId: assetId,
+  roster: z.object({
+    team: teamBlueprintSchema,
+    roles: z.array(roleDefinitionSchema),
+  }),
+  delegations: z.array(z.object({
+    sessionId: assetId,
+    slotId: assetId,
+    roleId: assetId,
+    model: teamModelSchema,
+    roleRevision: revisionFields.revision,
+  })),
+});
+export type TeamSessionRecord = z.infer<typeof teamSessionSchema>;
 
 const groupPort = z.object({
   id: z.string(),
@@ -66,6 +143,7 @@ const node = z.object({
   branch: z.string().optional(),
   worktreePath: z.string().optional(),
   agentPreset: z.string().optional(),
+  teamRef: teamReferenceSchema.optional(),
   planMode: z.boolean().optional(),
   customTitle: z.boolean().optional(),
   subAgentsExpanded: z.boolean().optional(),
@@ -209,7 +287,6 @@ export const documentSchema: z.ZodType<FlowspaceDocument> = z.object({
   snapshots: z.array(canvasSnapshotSchema).optional(),
 });
 
-// Four isolated tables per design.md §6.2: documents, runs, templates, snapshots.
 export const flowspaceDomain = defineDomain({
   name: "flowspace",
   version: 1,
@@ -222,6 +299,9 @@ export const flowspaceDomain = defineDomain({
     ),
     templates: domainTable(workflowTemplateSchema),
     snapshots: domainTable(canvasSnapshotSchema),
+    roles: domainTable(roleDefinitionSchema),
+    teams: domainTable(teamBlueprintSchema),
+    team_sessions: domainTable(teamSessionSchema),
   },
 });
 
@@ -246,6 +326,7 @@ export function checkDocument(doc: FlowspaceDocument): void {
   if (sessions.length !== new Set(sessions).size)
     throw new Error("一个会话只能对应一个 Agent 节点");
   for (const n of doc.nodes) {
+    if (n.teamRef && n.kind !== "agent") throw new Error("团队必须使用 Agent 节点");
     if (!n.parentId) continue;
     const parent = doc.nodes.find((p) => p.id === n.parentId);
     if (!parent || parent.kind !== "group" || parent.id === n.id)
@@ -264,7 +345,7 @@ export function checkDocument(doc: FlowspaceDocument): void {
       throw new Error("接续只能连接 Agent");
     if (
       e.mode === "fork" &&
-      (target.sessionId ||
+      (target.teamRef || target.sessionId ||
         doc.edges.filter((x) => x.target === target.id && x.mode === "fork")
           .length > 1)
     )

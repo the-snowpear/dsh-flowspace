@@ -97,6 +97,13 @@ import { Service } from "@deepseek-ai/cordis";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 
 // packages/flowspace/src/core/document.ts
+function workflowNodes(document) {
+  return [
+    ...document.nodes,
+    ...(document.templates ?? []).flatMap((template) => template.nodes),
+    ...(document.snapshots ?? []).flatMap((snapshot) => snapshot.nodes)
+  ];
+}
 var uid = () => crypto.randomUUID();
 var DEFAULT_AGENT_TITLES = /* @__PURE__ */ new Set(["\u65B0 Agent", "New Agent", ""]);
 function stripNullFields(value) {
@@ -411,6 +418,7 @@ function launchPlan(doc, request, busy, waiting) {
 }
 
 // packages/flowspace/src/core/scheduler.ts
+var activeStep = (step) => step.state === "queued" || step.state === "running" || step.state === "settling";
 var Scheduler = class {
   constructor(runtime, store, runs = []) {
     this.runtime = runtime;
@@ -420,6 +428,7 @@ var Scheduler = class {
   runs;
   serial = Promise.resolve();
   disposed = false;
+  teamSettlements = /* @__PURE__ */ new Set();
   transact(action) {
     const next = this.serial.then(action);
     this.serial = next.catch(() => void 0);
@@ -429,7 +438,7 @@ var Scheduler = class {
     const sessions = new Set(this.runtime.running?.() ?? []);
     return /* @__PURE__ */ new Set([
       ...this.runs.flatMap(
-        (r) => r.steps.filter((s) => s.state === "running" || s.state === "queued").map((s) => s.nodeId)
+        (r) => r.steps.filter(activeStep).map((s) => s.nodeId)
       ),
       ...this.store.document().nodes.filter((n) => n.sessionId && sessions.has(n.sessionId)).map((n) => n.id)
     ]);
@@ -614,6 +623,7 @@ var Scheduler = class {
         nodeId: node2.id,
         requestId,
         sessionId,
+        ...node2.teamRef ? { teamRef: node2.teamRef } : {},
         state: "queued",
         iteration: 1,
         task,
@@ -624,7 +634,7 @@ var Scheduler = class {
       await this.store.changed();
     });
   }
-  claim(requestId, turn) {
+  claim(requestId, turn, teamRef) {
     return this.transact(async () => {
       const step = this.runs.flatMap((r) => r.steps).find((s) => s.requestId === requestId);
       if (!step || step.endedAt) return;
@@ -640,6 +650,7 @@ var Scheduler = class {
         return;
       }
       step.turn = turn;
+      if (teamRef) step.teamRef = teamRef;
       step.state = "running";
       await this.store.changed();
     });
@@ -647,7 +658,7 @@ var Scheduler = class {
   /** Record native step/token telemetry from DSH session events without triggering full storage churn. */
   recordTelemetry(sessionId, turn, delta) {
     const step = this.runs.flatMap((r) => r.steps).find(
-      (s) => s.sessionId === sessionId && !s.endedAt && (s.turn === turn || s.turn === void 0)
+      (s) => s.sessionId === sessionId && !s.endedAt && (s.turn === turn || s.turn === void 0 || s.state === "settling")
     );
     if (!step) return false;
     step.telemetry ??= { stepCount: 0, inputTokens: 0, outputTokens: 0 };
@@ -784,44 +795,63 @@ var Scheduler = class {
       });
     }
   }
-  finish(sessionId, turn, ending, seq, output, error) {
+  finish(sessionId, turn, ending, seq, output, error, teamFollowup = false) {
     return this.transact(async () => {
-      const run = this.runs.find(
-        (r) => r.steps.some(
-          (s) => s.sessionId === sessionId && s.turn === turn && !s.endedAt
-        )
-      );
-      const step = run?.steps.find(
-        (s) => s.sessionId === sessionId && s.turn === turn && !s.endedAt
-      );
-      if (!run || !step) return;
-      step.endedAt = Date.now();
+      const matches = (s) => s.sessionId === sessionId && !s.endedAt && s.turn === turn;
+      const settling = (s) => s.sessionId === sessionId && s.state === "settling";
+      const run = this.runs.find((r) => r.steps.some(matches)) ?? (teamFollowup ? this.runs.findLast((r) => r.steps.some(settling)) : void 0);
+      const step = run?.steps.find(matches) ?? run?.steps.findLast(settling);
+      if (!run || !step || seq <= (step.endSeq ?? -1)) return;
+      step.turn = turn;
       step.endSeq = seq;
-      step.output = output;
-      step.telemetry ??= { stepCount: 1, inputTokens: 0, outputTokens: 0 };
-      if (step.telemetry.stepCount === 0) step.telemetry.stepCount = 1;
-      step.telemetry.durationMs = Math.max(0, step.endedAt - step.createdAt);
-      step.state = ending === "completed" ? "completed" : ending === "aborted" ? "aborted" : ending === "interrupted" ? "interrupted" : "error";
-      step.error = error ?? (step.state === "error" ? ending : void 0);
-      if (step.state === "completed" && !["cancelled", "interrupted"].includes(run.state)) {
-        const node2 = run.graph.nodes.find((n) => n.id === step.nodeId);
-        const planGateActive = Boolean(
-          await this.runtime.isPlanModeActive?.(sessionId)
-        );
-        await this.emitDownstreamTokens(
-          run,
-          step,
-          node2,
-          sessionId,
-          seq,
-          output,
-          planGateActive
-        );
+      if (output || step.output === void 0) step.output = output;
+      if (step.teamRef && ending === "completed" && this.runtime.waitForTeam) {
+        step.state = "settling";
         await this.store.changed();
-        if (!["paused", "error"].includes(run.state)) await this.advance(run);
+        this.waitForTeam(run, step, sessionId);
+      } else {
+        await this.finishStep(run, step, sessionId, ending, error);
       }
-      this.settle(run);
+    });
+  }
+  waitForTeam(run, step, sessionId) {
+    if (this.teamSettlements.has(step.id)) return;
+    this.teamSettlements.add(step.id);
+    const finish = (ending, error) => this.transact(async () => {
+      this.teamSettlements.delete(step.id);
+      if (step.state === "settling") await this.finishStep(run, step, sessionId, ending, error);
+    });
+    void this.runtime.waitForTeam(sessionId).then(
+      () => finish("completed"),
+      (error) => finish("error", String(error))
+    ).catch((error) => console.error("FlowSpace team settlement:", error));
+  }
+  async finishStep(run, step, sessionId, ending, error) {
+    step.endedAt = Date.now();
+    step.telemetry ??= { stepCount: 1, inputTokens: 0, outputTokens: 0 };
+    if (step.telemetry.stepCount === 0) step.telemetry.stepCount = 1;
+    step.telemetry.durationMs = Math.max(0, step.endedAt - step.createdAt);
+    step.state = ending === "completed" || ending === "aborted" || ending === "interrupted" ? ending : "error";
+    step.error = error ?? (step.state === "error" ? ending : void 0);
+    if (step.state === "completed" && !["cancelled", "interrupted"].includes(run.state)) {
+      const node2 = run.graph.nodes.find((n) => n.id === step.nodeId);
+      const planGateActive = Boolean(await this.runtime.isPlanModeActive?.(sessionId));
+      await this.emitDownstreamTokens(run, step, node2, sessionId, step.endSeq, step.output ?? "", planGateActive);
       await this.store.changed();
+      if (!["paused", "error"].includes(run.state)) await this.advance(run);
+    }
+    this.settle(run);
+    await this.store.changed();
+  }
+  stopSettlingTeam(sessionId) {
+    return this.transact(async () => {
+      for (const run of this.runs) {
+        for (const step of run.steps) {
+          if (step.sessionId === sessionId && step.state === "settling") {
+            await this.finishStep(run, step, sessionId, "aborted");
+          }
+        }
+      }
     });
   }
   loopLimit(run, nodeId) {
@@ -1013,6 +1043,7 @@ var Scheduler = class {
         node2.sessionId ? void 0 : fork
       );
       node2.sessionId = step.sessionId;
+      if (node2.teamRef) step.teamRef = this.runtime.teamReference?.(step.sessionId) ?? node2.teamRef;
       await this.store.bound(nodeId, step.sessionId, fork);
       if (fork)
         for (const e of run.graph.edges.filter(
@@ -1082,9 +1113,7 @@ var Scheduler = class {
         this.settle(run);
       } else {
         run.state = "cancelled";
-        for (const step of run.steps.filter(
-          (s) => ["queued", "running"].includes(s.state)
-        )) {
+        for (const step of run.steps.filter(activeStep)) {
           await this.runtime.cancel(step).catch(() => {
           });
           step.state = "aborted";
@@ -1103,7 +1132,7 @@ var Scheduler = class {
       if (!["running", "waiting", "paused"].includes(run.state)) continue;
       run.state = "interrupted";
       for (const step of run.steps) {
-        if (["queued", "running"].includes(step.state)) {
+        if (activeStep(step)) {
           await this.runtime.cancel(step).catch(() => {
           });
           step.state = "interrupted";
@@ -1123,7 +1152,7 @@ var Scheduler = class {
       if (["running", "waiting", "paused"].includes(run.state)) {
         run.state = "interrupted";
         for (const step of run.steps) {
-          if (["queued", "running"].includes(step.state)) {
+          if (activeStep(step)) {
             let patch;
             try {
               patch = this.runtime.reconcile ? await this.runtime.reconcile(step) : { state: "interrupted", endedAt: Date.now() };
@@ -1176,9 +1205,7 @@ var Scheduler = class {
         (r) => ["running", "waiting", "paused"].includes(r.state)
       )) {
         run.state = "interrupted";
-        for (const step of run.steps.filter(
-          (s) => ["queued", "running"].includes(s.state)
-        )) {
+        for (const step of run.steps.filter(activeStep)) {
           await this.runtime.cancel(step).catch(() => {
           });
           step.state = "interrupted";
@@ -1195,7 +1222,7 @@ var Scheduler = class {
   }
   settle(run) {
     if (["paused", "cancelled", "interrupted"].includes(run.state)) return;
-    if (run.steps.some((s) => s.state === "queued" || s.state === "running"))
+    if (run.steps.some(activeStep))
       run.state = "running";
     else if (run.steps.some(
       (s) => ["error", "aborted", "interrupted"].includes(s.state)
@@ -1805,9 +1832,16 @@ function computeFileNodeFingerprint(node2, baseCwd) {
   return shortHash(parts.join("|"));
 }
 var DshRuntime = class {
-  constructor(ctx, findNode) {
+  constructor(ctx, findNode, teams) {
     this.ctx = ctx;
     this.findNode = findNode;
+    this.teams = teams;
+  }
+  teamReference(sessionId) {
+    return this.teams.reference(sessionId);
+  }
+  waitForTeam(sessionId) {
+    return this.teams.waitForIdle(sessionId);
   }
   running() {
     return this.ctx.agents.list().filter((a) => a.status === "running").map((a) => a.id);
@@ -1868,12 +1902,13 @@ var DshRuntime = class {
       });
       return node2.sessionId;
     }
-    const result = fork?.sourceSessionId ? await this.ctx.sessionController.fork({
+    const roster = node2.teamRef && await this.teams.validateRoster(node2.teamRef.teamId);
+    const result = fork?.sourceSessionId && !roster ? await this.ctx.sessionController.fork({
       sessionId: fork.sourceSessionId,
       atSeq: fork.seq
     }) : await this.ctx.sessionController.create({
       ...ws ? { workspaceId: ws.id } : node2.cwd || node2.worktreePath ? { cwd: node2.worktreePath ?? node2.cwd } : {},
-      ...node2.agentPreset ? { agentPreset: node2.agentPreset } : {}
+      ...!roster && node2.agentPreset ? { agentPreset: node2.agentPreset } : {}
     });
     await this.ctx.sessionController.rename({
       sessionId: result.sessionId,
@@ -1883,6 +1918,7 @@ var DshRuntime = class {
       isFork: Boolean(fork),
       workspacePath: ws?.path
     });
+    if (roster) await this.teams.bind(node2, result.sessionId, roster);
     return result.sessionId;
   }
   async send(step) {
@@ -2008,9 +2044,18 @@ ${body}
       } catch {
       }
     }
+    if (this.teams.isLead(step.sessionId) && (step.state === "running" || step.state === "settling")) {
+      agent.cancel({ kind: "user" }, { keepInbox: true });
+      await this.teams.interruptMembers(step.sessionId);
+      return;
+    }
   }
   async reconcile(step) {
     if (!step.sessionId) return { state: "interrupted", endedAt: Date.now() };
+    if (step.teamRef || this.teams.isLead(step.sessionId)) {
+      await this.cancel({ ...step, state: "queued" });
+      return { state: "interrupted", endedAt: Date.now() };
+    }
     try {
       var _stack = [];
       try {
@@ -2290,6 +2335,75 @@ ${body}
 // packages/flowspace/src/host/storage.ts
 import { z } from "zod";
 import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
+var assetId = z.string().trim().min(1);
+var teamModelSchema = z.object({
+  provider: assetId,
+  model: assetId,
+  reasoningEffort: assetId.optional()
+});
+var saveRoleSchema = z.object({
+  id: assetId,
+  title: assetId,
+  description: z.string(),
+  persona: z.string(),
+  model: teamModelSchema,
+  revision: z.number().int().nonnegative()
+});
+var maxTeamSlots = 8;
+var saveTeamSchema = z.object({
+  id: assetId,
+  title: assetId,
+  lead: z.object({ persona: z.string(), model: teamModelSchema }),
+  slots: z.array(z.object({
+    slotId: z.string().regex(/^(?!lead$)[a-z][a-z0-9-]{0,31}$/, "Invalid native subagent slot name"),
+    roleId: assetId,
+    label: assetId,
+    model: teamModelSchema.optional(),
+    maxInstances: z.number().int().positive().optional()
+  })).min(1).max(maxTeamSlots),
+  norms: z.string(),
+  revision: z.number().int().nonnegative()
+}).refine((team) => new Set(team.slots.map((slot) => slot.slotId)).size === team.slots.length, {
+  path: ["slots"],
+  message: "Slot names must be unique"
+});
+var revisionFields = {
+  revision: z.number().int().positive(),
+  archived: z.boolean().optional()
+};
+var roleDefinitionSchema = saveRoleSchema.extend(revisionFields);
+var teamBlueprintSchema = saveTeamSchema.safeExtend(revisionFields);
+var archiveTeamAssetSchema = z.object({
+  id: assetId,
+  revision: revisionFields.revision
+});
+var teamReferenceSchema = z.object({
+  teamId: assetId,
+  revision: revisionFields.revision.optional()
+});
+var teamDependenciesSchema = z.object({
+  teams: z.array(teamBlueprintSchema),
+  roles: z.array(roleDefinitionSchema)
+}).refine(
+  ({ teams, roles }) => new Set(teams.map((team) => team.id)).size === teams.length && new Set(roles.map((role) => role.id)).size === roles.length,
+  "Team dependency IDs must be unique"
+);
+var teamModelReplacementSchema = z.array(z.object({ from: teamModelSchema, to: teamModelSchema }));
+var teamSessionSchema = z.object({
+  leadSessionId: assetId,
+  nodeId: assetId,
+  roster: z.object({
+    team: teamBlueprintSchema,
+    roles: z.array(roleDefinitionSchema)
+  }),
+  delegations: z.array(z.object({
+    sessionId: assetId,
+    slotId: assetId,
+    roleId: assetId,
+    model: teamModelSchema,
+    roleRevision: revisionFields.revision
+  }))
+});
 var groupPort = z.object({
   id: z.string(),
   kind: z.enum(["reference", "continuation"]),
@@ -2343,6 +2457,7 @@ var node = z.object({
   branch: z.string().optional(),
   worktreePath: z.string().optional(),
   agentPreset: z.string().optional(),
+  teamRef: teamReferenceSchema.optional(),
   planMode: z.boolean().optional(),
   customTitle: z.boolean().optional(),
   subAgentsExpanded: z.boolean().optional(),
@@ -2485,7 +2600,10 @@ var flowspaceDomain = defineDomain({
       )
     ),
     templates: domainTable(workflowTemplateSchema),
-    snapshots: domainTable(canvasSnapshotSchema)
+    snapshots: domainTable(canvasSnapshotSchema),
+    roles: domainTable(roleDefinitionSchema),
+    teams: domainTable(teamBlueprintSchema),
+    team_sessions: domainTable(teamSessionSchema)
   }
 });
 function scrubNodeNullsInPlace(nodes) {
@@ -2507,6 +2625,7 @@ function checkDocument(doc) {
   if (sessions.length !== new Set(sessions).size)
     throw new Error("\u4E00\u4E2A\u4F1A\u8BDD\u53EA\u80FD\u5BF9\u5E94\u4E00\u4E2A Agent \u8282\u70B9");
   for (const n of doc.nodes) {
+    if (n.teamRef && n.kind !== "agent") throw new Error("\u56E2\u961F\u5FC5\u987B\u4F7F\u7528 Agent \u8282\u70B9");
     if (!n.parentId) continue;
     const parent = doc.nodes.find((p) => p.id === n.parentId);
     if (!parent || parent.kind !== "group" || parent.id === n.id)
@@ -2521,14 +2640,588 @@ function checkDocument(doc) {
       throw new Error("\u8FDE\u7EBF\u76EE\u6807\u5FC5\u987B\u662F Agent");
     if (e.kind === "continuation" && source.kind !== "agent")
       throw new Error("\u63A5\u7EED\u53EA\u80FD\u8FDE\u63A5 Agent");
-    if (e.mode === "fork" && (target.sessionId || doc.edges.filter((x) => x.target === target.id && x.mode === "fork").length > 1))
+    if (e.mode === "fork" && (target.teamRef || target.sessionId || doc.edges.filter((x) => x.target === target.id && x.mode === "fork").length > 1))
       throw new Error("\u5206\u53C9\u53EA\u80FD\u63A5\u5165\u6709\u5355\u4E00\u5206\u53C9\u6765\u6E90\u7684\u672A\u542F\u52A8\u8349\u7A3F");
   }
 }
 
+// packages/flowspace/src/host/teamAssets.ts
+var modelKey = (model) => JSON.stringify([model.provider, model.model, model.reasoningEffort ?? ""]);
+function nextRevision(expected, current) {
+  if (expected !== (current ?? 0)) throw new Error("\u7248\u672C\u5DF2\u66F4\u65B0\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u7F16\u8F91\u3002 / Revision changed. Reopen the editor.");
+  return expected + 1;
+}
+var TeamAssets = class {
+  constructor(domain, llm) {
+    this.domain = domain;
+    this.llm = llm;
+  }
+  listRoles() {
+    return structuredClone([...this.domain.table("roles").entries()].map(([, role]) => role));
+  }
+  listTeams() {
+    return structuredClone([...this.domain.table("teams").entries()].map(([, team]) => team));
+  }
+  getTeam(id) {
+    return this.domain.table("teams").get(id);
+  }
+  roster(teamId) {
+    const team = this.getTeam(teamId);
+    if (!team) throw new Error(`\u627E\u4E0D\u5230\u56E2\u961F\u7F16\u5236 / Team blueprint not found: ${teamId}`);
+    const roles = [...new Set(team.slots.map((slot) => slot.roleId))].map((id) => {
+      const role = this.domain.table("roles").get(id);
+      if (!role) throw new Error(`\u627E\u4E0D\u5230\u89D2\u8272 / Role not found: ${id}`);
+      return role;
+    });
+    return { team, roles };
+  }
+  async listModelRoutes() {
+    const results = await Promise.allSettled(this.llm.listProviders().map(
+      async (provider) => (await this.llm.listModels(provider.id)).map((model) => ({
+        provider: provider.id,
+        providerName: provider.name,
+        model: model.id,
+        name: model.name
+      }))
+    ));
+    return results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  }
+  async validateModels(models) {
+    const [missing] = await this.missingModels(models);
+    if (missing) throw new Error(`\u6A21\u578B\u4E0D\u53EF\u7528 / Model unavailable: ${missing.provider}/${missing.model}${missing.reasoningEffort ? ` (${missing.reasoningEffort})` : ""}`);
+  }
+  async missingModels(models) {
+    const catalogs = /* @__PURE__ */ new Map();
+    const missing = [];
+    for (const model of new Map(models.map((model2) => [modelKey(model2), model2])).values()) {
+      let catalog = catalogs.get(model.provider);
+      if (!catalog) {
+        catalog = await this.llm.listModels(model.provider).catch(() => []);
+        catalogs.set(model.provider, catalog);
+      }
+      if (!catalog.some((entry) => entry.id === model.model)) {
+        missing.push(model);
+      } else if (model.reasoningEffort) {
+        await this.llm.resolveCallConfig(model).catch(() => {
+          missing.push(model);
+        });
+      }
+    }
+    return missing;
+  }
+  async prepareImport(request, referenced) {
+    const input = teamDependenciesSchema.parse(request.dependencies ?? { teams: [], roles: [] });
+    const replacements = new Map(teamModelReplacementSchema.parse(request.replacements ?? []).map(
+      ({ from, to }) => [modelKey(from), to]
+    ));
+    const replacement = (model) => replacements.get(modelKey(model)) ?? model;
+    const roleIds = /* @__PURE__ */ new Map();
+    const teamIds = /* @__PURE__ */ new Map();
+    const additions = { roles: [], teams: [] };
+    const roles = new Map(this.domain.table("roles").entries());
+    const teams = new Map(this.domain.table("teams").entries());
+    for (const incoming of input.roles) {
+      const id = request.copyAssets ? uid() : incoming.id;
+      roleIds.set(incoming.id, id);
+      if (roles.has(id)) continue;
+      const role = { ...incoming, id, model: replacement(incoming.model) };
+      roles.set(id, role);
+      additions.roles.push(role);
+    }
+    for (const incoming of input.teams) {
+      const id = request.copyAssets ? uid() : incoming.id;
+      teamIds.set(incoming.id, id);
+      if (teams.has(id)) continue;
+      const team = {
+        ...incoming,
+        id,
+        lead: { ...incoming.lead, model: replacement(incoming.lead.model) },
+        slots: incoming.slots.map((slot) => ({
+          ...slot,
+          roleId: roleIds.get(slot.roleId) ?? slot.roleId,
+          ...slot.model ? { model: replacement(slot.model) } : {}
+        }))
+      };
+      teams.set(id, team);
+      additions.teams.push(team);
+    }
+    const models = additions.roles.map((role) => role.model);
+    const teamIdsToValidate = /* @__PURE__ */ new Set([...referenced, ...input.teams.map((team) => team.id)]);
+    for (const teamId of teamIdsToValidate) {
+      const team = teams.get(teamIds.get(teamId) ?? teamId);
+      if (!team) throw new Error(`\u627E\u4E0D\u5230\u56E2\u961F\u7F16\u5236 / Team blueprint not found: ${teamId}`);
+      models.push(team.lead.model);
+      for (const slot of team.slots) {
+        const role = roles.get(slot.roleId);
+        if (!role) throw new Error(`\u627E\u4E0D\u5230\u89D2\u8272 / Role not found: ${slot.roleId}`);
+        models.push(role.model);
+        if (slot.model) models.push(slot.model);
+      }
+    }
+    return { additions, teamIds, missing: await this.missingModels(models) };
+  }
+  async addImported(assets) {
+    for (const role of assets.roles) await this.domain.table("roles").put(role.id, role);
+    for (const team of assets.teams) await this.domain.table("teams").put(team.id, team);
+  }
+  async saveRole(request) {
+    const input = saveRoleSchema.parse(request);
+    const table = this.domain.table("roles");
+    const current = table.get(input.id);
+    const revision = nextRevision(input.revision, current?.revision);
+    if (current?.archived) throw new Error("\u6B64\u89D2\u8272\u5DF2\u5F52\u6863\u3002 / This role is archived.");
+    await this.validateModels([input.model]);
+    const saved = { ...input, revision };
+    await table.put(saved.id, saved);
+    return saved;
+  }
+  async saveTeam(request) {
+    const input = saveTeamSchema.parse(request);
+    const table = this.domain.table("teams");
+    const current = table.get(input.id);
+    const revision = nextRevision(input.revision, current?.revision);
+    if (current?.archived) throw new Error("\u6B64\u7F16\u5236\u5DF2\u5F52\u6863\u3002 / This team is archived.");
+    const models = input.slots.map((slot) => {
+      const role = this.domain.table("roles").get(slot.roleId);
+      if (!role || role.archived && !current?.slots.some(
+        (previous) => previous.slotId === slot.slotId && previous.roleId === role.id
+      )) throw new Error(`\u89D2\u8272\u4E0D\u53EF\u7528 / Role unavailable: ${slot.roleId}`);
+      return slot.model ?? role.model;
+    });
+    await this.validateModels([input.lead.model, ...models]);
+    const saved = { ...input, revision };
+    await table.put(saved.id, saved);
+    return saved;
+  }
+  async archiveRole(request) {
+    const { id, revision } = archiveTeamAssetSchema.parse(request);
+    const table = this.domain.table("roles");
+    const current = table.get(id);
+    if (!current) throw new Error("\u627E\u4E0D\u5230\u89D2\u8272\u3002 / Role not found.");
+    const saved = { ...current, revision: nextRevision(revision, current.revision), archived: true };
+    await table.put(id, saved);
+    return saved;
+  }
+  async archiveTeam(request) {
+    const { id, revision } = archiveTeamAssetSchema.parse(request);
+    const table = this.domain.table("teams");
+    const current = table.get(id);
+    if (!current) throw new Error("\u627E\u4E0D\u5230\u56E2\u961F\u3002 / Team not found.");
+    const saved = { ...current, revision: nextRevision(revision, current.revision), archived: true };
+    await table.put(id, saved);
+    return saved;
+  }
+};
+
+// packages/flowspace/src/host/teamDelegate.ts
+import { z as z2 } from "zod";
+var teamDelegateName = "team_delegate";
+var inputSchema = z2.object({ slot: z2.string().min(1), task: z2.string().trim().min(1) });
+function teamAgentOptions(model) {
+  return { ...model, reasoningEffort: model.reasoningEffort };
+}
+function rosterSlots(roster) {
+  return roster.team.slots.map((slot) => {
+    const role = roster.roles.find((role2) => role2.id === slot.roleId);
+    return { ...slot, role, model: slot.model ?? role.model, maxInstances: slot.maxInstances ?? 1 };
+  });
+}
+function planDelegation(record, args, names) {
+  const { slot: slotId, task } = inputSchema.parse(args);
+  const slot = rosterSlots(record.roster).find((slot2) => slot2.slotId === slotId);
+  if (!slot) throw new Error(`Unknown team slot "${slotId}". Use a slot ID from <team-brief>.`);
+  const count = record.delegations.filter(
+    (child) => child.slotId === slotId && child.roleId === slot.roleId && child.roleRevision === slot.role.revision && child.model.provider === slot.model.provider && child.model.model === slot.model.model && child.model.reasoningEffort === slot.model.reasoningEffort
+  ).length;
+  if (count >= slot.maxInstances) {
+    throw new Error(`Slot "${slotId}" reached its ${slot.maxInstances}-member limit. Use send_message to reuse a member.`);
+  }
+  let name = slotId;
+  for (let index = 2; names.has(name); index++) {
+    const suffix = `-${index}`;
+    name = slotId.slice(0, 32 - suffix.length) + suffix;
+  }
+  const persona = [slot.role.description, slot.role.persona].filter(Boolean).join("\n");
+  return { slot, name, prompt: `<role-persona>
+${persona}
+</role-persona>
+
+${task}` };
+}
+function registerTeamDelegate(ctx, isLead, delegate) {
+  return ctx.tools.register({
+    name: teamDelegateName,
+    description: "Start a FlowSpace team member in a slot from <team-brief>. FlowSpace assigns the role and model. Returns the member name immediately. Use send_message to reuse a member. The native runtime delivers results to the lead.",
+    parameters: {
+      type: "object",
+      properties: { slot: { type: "string" }, task: { type: "string" } },
+      required: ["slot", "task"],
+      additionalProperties: false
+    },
+    output: {
+      schema: {
+        type: "object",
+        properties: { name: { type: "string" }, label: { type: "string" }, model: { type: "string" } },
+        required: ["name", "label", "model"],
+        additionalProperties: false
+      },
+      render: (_args, value) => [{
+        type: "text",
+        text: JSON.stringify({ name: value.name })
+      }],
+      presentationMeta: (_args, value) => value
+    },
+    presentResult: (_args, result) => {
+      const meta = result.meta;
+      return result.isError || !meta ? void 0 : {
+        card: "generic",
+        title: `\u6D3E\u7ED9 ${meta.label} \xB7 ${meta.model}`
+      };
+    },
+    async execute(args, exec) {
+      if (!exec.agent) throw new Error("team_delegate requires a calling team lead.");
+      return delegate(exec.agent, args, exec.signal);
+    }
+  }, { when: ({ agent }) => isLead(agent.id) });
+}
+
+// packages/flowspace/src/host/teamRuntime.ts
+var delegationTools = ["subagent", "subagent_fork", "workflow"];
+var TeamRuntime = class {
+  constructor(ctx, domain, assets, publish) {
+    this.ctx = ctx;
+    this.domain = domain;
+    this.assets = assets;
+    this.publish = publish;
+    this.records = new Map(domain.table("team_sessions").entries());
+    const unregister = registerTeamDelegate(ctx, (id) => this.isLead(id), (agent, args, signal) => this.delegate(agent, args, signal));
+    ctx.effect(() => () => {
+      unregister();
+      for (const release of this.restrictions.values()) release();
+    });
+    ctx.on("agent/created", ({ agent }) => {
+      const record = this.records.get(agent.id);
+      if (record) this.applyLead(agent, record);
+      return void 0;
+    });
+    ctx.on("agent/disposed", ({ agent }) => {
+      this.restrictions.delete(agent);
+      this.userTurns.delete(agent.id);
+    });
+    ctx.sessionProjections.onChanged((session, key, value) => {
+      if (key === "agentTeam" && this.isLead(session.id)) {
+        this.boards.set(session.id, value);
+        this.queueRefresh(session.id);
+      }
+      if (key === "subagentCatalog") this.refreshFor(session.id);
+    });
+    ctx.on("subagent/start", ({ id, parentSessionId, runId }) => {
+      const root = this.rootFor(parentSessionId);
+      if (!root) return;
+      this.leafRoots.set(id, root);
+      this.activations.set(id, runId);
+      this.queueRefresh(root);
+    });
+    ctx.on("subagent/end", ({ id, parentSessionId, runId }) => {
+      if (this.activations.get(id) === runId) this.activations.delete(id);
+      this.refreshFor(this.leafRoots.get(id) ?? parentSessionId);
+    });
+    ctx.on("agent/status", ({ agent }) => {
+      if (this.leafRoots.has(agent.id)) this.refreshFor(agent.id);
+    });
+  }
+  records = /* @__PURE__ */ new Map();
+  views = /* @__PURE__ */ new Map();
+  boards = /* @__PURE__ */ new Map();
+  models = /* @__PURE__ */ new Map();
+  restrictions = /* @__PURE__ */ new Map();
+  leafRoots = /* @__PURE__ */ new Map();
+  activations = /* @__PURE__ */ new Map();
+  refreshes = /* @__PURE__ */ new Map();
+  waits = /* @__PURE__ */ new Map();
+  delegateTails = /* @__PURE__ */ new Map();
+  userTurns = /* @__PURE__ */ new Map();
+  epochs = /* @__PURE__ */ new Set();
+  pendingSaves = /* @__PURE__ */ new Map();
+  warn(error) {
+    this.ctx.logger.warn("FlowSpace team: %s", error);
+  }
+  isLead(sessionId) {
+    return this.records.has(sessionId);
+  }
+  ownsNode(sessionId, nodeId) {
+    return this.records.get(sessionId)?.nodeId === nodeId;
+  }
+  reference(sessionId) {
+    const team = this.records.get(sessionId)?.roster.team;
+    return team && { teamId: team.id, revision: team.revision };
+  }
+  isFollowup(sessionId, turn) {
+    return this.isLead(sessionId) && this.userTurns.get(sessionId) !== turn;
+  }
+  async validateRoster(teamId) {
+    const roster = this.assets.roster(teamId);
+    await this.assets.validateModels([roster.team.lead.model, ...rosterSlots(roster).map((slot) => slot.model)]);
+    return roster;
+  }
+  async bind(node2, sessionId, roster) {
+    const service = this.ctx.get("agentTeams");
+    if (!service) throw new Error("DSH Agent Teams service is unavailable");
+    const result = await this.ctx.sessionController.resolveAgent(sessionId);
+    if ("error" in result) throw result.error;
+    const record = { leadSessionId: sessionId, nodeId: node2.id, roster, delegations: [] };
+    result.agent.model.select(teamAgentOptions(roster.team.lead.model));
+    await service.setEnabled(result.agent, true);
+    await this.save(record);
+    this.applyLead(result.agent, record);
+    this.boards.set(sessionId, { enabled: true, tasks: [] });
+    await this.refresh(sessionId);
+  }
+  applyLead(agent, record) {
+    agent.model.select(teamAgentOptions(record.roster.team.lead.model));
+    if (this.restrictions.has(agent)) return;
+    const releases = delegationTools.flatMap((name) => {
+      if (!this.ctx.tools.get(name, agent)) return [];
+      try {
+        return [agent.ctx.tools.restrict({ deny: [name] })];
+      } catch (error) {
+        this.warn(error);
+        return [];
+      }
+    });
+    this.restrictions.set(agent, () => releases.forEach((release) => release()));
+  }
+  async save(record) {
+    await this.domain.table("team_sessions").put(record.leadSessionId, record);
+    this.records.set(record.leadSessionId, record);
+  }
+  /** Inbox claim precedes DSH's model selection capture for the step. */
+  claim(agent, turn, user) {
+    const record = this.records.get(agent.id);
+    if (!record) return;
+    if (user && this.userTurns.get(agent.id) !== turn) {
+      this.userTurns.set(agent.id, turn);
+      if (!this.epochs.has(agent.id)) {
+        const roster = this.assets.roster(record.roster.team.id);
+        if (roster.team.revision !== record.roster.team.revision || roster.roles.some((role, i) => role.revision !== record.roster.roles[i]?.revision)) {
+          const next = { ...record, roster };
+          this.records.set(agent.id, next);
+          const saved = this.save(next);
+          this.pendingSaves.set(agent.id, saved);
+          void saved.then(() => this.queueRefresh(agent.id), (error) => this.warn(error));
+        }
+        this.epochs.add(agent.id);
+        void this.waitForIdle(agent.id).finally(() => this.epochs.delete(agent.id)).catch((error) => this.warn(error));
+      }
+    }
+    agent.model.select(teamAgentOptions(this.records.get(agent.id).roster.team.lead.model));
+  }
+  async brief(sessionId) {
+    const record = this.records.get(sessionId);
+    if (!record) return;
+    const saving = this.pendingSaves.get(sessionId);
+    if (saving) {
+      await saving;
+      if (this.pendingSaves.get(sessionId) === saving) this.pendingSaves.delete(sessionId);
+    }
+    const { team } = record.roster;
+    const slots = rosterSlots(record.roster).map(({ slotId, role, label, model, maxInstances }) => `- ${slotId} (${label}, ${model.provider}/${model.model}, up to ${maxInstances}): ${role.description}`).join("\n");
+    return `<team-brief>
+${team.title} \xB7 rev ${team.revision}
+${team.lead.persona}
+${team.norms}
+${slots}
+Coordinate work and report the team's results. Assign new work through team_delegate(slot, task). Use send_message to continue with an existing member. Native notices deliver the results.
+</team-brief>`;
+  }
+  delegate(parent, args, signal) {
+    const previous = this.delegateTails.get(parent.id) ?? Promise.resolve();
+    const next = previous.catch(() => {
+    }).then(async () => {
+      const record = this.records.get(parent.id);
+      if (!record) throw new Error("Only a FlowSpace team lead can delegate to a slot.");
+      const rows = await this.ctx.subagents.listDescendants(parent.id, signal);
+      const names = new Set(rows.flatMap((entry) => entry.depth === 1 && entry.path ? [entry.path] : []));
+      const { slot, name, prompt } = planDelegation(record, args, names);
+      try {
+        const activation = await this.ctx.subagents.startActivation({
+          provider: "spawn",
+          parent,
+          name,
+          label: slot.label,
+          delivery: "parent",
+          prompt: [{ type: "text", text: prompt }],
+          agentOptions: teamAgentOptions(slot.model),
+          maxDepth: this.ctx.subagents.resolveMaxDepth(),
+          signal
+        });
+        void activation.result.catch((error) => this.warn(error));
+        try {
+          const latest = this.records.get(parent.id);
+          await this.save({ ...latest, delegations: [...latest.delegations, {
+            sessionId: activation.childId,
+            slotId: slot.slotId,
+            roleId: slot.role.id,
+            model: slot.model,
+            roleRevision: slot.role.revision
+          }] });
+        } catch (error) {
+          await activation.dispose();
+          throw error;
+        }
+        this.queueRefresh(parent.id);
+        return { name: activation.name, label: slot.label, model: slot.model.model };
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ACTIVATION_LIMIT_REACHED")
+          throw new Error("Team capacity is full. Wait for a member to finish or use send_message to reuse one.", { cause: error });
+        throw error;
+      }
+    });
+    this.delegateTails.set(parent.id, next);
+    void next.finally(() => {
+      if (this.delegateTails.get(parent.id) === next) this.delegateTails.delete(parent.id);
+    }).catch(() => {
+    });
+    return next;
+  }
+  waitForIdle(sessionId) {
+    const current = this.waits.get(sessionId);
+    if (current) return current;
+    const lead = this.ctx.agents.get(sessionId);
+    if (!lead) return Promise.resolve();
+    const wait = (async () => {
+      do {
+        await lead.whenIdle();
+      } while (await this.ctx.subagents.waitForTreeWork(lead) || lead.status !== "idle");
+    })();
+    this.waits.set(sessionId, wait);
+    void wait.finally(() => this.waits.delete(sessionId)).catch(() => {
+    });
+    return wait;
+  }
+  async interruptMembers(sessionId) {
+    const rows = await this.ctx.subagents.listDescendants(sessionId);
+    for (const row of rows) {
+      if (row.kind === "child" && (row.activity === "running" || this.activations.has(row.id)))
+        this.ctx.subagents.interruptByUser(row.id);
+    }
+  }
+  rootFor(sessionId) {
+    return this.records.has(sessionId) ? sessionId : this.leafRoots.get(sessionId);
+  }
+  refreshFor(sessionId) {
+    const root = this.rootFor(sessionId);
+    if (root) this.queueRefresh(root);
+  }
+  queueRefresh(sessionId) {
+    void this.refresh(sessionId).catch((error) => this.warn(error));
+  }
+  refresh(sessionId) {
+    const previous = this.refreshes.get(sessionId) ?? Promise.resolve();
+    const next = previous.catch(() => {
+    }).then(async () => {
+      const record = this.records.get(sessionId);
+      if (!record) return;
+      const rows = await this.ctx.subagents.listDescendants(sessionId);
+      const delegations = new Map(record.delegations.map((child) => [child.sessionId, child]));
+      const members2 = await Promise.all(rows.flatMap((row) => row.kind !== "child" ? [] : [(async () => {
+        this.leafRoots.set(row.id, sessionId);
+        const delegated = delegations.get(row.id);
+        const agent = this.ctx.agents.get(row.id);
+        const model = delegated?.model ?? agent?.model.current() ?? await this.memberModel(row.id, row.mode);
+        return {
+          sessionId: row.id,
+          parentId: row.parentId,
+          depth: row.depth,
+          mode: row.mode,
+          name: row.path ?? row.id,
+          label: row.label ?? row.path ?? row.id,
+          activity: agent?.status === "running" || row.mode === "external" && this.activations.has(row.id) ? "running" : "idle",
+          slotId: delegated?.slotId ?? null,
+          provider: model?.provider,
+          model: model?.model
+        };
+      })()]));
+      const { team } = record.roster;
+      const board = this.boards.get(sessionId);
+      const native = this.ctx.subagents;
+      this.views.set(sessionId, {
+        leadSessionId: sessionId,
+        nodeId: record.nodeId,
+        teamId: team.id,
+        title: team.title,
+        revision: team.revision,
+        enabled: board?.enabled ?? false,
+        tasks: board?.tasks ?? [],
+        leadModel: team.lead.model,
+        slots: rosterSlots(record.roster).map(({ slotId, label, role, model, maxInstances }) => ({
+          slotId,
+          label,
+          roleTitle: role.title,
+          model,
+          maxInstances
+        })),
+        members: members2,
+        capacity: {
+          active: rows.filter((row) => row.kind === "child" && (row.activity === "running" || this.activations.has(row.id))).length,
+          max: native.config.maxActiveSubagents.get()
+        }
+      });
+      this.publish();
+    });
+    this.refreshes.set(sessionId, next);
+    void next.finally(() => {
+      if (this.refreshes.get(sessionId) === next) this.refreshes.delete(sessionId);
+    }).catch(() => {
+    });
+    return next;
+  }
+  async memberModel(id, mode) {
+    var _stack = [];
+    try {
+      if (mode === "external") return;
+      const cached = this.models.get(id);
+      if (cached) return cached;
+      const log = __using(_stack, await this.ctx.sessionQuery.observeSession(id));
+      const selection = log.projections?.values.modelSelection;
+      const model = selection?.pending ?? selection?.lastUsed;
+      if (model) this.models.set(id, model);
+      return model;
+    } catch (_) {
+      var _error = _, _hasError = true;
+    } finally {
+      __callDispose(_stack, _error, _hasError);
+    }
+  }
+  async hydrate() {
+    await Promise.all([...this.records].map(async ([id, record]) => {
+      try {
+        var _stack = [];
+        try {
+          const agent = this.ctx.agents.get(id);
+          if (agent) this.applyLead(agent, record);
+          const log = __using(_stack, await this.ctx.sessionQuery.observeSession(id));
+          const board = log.projections?.values.agentTeam;
+          if (board) this.boards.set(id, board);
+          await this.refresh(id);
+        } catch (_) {
+          var _error = _, _hasError = true;
+        } finally {
+          __callDispose(_stack, _error, _hasError);
+        }
+      } catch (error) {
+        this.warn(error);
+      }
+    }));
+  }
+  snapshot() {
+    return Object.fromEntries(this.views);
+  }
+};
+
 // packages/flowspace/src/index.ts
 var shortHash2 = (value) => createHash3("sha1").update(value).digest("hex").slice(0, 12);
-var _follow_dec, _stopNode_dec, _canvasPresence_dec, _readWorkspaceFile_dec, _workspaceFiles_dec, _readTerminalScreen_dec, _openSessionTerminal_dec, _sessionTerminals_dec, _sessionChangeDiff_dec, _sessionChanges_dec, _gitAction_dec, _gitDiff_dec, _gitInspect_dec, _projectStructures_dec, _workspaces_dec, _sessions_dec, _display_dec, _bind_dec, _inspectEdgePayload_dec, _restoreSnapshot_dec, _release_dec, _command_dec, _extendLoop_dec, _rerunFailed_dec, _start_dec, _plan_dec, _draft_dec, _save_dec, _snapshot_dec, _a, _init, _b;
+var _follow_dec, _stopNode_dec, _canvasPresence_dec, _readWorkspaceFile_dec, _workspaceFiles_dec, _readTerminalScreen_dec, _openSessionTerminal_dec, _sessionTerminals_dec, _sessionChangeDiff_dec, _sessionChanges_dec, _gitAction_dec, _gitDiff_dec, _gitInspect_dec, _projectStructures_dec, _workspaces_dec, _sessions_dec, _display_dec, _bind_dec, _inspectEdgePayload_dec, _restoreSnapshot_dec, _release_dec, _command_dec, _extendLoop_dec, _rerunFailed_dec, _start_dec, _plan_dec, _draft_dec, _importWorkflow_dec, _save_dec, _listModelRoutes_dec, _archiveTeam_dec, _saveTeam_dec, _listTeams_dec, _archiveRole_dec, _saveRole_dec, _listRoles_dec, _snapshot_dec, _a, _init, _b;
 var FlowspaceService = class extends (_b = TypertRemoteService) {
   constructor(ctx) {
     super(ctx, "flowspace");
@@ -2546,14 +3239,19 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
       injectedSteps: /* @__PURE__ */ new Set()
     });
     __publicField(this, "domain");
+    __publicField(this, "teamAssets");
+    __publicField(this, "teams");
+    __publicField(this, "teamBriefTurns", /* @__PURE__ */ new Map());
     __publicField(this, "scheduler");
     __publicField(this, "runtime");
     __publicField(this, "git", new HostGitService());
     __publicField(this, "inputContexts", /* @__PURE__ */ new Map());
     __publicField(this, "deferredPersistTimer");
   }
-  async [(_a = Service.init, _snapshot_dec = [Remote], _save_dec = [Remote], _draft_dec = [Remote], _plan_dec = [Remote], _start_dec = [Remote], _rerunFailed_dec = [Remote], _extendLoop_dec = [Remote], _command_dec = [Remote], _release_dec = [Remote], _restoreSnapshot_dec = [Remote], _inspectEdgePayload_dec = [Remote], _bind_dec = [Remote], _display_dec = [Remote], _sessions_dec = [Remote], _workspaces_dec = [Remote], _projectStructures_dec = [Remote], _gitInspect_dec = [Remote], _gitDiff_dec = [Remote], _gitAction_dec = [Remote], _sessionChanges_dec = [Remote], _sessionChangeDiff_dec = [Remote], _sessionTerminals_dec = [Remote], _openSessionTerminal_dec = [Remote], _readTerminalScreen_dec = [Remote], _workspaceFiles_dec = [Remote], _readWorkspaceFile_dec = [Remote], _canvasPresence_dec = [Remote], _stopNode_dec = [Remote], _follow_dec = [Remote({ mode: "stream" })], _a)]() {
+  async [(_a = Service.init, _snapshot_dec = [Remote], _listRoles_dec = [Remote], _saveRole_dec = [Remote], _archiveRole_dec = [Remote], _listTeams_dec = [Remote], _saveTeam_dec = [Remote], _archiveTeam_dec = [Remote], _listModelRoutes_dec = [Remote], _save_dec = [Remote], _importWorkflow_dec = [Remote], _draft_dec = [Remote], _plan_dec = [Remote], _start_dec = [Remote], _rerunFailed_dec = [Remote], _extendLoop_dec = [Remote], _command_dec = [Remote], _release_dec = [Remote], _restoreSnapshot_dec = [Remote], _inspectEdgePayload_dec = [Remote], _bind_dec = [Remote], _display_dec = [Remote], _sessions_dec = [Remote], _workspaces_dec = [Remote], _projectStructures_dec = [Remote], _gitInspect_dec = [Remote], _gitDiff_dec = [Remote], _gitAction_dec = [Remote], _sessionChanges_dec = [Remote], _sessionChangeDiff_dec = [Remote], _sessionTerminals_dec = [Remote], _openSessionTerminal_dec = [Remote], _readTerminalScreen_dec = [Remote], _workspaceFiles_dec = [Remote], _readWorkspaceFile_dec = [Remote], _canvasPresence_dec = [Remote], _stopNode_dec = [Remote], _follow_dec = [Remote({ mode: "stream" })], _a)]() {
     this.domain = await this.ctx.storageDomain.open(flowspaceDomain);
+    this.teamAssets = new TeamAssets(this.domain, this.ctx.llm);
+    this.teams = new TeamRuntime(this.ctx, this.domain, this.teamAssets, () => this.publish());
     const storedDoc = sanitizeDocumentForWire(
       structuredClone(
         this.domain.table("documents").get("main") ?? emptyDocument()
@@ -2585,7 +3283,8 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
     this.state.runs = [...this.domain.table("runs").entries()].map(([, r]) => structuredClone(r)).sort((a, b) => a.createdAt - b.createdAt);
     this.runtime = new DshRuntime(
       this.ctx,
-      (id) => this.state.doc.nodes.find((n) => n.id === id)
+      (id) => this.state.doc.nodes.find((n) => n.id === id),
+      this.teams
     );
     this.scheduler = new Scheduler(
       this.runtime,
@@ -2633,6 +3332,7 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
     await this.hydrateBoundSessions().catch(
       (e) => this.ctx.logger.warn("FlowSpace session hydration: %s", e)
     );
+    await this.teams.hydrate();
     const report = (promise) => {
       void promise.catch((e) => this.ctx.logger.error("FlowSpace: %s", e));
     };
@@ -2711,16 +3411,29 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
             } : message;
           })
         );
+        const sessionId = payload.agent.id;
+        if (this.teams.isLead(sessionId) && messages.length && this.teamBriefTurns.get(sessionId) !== payload.turn) {
+          const brief = await this.teams.brief(sessionId);
+          if (brief) {
+            this.teamBriefTurns.set(sessionId, payload.turn);
+            messages[0] = {
+              ...messages[0],
+              content: [...messages[0].content, { type: "text", text: brief }]
+            };
+          }
+        }
         return { ...decision, messages };
       },
       { prepend: true }
     );
-    this.ctx.on("agent/inbox/claimed", ({ message, turn }) => {
+    this.ctx.on("agent/inbox/claimed", ({ agent, message, turn }) => {
+      this.teams.claim(agent, turn, message.source.kind === "user");
       if (message.source.kind === "user")
         report(
           this.scheduler.claim(
             "rpcId" in message.source ? message.source.rpcId : message.id,
-            turn
+            turn,
+            this.teams.reference(agent.id)
           )
         );
     });
@@ -3127,7 +3840,8 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
           event.data.reason.kind,
           event.seq,
           this.state.turnOutput.get(sessionId) ?? "",
-          event.data.reason.kind === "error" ? event.data.reason.error.message : void 0
+          event.data.reason.kind === "error" ? event.data.reason.error.message : void 0,
+          this.teams.isFollowup(sessionId, event.data.turn)
         )
       );
   }
@@ -3235,50 +3949,121 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
         (a, b) => a.time - b.time || a.seq - b.seq
       ),
       subagents: [...this.state.subagents.values()],
-      sourceVersions
+      sourceVersions,
+      roles: this.teamAssets.listRoles(),
+      teamBlueprints: this.teamAssets.listTeams(),
+      teams: this.teams.snapshot()
     };
   }
-  async save(document) {
+  listRoles() {
+    return this.teamAssets.listRoles();
+  }
+  async saveRole(request) {
     return this.scheduler.transact(async () => {
-      const sanitized = sanitizeDocumentForWire(document);
-      const next = documentSchema.parse(sanitized);
-      const previousNodes = new Map(this.state.doc.nodes.map((node2) => [node2.id, node2]));
-      const previousEdges = new Map(this.state.doc.edges.map((edge2) => [edge2.id, edge2]));
-      for (const node2 of next.nodes) {
-        const old = previousNodes.get(node2.id);
-        if (old?.sessionId) {
-          node2.sessionId = old.sessionId;
-          node2.cwd = old.cwd;
-          node2.workspaceId = old.workspaceId;
-          node2.branch = old.branch;
-          node2.worktreePath = old.worktreePath;
-        }
-        if (old) node2.lastSubmittedTask = old.lastSubmittedTask;
-        syncUntitledAgentNode(node2);
-        if (node2.worktreePath) {
-          this.state.knownWorktrees.add(resolve3(node2.worktreePath));
-        }
-        if (node2.kind === "agent" && node2.sessionId && old && old.planMode !== node2.planMode) {
-          void this.runtime.ensure(node2).catch(() => {
-          });
-        }
+      const role = await this.teamAssets.saveRole(request);
+      this.publish();
+      return role;
+    });
+  }
+  async archiveRole(request) {
+    return this.scheduler.transact(async () => {
+      const role = await this.teamAssets.archiveRole(request);
+      this.publish();
+      return role;
+    });
+  }
+  listTeams() {
+    return this.teamAssets.listTeams();
+  }
+  async saveTeam(request) {
+    return this.scheduler.transact(async () => {
+      const team = await this.teamAssets.saveTeam(request);
+      this.publish();
+      return team;
+    });
+  }
+  async archiveTeam(request) {
+    return this.scheduler.transact(async () => {
+      const team = await this.teamAssets.archiveTeam(request);
+      this.publish();
+      return team;
+    });
+  }
+  async listModelRoutes() {
+    return this.teamAssets.listModelRoutes();
+  }
+  async save(document) {
+    return this.scheduler.transact(
+      () => this.saveDocument(documentSchema.parse(sanitizeDocumentForWire(document)))
+    );
+  }
+  async saveDocument(next, portable = false) {
+    const previousNodes = new Map(this.state.doc.nodes.map((node2) => [node2.id, node2]));
+    const previousEdges = new Map(this.state.doc.edges.map((edge2) => [edge2.id, edge2]));
+    for (const node2 of next.nodes) {
+      const prior = previousNodes.get(node2.id);
+      const old = portable && prior?.teamRef?.teamId !== node2.teamRef?.teamId ? void 0 : prior;
+      if (old?.sessionId) {
+        node2.sessionId = old.sessionId;
+        node2.teamRef = old.teamRef;
+        node2.cwd = old.cwd;
+        node2.workspaceId = old.workspaceId;
+        node2.branch = old.branch;
+        node2.worktreePath = old.worktreePath;
       }
-      for (const edge2 of next.edges) {
-        const old = previousEdges.get(edge2.id);
-        if (old?.originMode === "fork") {
-          edge2.originMode = "fork";
-          edge2.mode = old.mode;
-        }
-        if (old && edge2.sentVersion === void 0 && old.sentVersion) {
-          edge2.sentVersion = old.sentVersion;
-        } else if (edge2.sentVersion === "") {
-          delete edge2.sentVersion;
-        }
+      if (node2.sessionId) {
+        const boundTeam = this.teams.reference(node2.sessionId);
+        if (boundTeam?.teamId !== node2.teamRef?.teamId || boundTeam && !this.teams.ownsNode(node2.sessionId, node2.id))
+          throw new Error("\u56E2\u961F\u4E3B\u7BA1\u4F1A\u8BDD\u5FC5\u987B\u7531\u5BF9\u5E94\u7684\u753B\u5E03\u56E2\u961F\u8282\u70B9\u521B\u5EFA");
+      }
+      if (old) node2.lastSubmittedTask = old.lastSubmittedTask;
+      syncUntitledAgentNode(node2);
+      if (node2.worktreePath) this.state.knownWorktrees.add(resolve3(node2.worktreePath));
+      if (node2.kind === "agent" && node2.sessionId && old && old.planMode !== node2.planMode) {
+        void this.runtime.ensure(node2).catch(() => {
+        });
+      }
+    }
+    for (const edge2 of next.edges) {
+      const old = previousEdges.get(edge2.id);
+      if (old?.originMode === "fork") {
+        edge2.originMode = "fork";
+        edge2.mode = old.mode;
+      }
+      if (old && edge2.sentVersion === void 0 && old.sentVersion) {
+        edge2.sentVersion = old.sentVersion;
+      } else if (edge2.sentVersion === "") {
+        delete edge2.sentVersion;
+      }
+    }
+    checkDocument(next);
+    this.state.doc = sanitizeDocumentForWire(next);
+    await this.persist();
+    return structuredClone(this.state.doc);
+  }
+  async importWorkflow(request) {
+    return this.scheduler.transact(async () => {
+      if (!!request.document === !!request.template) throw new Error("Choose one canvas or workflow template to import.");
+      const template = request.template && workflowTemplateSchema.parse(request.template);
+      const next = request.document ? documentSchema.parse(sanitizeDocumentForWire(request.document)) : structuredClone(this.state.doc);
+      if (template) {
+        if (next.templates?.some((existing) => existing.id === template.id)) template.id = uid();
+        delete template.builtin;
+        next.templates = [...next.templates ?? [], template];
+      }
+      const nodes = template?.nodes ?? workflowNodes(next);
+      const refs = new Set(nodes.flatMap((node2) => node2.teamRef ? [node2.teamRef.teamId] : []));
+      const plan = await this.teamAssets.prepareImport(request, refs);
+      if (plan.missing.length) return { kind: "missing-models", models: plan.missing };
+      for (const node2 of nodes) {
+        if (!node2.teamRef) continue;
+        node2.teamRef.teamId = plan.teamIds.get(node2.teamRef.teamId) ?? node2.teamRef.teamId;
+        delete node2.sessionId;
+        delete node2.lastSubmittedTask;
       }
       checkDocument(next);
-      this.state.doc = sanitizeDocumentForWire(next);
-      await this.persist();
-      return structuredClone(this.state.doc);
+      await this.teamAssets.addImported(plan.additions);
+      return { kind: "imported", document: await this.saveDocument(next, !!request.document) };
     });
   }
   async draft(request) {
@@ -3326,7 +4111,7 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
       const liveNodes = this.state.doc.nodes;
       const restoredNodes = structuredClone(snap.nodes).map((n) => {
         const cur = liveNodes.find((x) => x.id === n.id);
-        return cur?.sessionId ? {
+        return cur?.sessionId && cur.teamRef?.teamId === n.teamRef?.teamId ? {
           ...n,
           sessionId: cur.sessionId,
           cwd: cur.cwd,
@@ -3492,6 +4277,8 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
       if (request.sessionId) {
         var _stack = [];
         try {
+          if (node2.teamRef || this.teams.isLead(request.sessionId))
+            throw new Error("\u56E2\u961F\u4E3B\u7BA1\u4F1A\u8BDD\u5FC5\u987B\u7531\u5BF9\u5E94\u7684\u753B\u5E03\u56E2\u961F\u8282\u70B9\u521B\u5EFA");
           const observation = __using(_stack, await this.ctx.sessionQuery.observeSession(
             request.sessionId
           ));
@@ -3867,12 +4654,12 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
   canvasPresence(sessionIds) {
     this.state.canvasSessions = new Set(sessionIds);
   }
-  stopNode(nodeId) {
+  async stopNode(nodeId) {
     const node2 = this.node(nodeId);
-    if (node2.sessionId)
-      this.ctx.sessionController.cancel({
-        sessionId: node2.sessionId
-      });
+    if (!node2.sessionId) return;
+    if (node2.teamRef) await this.scheduler.stopSettlingTeam(node2.sessionId);
+    this.ctx.sessionController.cancel({ sessionId: node2.sessionId });
+    if (node2.teamRef) await this.teams.interruptMembers(node2.sessionId);
   }
   async *follow(signal) {
     let wake, changed = true;
@@ -3906,7 +4693,15 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
 };
 _init = __decoratorStart(_b);
 __decorateElement(_init, 1, "snapshot", _snapshot_dec, FlowspaceService);
+__decorateElement(_init, 1, "listRoles", _listRoles_dec, FlowspaceService);
+__decorateElement(_init, 1, "saveRole", _saveRole_dec, FlowspaceService);
+__decorateElement(_init, 1, "archiveRole", _archiveRole_dec, FlowspaceService);
+__decorateElement(_init, 1, "listTeams", _listTeams_dec, FlowspaceService);
+__decorateElement(_init, 1, "saveTeam", _saveTeam_dec, FlowspaceService);
+__decorateElement(_init, 1, "archiveTeam", _archiveTeam_dec, FlowspaceService);
+__decorateElement(_init, 1, "listModelRoutes", _listModelRoutes_dec, FlowspaceService);
 __decorateElement(_init, 1, "save", _save_dec, FlowspaceService);
+__decorateElement(_init, 1, "importWorkflow", _importWorkflow_dec, FlowspaceService);
 __decorateElement(_init, 1, "draft", _draft_dec, FlowspaceService);
 __decorateElement(_init, 1, "plan", _plan_dec, FlowspaceService);
 __decorateElement(_init, 1, "start", _start_dec, FlowspaceService);
@@ -3942,7 +4737,11 @@ __publicField(FlowspaceService, "inject", [
   "sessionQuery",
   "storageDomain",
   "workspaceRegistry",
-  "fs"
+  "fs",
+  "llm",
+  "tools",
+  "subagents",
+  "sessionProjections"
 ]);
 var index_default = FlowspaceService;
 export {

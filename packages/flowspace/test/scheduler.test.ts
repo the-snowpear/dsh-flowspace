@@ -99,6 +99,47 @@ test("serial runs enqueue only roots, then each successor once", async () => {
   assert.equal(f.scheduler.runs[0].state, "completed");
 });
 
+test("team settlement holds successors and uses the final native lead turn", async () => {
+  const f = fixture(2);
+  f.doc.nodes[0].teamRef = { teamId: "team" };
+  f.edge(0, 1);
+  const idle = Promise.withResolvers<void>();
+  f.runtime.waitForTeam = () => idle.promise;
+  f.runtime.teamReference = () => ({ teamId: "team", revision: 3 });
+  await f.scheduler.start({ kind: "single", nodeIds: [f.doc.nodes[0].id] });
+  await f.finish(0, "completed", "Working");
+  const step = f.scheduler.runs[0].steps[0];
+  assert.equal(step.state, "settling");
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.scheduler.busy().has(step.nodeId), true);
+  await f.scheduler.finish(step.sessionId!, 2, "completed", 20, "Final report", undefined, true);
+  await f.scheduler.finish(step.sessionId!, 2, "completed", 20, "Duplicate", undefined, true);
+  idle.resolve();
+  await Promise.resolve();
+  await f.scheduler.transact(async () => {});
+  assert.equal(step.state, "completed");
+  assert.deepEqual(step.teamRef, { teamId: "team", revision: 3 });
+  assert.equal(f.sent[1].sources[0].text, "Final report");
+  assert.equal(f.sent[1].sources[0].seq, 20);
+});
+
+test("cancelling a settling team aborts its step without releasing a successor", async () => {
+  const f = fixture(2);
+  f.doc.nodes[0].teamRef = { teamId: "team" };
+  f.edge(0, 1);
+  const idle = Promise.withResolvers<void>();
+  f.runtime.waitForTeam = () => idle.promise;
+  const run = await f.scheduler.start({ kind: "single", nodeIds: [f.doc.nodes[0].id] });
+  await f.finish(0);
+  await f.scheduler.command(run.id, "cancel");
+  idle.resolve();
+  await Promise.resolve();
+  await f.scheduler.transact(async () => {});
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.cancelled.length, 1);
+  assert.equal(f.scheduler.runs[0].steps[0].state, "aborted");
+});
+
 test("join waits for all active upstreams and explicit confirmation", async () => {
   const f = fixture();
   f.edge(0, 2);

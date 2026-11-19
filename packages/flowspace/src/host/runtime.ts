@@ -28,6 +28,7 @@ import {
   uid,
 } from "../core/document.ts";
 import { sameFsPath } from "./git.ts";
+import type { TeamRuntime } from "./teamRuntime.ts";
 
 interface OptionalWorkingDirectoryService {
   set(agent: unknown, path: string, signal?: AbortSignal): Promise<string>;
@@ -130,7 +131,16 @@ export class DshRuntime implements RuntimeAdapter {
   constructor(
     private ctx: Context,
     private findNode: (id: string) => FlowNode | undefined,
+    private teams: TeamRuntime,
   ) {}
+
+  teamReference(sessionId: string) {
+    return this.teams.reference(sessionId);
+  }
+
+  waitForTeam(sessionId: string): Promise<void> {
+    return this.teams.waitForIdle(sessionId);
+  }
 
   running(): string[] {
     return this.ctx.agents
@@ -225,7 +235,8 @@ export class DshRuntime implements RuntimeAdapter {
       return node.sessionId;
     }
 
-    const result = fork?.sourceSessionId
+    const roster = node.teamRef && await this.teams.validateRoster(node.teamRef.teamId);
+    const result = fork?.sourceSessionId && !roster
       ? await this.ctx.sessionController.fork({
           sessionId: fork.sourceSessionId as SessionId,
           atSeq: fork.seq,
@@ -236,7 +247,7 @@ export class DshRuntime implements RuntimeAdapter {
             : node.cwd || node.worktreePath
               ? { cwd: node.worktreePath ?? node.cwd }
               : {}),
-          ...(node.agentPreset ? { agentPreset: node.agentPreset } : {}),
+          ...(!roster && node.agentPreset ? { agentPreset: node.agentPreset } : {}),
         });
 
     await this.ctx.sessionController.rename({
@@ -248,6 +259,7 @@ export class DshRuntime implements RuntimeAdapter {
       isFork: Boolean(fork),
       workspacePath: ws?.path,
     });
+    if (roster) await this.teams.bind(node, result.sessionId, roster);
 
     return result.sessionId;
   }
@@ -389,10 +401,19 @@ export class DshRuntime implements RuntimeAdapter {
         /* Session may have been removed externally */
       }
     }
+    if (this.teams.isLead(step.sessionId) && (step.state === "running" || step.state === "settling")) {
+      agent.cancel({ kind: "user" }, { keepInbox: true });
+      await this.teams.interruptMembers(step.sessionId);
+      return;
+    }
   }
 
   async reconcile(step: RunStep): Promise<Partial<RunStep>> {
     if (!step.sessionId) return { state: "interrupted", endedAt: Date.now() };
+    if (step.teamRef || this.teams.isLead(step.sessionId)) {
+      await this.cancel({ ...step, state: "queued" });
+      return { state: "interrupted", endedAt: Date.now() };
+    }
     try {
       using observation = await this.ctx.sessionQuery.observeSession(
         step.sessionId as SessionId,

@@ -86,7 +86,13 @@ export function indexNodes(nodes: FlowNode[]) {
   const nodesById = byId(nodes);
   const collapsed = new Map<string, FlowNode | undefined>();
   const children = new Map<string, FlowNode[]>();
-  for (const node of nodes) if (node.parentId) append(children, node.parentId, node);
+  const referenceSources = new Set<string>();
+  for (const node of nodes) {
+    if (node.parentId) append(children, node.parentId, node);
+    if ((node.kind === "display" || node.kind === "detail") && node.sourceNodeId) {
+      referenceSources.add(node.sourceNodeId);
+    }
+  }
   const members = new Map<string, FlowNode[]>();
   function membersOf(id: string): FlowNode[] {
     const cached = members.get(id);
@@ -103,7 +109,7 @@ export function indexNodes(nodes: FlowNode[]) {
     return result;
   }
   for (const node of nodes) ancestor(node);
-  return { nodesById, collapsed, membersOf };
+  return { nodesById, collapsed, membersOf, referenceSources };
 }
 
 function indexSnapshot(snapshot: FlowspaceSnapshot | null) {
