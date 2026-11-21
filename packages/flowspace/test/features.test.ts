@@ -267,7 +267,7 @@ test("D38 & M05 & M06: draft auto-title, 3-tier affiliation priority, and 4-tier
     subAgentsExpanded: true,
   };
 
-  // Collapsed branches/worktrees -> 1 project card + 1 subagent card, bridged link
+  // Collapsed branches/worktrees -> 1 project card, bridged link
   const collapsed = buildDerivedStructure({
     projects,
     hiddenWorkspaces: [],
@@ -276,23 +276,11 @@ test("D38 & M05 & M06: draft auto-title, 3-tier affiliation priority, and 4-tier
     visibleNodes: [agent],
     lod: false,
     keepExpandedIds: new Set(),
-    subagents: [
-      {
-        sessionId: "sub-1",
-        parentSessionId: "sess-1",
-        title: "Explorer",
-        running: true,
-      },
-    ],
     runningNodeIds: new Set(),
     waitingNodeIds: new Set(),
   });
   assert.equal(
     collapsed.cards.filter((c) => c.kind === "project").length,
-    1,
-  );
-  assert.equal(
-    collapsed.cards.filter((c) => c.kind === "subagent").length,
     1,
   );
 
@@ -305,7 +293,6 @@ test("D38 & M05 & M06: draft auto-title, 3-tier affiliation priority, and 4-tier
     visibleNodes: [agent],
     lod: false,
     keepExpandedIds: new Set(),
-    subagents: [],
     runningNodeIds: new Set(),
     waitingNodeIds: new Set(),
   });

@@ -7,17 +7,19 @@ import {
   boardSummaryText,
   emptyDocument,
   newEdge,
+  newFlowNode,
   newNode,
   uid,
 } from "../packages/flowspace/src/core/document.ts";
-import { expandedGroupBox } from "../packages/flowspace/src/client/geometry.ts";
+import { expandedGroupBox, nodeBox } from "../packages/flowspace/src/client/geometry.ts";
 import { tFor } from "../packages/flowspace/src/client/i18n.ts";
 import {
   buildSnapshot,
   builtinTemplates,
+  contentFlowTemplateId,
   instantiateTemplate,
 } from "../packages/flowspace/src/client/templates.ts";
-import type { FlowNode, FlowspaceDocument } from "../packages/flowspace/src/types.ts";
+import type { FlowEdge, FlowNode, FlowspaceDocument } from "../packages/flowspace/src/types.ts";
 import type { FlowspaceService } from "../packages/flowspace/src/index.ts";
 
 const exec = promisify(execFile);
@@ -31,6 +33,17 @@ const catalogText = (label: string) =>
 export const collaborationLeadId = "museum-collaboration-lead";
 export const collaborationChildId = "museum-collaboration-child";
 const collaborationGroupId = "museum-collaboration";
+const controlFlowGroupId = "museum-control-flow";
+const extensionGalleryId = "museum-extended-workflows";
+
+function nextGalleryY(doc: FlowspaceDocument, width: number): number {
+  const boxes = doc.nodes
+    .filter(node => !node.parentId)
+    .map(node => node.kind === "group" ? expandedGroupBox(doc, node) : nodeBox(node));
+  return 132 + Math.max(0, ...boxes
+    .filter(box => box.x < width && box.x + box.w > 0)
+    .map(box => box.y + box.h));
+}
 
 export function addCollaborationGallery(
   doc: FlowspaceDocument,
@@ -39,13 +52,7 @@ export function addCollaborationGallery(
   if (doc.nodes.some((node) => node.id === collaborationGroupId)) return;
 
   const width = 1016;
-  const y = 132 + Math.max(0, ...doc.nodes
-    .filter((node) => node.x < width && node.x + node.width > 0)
-    .map((node) => {
-      if (node.kind !== "group") return node.y + node.height;
-      const box = expandedGroupBox(doc, node);
-      return box.y + box.h;
-    }));
+  const y = nextGalleryY(doc, width);
   const group: FlowNode = {
     ...newNode("group", 0, y, "协作展区 · 消息线与子代理"),
     id: collaborationGroupId,
@@ -74,6 +81,91 @@ export function addCollaborationGallery(
   const child = agent(collaborationChildId, 706, "展签核对子代理");
   const firstTemplate = doc.nodes.findIndex((node) => node.templateId && !node.parentId);
   doc.nodes.splice(firstTemplate < 0 ? doc.nodes.length : firstTemplate, 0, group, note, lead, child);
+}
+
+function addControlFlowGallery(
+  doc: FlowspaceDocument,
+  placement: { cwd: string; workspaceId: string },
+): void {
+  const width = 1464;
+  const y = nextGalleryY(doc, width);
+  const group: FlowNode = {
+    ...newNode("group", 0, y, "控制流展区 · 展签审核"),
+    id: controlFlowGroupId,
+    color: "violet",
+    width,
+    height: 770,
+  };
+
+  const guide = {
+    ...newNode("note", 24, y + 62, "参观指南 · 展签审核"),
+    width: 304,
+    text: "点分组右上角「启动」。展签依次经过关键词、格式和 AI 审核，然后等你决定发布或退回。\n\n点击接续线可查看命中的出口与输入快照。",
+  };
+  const agent = (x: number, row: number, title: string, task: string, downstream = false): FlowNode => ({
+    ...newNode("agent", x, y + row, title),
+    ...placement,
+    task,
+    draft: task,
+    ...(downstream ? { continuationPrompt: task } : { rerun: "always" }),
+    expanded: false,
+  });
+  const judge = (type: string, x: number, row: number, title: string, config: FlowNode["config"]): FlowNode => ({
+    ...newFlowNode(type, x, y + row),
+    title,
+    titleKey: undefined,
+    config,
+  });
+  const author = agent(384, 62, "拟写机械星图展签",
+    "为机械星图拟写一张展签。写出展品名称与转动圆盘时可观察到的变化，最后用一个问题邀请访客动手。限 140 字。");
+  const condition = judge("flowspace/condition", 744, 62, "关键词检查", {
+    branches: [{ id: "pass", label: "关键词齐全", match: "all", rules: [
+      { field: "text", op: "contains", value: "机械星图" },
+      { field: "text", op: "contains", value: "圆盘" },
+    ] }],
+  });
+  const code = judge("flowspace/code", 1104, 62, "展签格式检查", {
+    source: "(input) => {\n  const label = input.text.trim();\n  return label.length <= 140 && /[？?]$/u.test(label);\n}",
+    timeoutMs: 1000,
+    branches: [{ id: "pass", label: "格式合格" }],
+  });
+  const ai = judge("flowspace/ai-judge", 384, 378, "AI 展签初审", {
+    provider: "flowspace-test",
+    model: "deterministic",
+    instruction: "检查展签是否让第一次见到机械星图的访客知道如何操作，并给出理由。",
+    branches: [
+      { id: "pass", label: "建议发布", description: "操作说明清楚，适合展出。" },
+      { id: "review", label: "需要复核", description: "操作说明有歧义，请馆长复核。" },
+    ],
+    lowConfidence: { threshold: 0.8, branch: "review" },
+  });
+  const human = judge("flowspace/human-choice", 744, 378, "馆长决定", {
+    question: "这张机械星图展签可以发布到展厅吗？",
+    options: [{ id: "publish", label: "发布展签" }, { id: "revise", label: "退回修改" }],
+    timeoutAction: "wait",
+  });
+  const publish = agent(1104, 378, "记录发布", "为这张已通过的展签写一句发布记录。", true);
+  const revise = agent(1104, 526, "记录退回", "为这张被退回的展签写一句修改建议。", true);
+  const connect = (source: FlowNode, target: FlowNode, ports: Partial<FlowEdge> = {}) => ({
+    ...newEdge(source.id, target.id, "continuation"),
+    ...ports,
+  });
+  const nodes = [guide, author, condition, code, ai, human, publish, revise]
+    .map(node => ({ ...node, parentId: group.id }));
+  const firstTemplate = doc.nodes.findIndex(node => node.templateId && !node.parentId);
+  doc.nodes.splice(firstTemplate < 0 ? doc.nodes.length : firstTemplate, 0, group, ...nodes);
+  doc.edges.push(
+    connect(author, condition, { targetPort: "in" }),
+    connect(condition, code, { sourcePort: "pass", targetPort: "in" }),
+    connect(code, ai, {
+      sourcePort: "pass", targetPort: "in", logic: { delayMs: 1200 },
+      waypoints: [{ x: 1440, y: y + 318 }, { x: 360, y: y + 318 }],
+    }),
+    connect(ai, human, { sourcePort: "pass", targetPort: "in" }),
+    connect(ai, human, { sourcePort: "review", targetPort: "in" }),
+    connect(human, publish, { sourcePort: "publish" }),
+    connect(human, revise, { sourcePort: "revise" }),
+  );
 }
 
 export async function prepareMuseumCollection(workspace: string): Promise<string> {
@@ -205,6 +297,9 @@ export function createMuseumDocument(cwd: string, workspaceId: string) {
     }),
   );
 
+  addControlFlowGallery(doc, placement);
+  addExtensionGallery(doc, placement);
+
   // Keep each built-in as a real, independently runnable template instance.
   const templates = builtinTemplates("zh");
   const galleryStart = 1510;
@@ -225,6 +320,44 @@ export function createMuseumDocument(cwd: string, workspaceId: string) {
   return doc;
 }
 
+export function addExtensionGallery(doc: FlowspaceDocument, placement: { cwd: string; workspaceId: string }): void {
+  if (doc.nodes.some(node => node.id === extensionGalleryId)) return;
+  const y = nextGalleryY(doc, 1732);
+  const group = { ...newNode("group", 0, y, "展签工作台"), id: extensionGalleryId, width: 1732, height: 948, color: "teal" as const };
+  const add = (node: FlowNode, id: string, title: string) => {
+    Object.assign(node, placement, { id: `${extensionGalleryId}-${id}`, parentId: group.id, title, titleKey: undefined });
+    doc.nodes.push(node);
+    return node;
+  };
+  doc.nodes.push(group);
+  const start = add(newFlowNode("flowspace/trigger", 24, y + 72), "launch", "登记展签");
+  start.config = { ...start.config, fields: [{ name: "exhibit", label: "展品名称", type: "text", required: true }] };
+  const review = add(newFlowNode("flowspace/human-review", 384, y + 72), "review", "审阅展签");
+  review.config = { ...review.config, question: "补充一个让访客参与的问题。" };
+  const notice = add(newFlowNode("flowspace/notice", 744, y + 72), "notice", "审阅通知");
+  notice.config = { ...notice.config, message: "展签正在等待人工审阅。" };
+  const agent = add(newNode("agent", 1104, y + 72), "author", "整理展签");
+  agent.task = "提取展签正文，写成一张适合儿童阅读的展签。";
+  agent.continuationPrompt = agent.task;
+  agent.breakpoint = true;
+  const counter = add(newFlowNode("flowspace/variable", 24, y + 538), "var", "已登记展签");
+  counter.config = { name: "labels", type: "number", scope: "canvas", initial: "0" };
+  const increment = add(newFlowNode("flowspace/assign", 384, y + 538), "assign", "登记次数加一");
+  increment.config = { name: "labels", operation: "increment", value: "1", inputValue: false };
+  const terminal = add(newFlowNode("flowspace/exec-terminal", 744, y + 538), "terminal", "查看馆藏 Git 状态");
+  terminal.config = { ...terminal.config, program: "git", cwd: placement.cwd, parameters: [
+    { name: "command", source: "fixed", value: "status" },
+    { name: "porcelain", source: "fixed", value: "--short" },
+  ] };
+  const board = add(newNode("board", 1104, y + 538), "board", "展签登记看板");
+  board.columns = [{ id: "labels", name: "待发布", role: "todo", cards: [] }];
+  const links = [[start, review], [review, agent], [agent, increment], [increment, terminal], [agent, board]];
+  doc.edges.push(...links.map(([source, target]) => newEdge(source.id, target.id, "continuation")));
+  doc.edges.push({ ...newEdge(review.id, notice.id, "event"), event: { mode: "change", kinds: ["waiting"] } });
+  doc.edges.push({ ...newEdge(counter.id, agent.id, "reference"), always: true });
+  doc.edges.push({ ...newEdge(board.id, agent.id, "reference"), permission: "advance", ask: true });
+}
+
 export async function initializeMuseum({ ctx, home, workspace }: {
   ctx: {
     flowspace: Pick<FlowspaceService, "snapshot" | "save">;
@@ -236,12 +369,18 @@ export async function initializeMuseum({ ctx, home, workspace }: {
   workspace: string;
 }): Promise<boolean> {
   const marker = join(home, "museum-initialized");
-  if (statSync(marker, { throwIfNoEntry: false })) return false;
+  const controlFlowMarker = join(home, "museum-control-flow-initialized");
+  const contentFlowMarker = join(home, "museum-content-flow-initialized");
+  const extensionMarker = join(home, "museum-extensions-initialized");
+  if (statSync(extensionMarker, { throwIfNoEntry: false })) return false;
+  const hasControlFlow = statSync(controlFlowMarker, { throwIfNoEntry: false });
+  const initialized = statSync(marker, { throwIfNoEntry: false });
 
   // Host recovery already writes the empty default canvas on first boot.
   // Also preserve a document saved just before an interrupted initialization.
   const { document, runs } = ctx.flowspace.snapshot();
   const fresh =
+    !initialized &&
     document.title === emptyDocument().title &&
     !document.nodes.length &&
     !document.templates?.length &&
@@ -251,7 +390,33 @@ export async function initializeMuseum({ ctx, home, workspace }: {
     const cwd = await prepareMuseumCollection(workspace);
     const project = await ctx.workspaceRegistry.create(cwd, "馆藏工作区");
     await ctx.flowspace.save(createMuseumDocument(cwd, project.id));
+  } else if (initialized && document.nodes.length) {
+    const cwd = join(workspace, "collection");
+    const project = await ctx.workspaceRegistry.create(cwd, "馆藏工作区");
+    const placement = { cwd, workspaceId: project.id };
+    const templates = builtinTemplates("zh");
+    const before = document.nodes.length;
+    if (!hasControlFlow && !document.nodes.some(node => node.id === controlFlowGroupId)) {
+      addControlFlowGallery(document, placement);
+      const tdd = templates.find(template => template.id === "builtin-tdd-loop")!;
+      const exhibits = document.nodes.filter(node => node.kind === "group" && node.templateId === tdd.id);
+      if (exhibits.length && !exhibits.some(node => (node.templateRevision ?? 1) >= tdd.revision))
+        instantiateTemplate(document, tdd, 0, nextGalleryY(document, tdd.w), `${tFor("zh", tdd.title)} · 条件分流版`, placement);
+    }
+    if (!document.nodes.some(node => node.templateId === contentFlowTemplateId)) {
+      const content = templates.find(template => template.id === contentFlowTemplateId)!;
+      instantiateTemplate(document, content, 0, nextGalleryY(document, content.w), tFor("zh", content.title), placement);
+    }
+    addExtensionGallery(document, placement);
+    for (const template of templates.filter(template => template.id.startsWith("builtin-play-"))) {
+      if (document.nodes.some(node => node.templateId === template.id)) continue;
+      instantiateTemplate(document, template, 0, nextGalleryY(document, template.w), tFor("zh", template.title), placement);
+    }
+    if (document.nodes.length !== before) await ctx.flowspace.save(document);
   }
-  await writeFile(marker, "");
+  if (!initialized) await writeFile(marker, "");
+  if (!hasControlFlow) await writeFile(controlFlowMarker, "");
+  await writeFile(contentFlowMarker, "");
+  await writeFile(extensionMarker, "");
   return fresh;
 }

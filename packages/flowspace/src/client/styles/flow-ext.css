@@ -1,0 +1,609 @@
+.fs-root {
+  --k-logic: #e879f9;
+  --k-data: #a3e635;
+  --k-trigger: #fb7185;
+  --k-human: var(--k-note);
+  --evt-error: var(--red);
+  --evt-wait: var(--amber);
+  --evt-done: var(--green);
+}
+.fs-root[data-theme="light"] {
+  --k-logic: #a21caf;
+  --k-data: #4d7c0f;
+  --k-trigger: #be123c;
+}
+
+
+/* ---------- Flow card shell ----------
+   Every full flow card: header 48 → summary band 48 → outlet rows (32 each) → work area.
+   geometry.portY places each outlet socket on the centre of its row; keep these heights in sync. */
+/* Preserve the descriptor family color on the avatar; the card border reports runtime state. */
+.fs-root .node.node-flow[data-flow-family="logic"] { --kc: var(--k-logic); }
+.fs-root .node.node-flow[data-flow-family="data"] { --kc: var(--k-data); }
+.fs-root .node.node-flow[data-flow-family="trigger"] { --kc: var(--k-trigger); }
+.fs-root .node.node-flow[data-flow-family="human"] { --kc: var(--k-human); }
+.fs-root .node.node-flow[data-flow-operation="terminal"] { --kc: var(--k-terminal); }
+.fs-root .node.node-flow[data-flow-operation="git"] { --kc: var(--k-git); }
+.fs-root .node.node-flow .node-avatar {
+  color: var(--kc);
+  background: color-mix(in oklab, var(--kc) 12%, var(--surface));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--kc) 28%, var(--border));
+}
+.fs-root .node-flow.full .node-body:not([hidden]) { padding: 0; }
+.fs-root .fs-branch-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0 12px 12px;
+}
+.fs-root .fs-branch-description {
+  flex: 0 0 48px;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 16px;
+}
+.fs-root .fs-branch-description > span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.fs-root .fs-branch-description > .fs-branch-question {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 18px;
+}
+.fs-root .fs-branch-list.node-scroll {
+  flex: 0 1 auto;
+  min-height: 32px;
+  margin: 0 -8px;
+  padding: 0;
+  border: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.fs-root .fs-branch-row {
+  position: relative;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: var(--r-4);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.fs-root .fs-branch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-root .fs-branch-count {
+  margin-left: auto;
+  color: var(--text-faint);
+  font: 400 11px var(--font-mono);
+}
+.fs-root .fs-branch-row.is-hit { color: var(--text); background: var(--accent-softer); }
+.fs-root .fs-branch-row.is-hit .fs-branch-count { color: var(--accent); }
+/* The latest route gets a short bar next to its outlet socket. */
+.fs-root .fs-branch-row.is-latest::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  right: 0;
+  bottom: 9px;
+  width: 2px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+}
+.fs-root .fs-branch-row.is-error .fs-branch-label::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: var(--r-full);
+  background: var(--red);
+}
+.fs-root .fs-branch-row.is-error.is-hit { background: var(--red-soft); }
+.fs-root .fs-branch-row.is-error.is-hit .fs-branch-count { color: var(--red); }
+.fs-root .fs-branch-row.is-error.is-latest::after { background: var(--red); }
+/* Human choice: each answerable outlet is a 28px button on the same 32px pitch. */
+.fs-root button.fs-branch-row {
+  width: 100%;
+  height: 28px;
+  margin: 2px 0;
+  border: 0;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.fs-root button.fs-branch-row:hover:not(:disabled) {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+.fs-root button.fs-branch-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.fs-root button.fs-branch-row:disabled { cursor: progress; opacity: .6; }
+.fs-root .fs-branch-pick { display: inline-flex; margin-left: auto; color: var(--text-faint); }
+.fs-root button.fs-branch-row:hover .fs-branch-pick { color: var(--accent); }
+.fs-root .fs-branch-pick .ic { width: 13px; height: 13px; }
+.fs-root .fs-flow-extra.node-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.fs-root .fs-flow-extra-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.fs-root .fs-flow-note { color: var(--text-faint); font-size: 11px; line-height: 16px; }
+.fs-root .fs-branch-body pre.file-preview,
+.fs-root .fs-branch-body .fs-terminal-pre {
+  margin: 0;
+  padding: 8px;
+  max-height: calc(6lh + 16px + 2px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-4);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font: 400 12px/16px var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Human nodes ---------- */
+.fs-root .fs-human-approval.approval-box {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--r-6);
+}
+.fs-root .fs-human-q { margin: 0; color: var(--text); font-size: 13px; line-height: 18px; }
+.fs-root .fs-human-fields { display: flex; flex-direction: column; gap: 8px; }
+.fs-root .fs-human-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin: 0; }
+.fs-root .fs-human-field.is-inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+}
+.fs-root .fs-human-label { color: var(--text-2); font-size: 12px; line-height: 16px; }
+.fs-root .fs-human-label > i { margin-left: 4px; color: var(--text-faint); font-style: normal; }
+.fs-root .fs-human-field :is(.text-field, .select-field) {
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: var(--r-4);
+  font-size: 12.5px;
+}
+.fs-root .fs-human-field .fs-human-review { min-height: 88px; line-height: 18px; resize: vertical; }
+.fs-root .fs-human-stars { display: inline-flex; gap: 2px; }
+.fs-root .fs-human-stars > button {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-4);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.fs-root .fs-human-stars > button:hover { background: var(--hover); color: var(--text-2); }
+.fs-root .fs-human-stars > button.is-on { color: var(--k-human); }
+.fs-root .fs-human-like { min-height: 24px; padding: 0 8px; gap: 4px; font-size: 12px; }
+.fs-root .fs-human-like[aria-pressed="true"] { color: var(--k-human); background: color-mix(in oklab, var(--k-human) 12%, transparent); }
+.fs-root .button-row.fs-human-actions {
+  flex-direction: row-reverse;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin: 0;
+}
+.fs-root .fs-human-actions :is(.button, .button-quiet) { min-height: 28px; gap: 4px; }
+.fs-root .fs-human-error { color: var(--red); font-size: 12px; line-height: 16px; overflow-wrap: anywhere; }
+.fs-root .fs-human-peek > summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  color: var(--text-3);
+  font-size: 12px;
+  list-style: none;
+  cursor: pointer;
+}
+.fs-root .fs-human-peek > summary::-webkit-details-marker { display: none; }
+.fs-root .fs-human-peek > summary:hover,
+.fs-root .fs-human-peek[open] > summary { color: var(--text-2); }
+.fs-root .fs-human-peek > summary .ic { width: 13px; height: 13px; }
+.fs-root .fs-human-peek > summary small { color: var(--text-faint); font: 400 11px var(--font-mono); }
+.fs-root .fs-human-peek-body { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.fs-root .fs-human-idle { display: flex; flex-direction: column; gap: 8px; color: var(--text-faint); font-size: 12px; line-height: 16px; }
+.fs-root .fs-human-hint { color: var(--text-3); }
+.fs-root .fs-human-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.fs-root .fs-human-chip,
+.fs-root .fs-exec-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--text-2);
+  font: 400 11px var(--font-ui);
+  white-space: nowrap;
+}
+.fs-root .fs-human-countdown { font: 400 11px var(--font-mono); }
+
+/* ---------- Operation nodes ---------- */
+.fs-root .fs-branch-description > :is(.fs-exec-lead, .fs-var-lead, .fs-trig-meta) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+.fs-root .fs-exec-chip.is-ok { color: var(--green); background: var(--green-soft); box-shadow: none; font-family: var(--font-mono); }
+.fs-root .fs-exec-chip.is-failed { color: var(--red); background: var(--red-soft); box-shadow: none; font-family: var(--font-mono); }
+.fs-root .fs-exec-cmd { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.fs-root .fs-exec-cwd {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-faint);
+  font: 400 11px var(--font-mono);
+}
+.fs-root .fs-exec-cwd > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-root .fs-exec-cwd .ic { width: 12px; height: 12px; flex: none; }
+.fs-root .fs-branch-body pre.fs-exec-value { color: var(--text); }
+.fs-root .fs-exec-prompt { color: var(--text-faint); user-select: none; }
+.fs-root .fs-branch-body .fs-terminal-pre.fs-exec-output { max-height: calc(8lh + 16px + 2px); }
+.fs-root input.fs-exec-value { font: 400 12px var(--font-mono); }
+
+/* ---------- Variable, trigger, compact ---------- */
+.fs-root .fs-var-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font: 500 13px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-root .fs-var-mono { font: 400 12px var(--font-mono); }
+.fs-root .fs-var-version { color: var(--text-faint); font: 400 11px var(--font-mono); }
+.fs-root .fs-var-lead .fs-var-version { margin-left: auto; }
+.fs-root .fs-branch-body pre.fs-var-value { color: var(--text); font-size: 13px; line-height: 18px; }
+.fs-root .fs-var-changes { display: flex; flex-direction: column; color: var(--text-2); font-size: 12px; }
+.fs-root .fs-var-changes .fs-git-section-head { margin: 4px 0; }
+.fs-root .fs-var-changes .fs-var-change:last-child { border-bottom: 0; }
+.fs-root .fs-branch-body .button-row { margin: 0; align-items: center; flex-wrap: wrap; }
+.fs-root .fs-trig-meta { color: var(--text-3); font-size: 12px; }
+.fs-root .fs-trig-meta > span + span::before { content: "·"; margin-right: 8px; color: var(--text-faint); }
+.fs-root .fs-trig-missed { color: var(--amber); }
+.fs-root .fs-trig-launch { display: flex; flex-direction: column; gap: 8px; }
+.fs-root .fs-trig-launch > .button { justify-content: center; gap: 4px; min-height: 32px; }
+.fs-root .fs-branch-body .button-primary .ic { width: 13px; height: 13px; }
+.fs-root .fs-trig-enable { position: absolute; top: 12px; right: 48px; }
+.fs-root .fs-trig-gate:not(.active)::after { content: ""; position: absolute; width: 6px; height: 6px;
+  border-radius: var(--r-full); background: var(--amber); inset: 4px 4px auto auto; }
+.fs-root .compact-tool.fs-flow-compact > .compact-overview-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-root .compact-tool.fs-flow-compact > span:last-child:not(:first-child) { flex: none; color: var(--text-faint); }
+.fs-root .fs-flow-compact-action { flex: none; min-height: 24px; padding: 0 8px; font-size: 12px; }
+.fs-root .fs-bp-box .button-row { align-items: center; flex-wrap: wrap; }
+.fs-root .fs-bp-box .button-row > .text-button { margin-left: auto; }
+
+/* Keep the skip result legible on short routes and at semantic zoom. */
+.fs-root .edge-path.edge-state-skipped {
+  stroke: var(--wire-flow);
+  stroke-dasharray: 3 5;
+  opacity: .35;
+  animation: none;
+}
+.fs-root .edge-state-skipped:is(.edge-glow, .edge-flow) { display: none; }
+.fs-root .edge-tag.edge-state-skipped {
+  color: var(--text-faint);
+  border-color: var(--border-strong);
+  opacity: 1;
+}
+.fs-root .fs-tags-layer.fs-wire-labels[data-fs-semantic] .edge-tag.edge-state-skipped {
+  display: inline-flex;
+}
+.fs-root .edge-tag.edge-state-skipped > button > .fs-branch-skipped-label { display: inline; }
+.fs-root .edge-tag .fs-branch-edge-type { font: 400 11px var(--font-mono); }
+.fs-root .edge-tag :is(.fs-branch-edge-convert, .fs-branch-edge-logic) { color: var(--text-faint); font-size: 11px; }
+.fs-root .node.status-skipped { opacity: .62; }
+.fs-root .status.status-skipped { color: var(--text-faint); background: var(--surface-2); }
+.fs-root .status.status-skipped > i { background: var(--text-faint); box-shadow: none; }
+
+.fs-root .fs-lane-group .group-header > .fs-lane-metrics {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-3);
+  font: 400 11px var(--font-mono);
+  white-space: nowrap;
+}
+.fs-root .fs-lane-kind { color: var(--k-logic); font-family: var(--font-ui); }
+.fs-root .workflow-group.fs-lane-group { transition-property: width, height, border-color; }
+.fs-root .fs-lane-group.composite { box-shadow: none; }
+.fs-root .fs-lane-group.composite::before,
+.fs-root .fs-lane-group.composite::after,
+.fs-root .fs-lane-stack-face {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.fs-root .fs-lane-group.composite::before,
+.fs-root .fs-lane-group.composite::after {
+  content: "";
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.fs-root .fs-lane-group.composite::before { z-index: -2; transform: translate(4px, 4px); }
+.fs-root .fs-lane-group.composite::after { z-index: -3; transform: translate(8px, 8px); }
+.fs-root .fs-lane-stack-face { z-index: -1; background: var(--surface); }
+.fs-root .fs-lane-group.composite .group-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: 1fr 1fr;
+  column-gap: 8px;
+  row-gap: 0;
+}
+.fs-root .fs-lane-group.composite .group-header > .fs-lane-metrics { grid-area: 2 / 1 / 3 / 3; justify-self: start; }
+.fs-root .fs-lane-group.composite .group-header > div { grid-area: 1 / 3 / 3 / 4; }
+.fs-root .fs-lane-group .group-header[data-fs-semantic] > .fs-lane-metrics {
+  transform: scale(min(var(--fs-type-scale, 1), 1.7));
+  transform-origin: left center;
+}
+.fs-root .fs-lane-placeholder {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  min-height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-8);
+  font-size: 12px;
+  color: var(--text-3);
+}
+.fs-root .fs-lane-badges { display: inline-flex; gap: 4px; }
+.fs-root .fs-lane-chip {
+  border-radius: var(--r-full);
+  padding: 0 4px;
+  font: 400 11px/16px var(--font-ui);
+  white-space: nowrap;
+  color: var(--text-3);
+  background: var(--surface-2);
+}
+.fs-root .fs-lane-chip.is-master { color: var(--accent); background: var(--accent-soft); }
+.fs-root .fs-lane-chip.is-overridden { color: var(--cap-updated); background: var(--cap-updated-bg); }
+.fs-root .node.compact[data-fs-semantic] .fs-lane-badges {
+  transform: scale(min(var(--fs-type-scale, 1), 1.7));
+  transform-origin: right center;
+}
+.fs-root .fs-lane-removed { opacity: .4; }
+
+.fs-root .fs-config-form,
+.fs-root .fs-config-list,
+.fs-root .fs-config-item,
+.fs-root .fs-config-field {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.fs-root .fs-config-form { gap: 12px; }
+.fs-root .fs-config-item {
+  margin: 0;
+  padding: 8px 12px 12px;
+  border: 0;
+  border-radius: var(--r-6);
+  background: var(--surface-2);
+}
+/* Nested items (rules inside a branch) sit on the parent card as outlined rows. */
+.fs-root .fs-config-item .fs-config-item { padding: 8px; background: none; box-shadow: inset 0 0 0 1px var(--border); }
+/* A floated legend renders inside the box as its header row. */
+.fs-root .fs-config-item > legend {
+  float: left;
+  width: 100%;
+  margin: 0 0 4px;
+  padding: 0;
+  color: var(--text-3);
+  font: 500 11px/24px var(--font-ui);
+}
+.fs-root .fs-config-item > legend + * { clear: both; }
+.fs-root .fs-config-item .button-row { margin: 0; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.fs-root .fs-config-item .button-row :is(.button-quiet, .text-button) { min-height: 24px; padding: 0 8px; font-size: 12px; }
+.fs-root .fs-config-field.fs-config-bool { display: flex; align-items: center; justify-content: space-between; min-height: 32px; gap: 8px; }
+.fs-root .fs-config-label { color: var(--text-2); font-size: 12.5px; }
+.fs-root .fs-config-field > .switch-row > .field-label { margin: 0; }
+.fs-root select.text-field { color-scheme: dark; cursor: pointer; }
+.fs-root[data-theme="light"] select.text-field { color-scheme: light; }
+.fs-root .fs-config-field > .switch-row { min-height: 0; padding: 0; }
+.fs-root .fs-config-form :is(.text-field, .select-field),
+.fs-root .fs-config-item .text-field { width: 100%; min-width: 0; }
+.fs-root .fs-config-item input[type="number"],
+.fs-root .setting-row input[type="number"] { font: 400 12px var(--font-mono); }
+.fs-root .template-meta .fs-content-count { font: 400 11px var(--font-mono); }
+.fs-root .fs-config-item .fs-field { min-width: 0; }
+.fs-root .fs-config-form .fs-data-mono { font: 400 12px var(--font-mono); }
+.fs-root .fs-data-calls > .node-scroll { max-height: 200px; overflow: auto; }
+.fs-root .fs-data-calls .event-row code { font: 400 12px var(--font-mono); overflow-wrap: anywhere; }
+.fs-root .fs-data-body .fs-branch-list { flex: none; }
+.fs-root .fs-data-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-height: 0;
+  margin-top: auto;
+  overflow: auto;
+}
+.fs-root .fs-data-preview pre.file-preview {
+  margin: 0;
+  padding: 8px;
+  max-height: calc(6lh + 16px + 2px);
+  overflow: auto;
+  white-space: pre;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-4);
+  font: 400 12px/16px var(--font-mono);
+}
+.fs-root .fs-data-preview small { color: var(--text-faint); font: 400 11px/16px var(--font-ui); }
+.fs-root .fs-data-preview .button-quiet { align-self: start; }
+.fs-root .fs-data-preview-error { margin: 0; color: var(--red); font-size: 12px; }
+.fs-root .fs-config-form > .button,
+.fs-root .fs-config-list > .button-quiet { justify-self: start; }
+
+/* Existing shell animations also run on the avatar, body and continuation ports. */
+/* The native row supplies its color. Its dark hover card uses the existing box-less popover token scope. */
+.fs-lane-session-marker { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: 11px; }
+.fs-lane-session-marker .user-content { max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
+.fs-lane-session-marker small, .fs-lane-session-list small { font: 400 11px var(--font-mono, monospace); }
+.fs-lane-session-list { margin: 0; padding: 0; list-style: none; max-height: 200px; overflow-y: auto; }
+.fs-lane-session-list li { display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: 12.5px; }
+.fs-root .fs-lane-session-hover { color: var(--text-2); font: 400 12px var(--font-ui); }
+.fs-root .fs-lane-session-hover > span, .fs-lane-session-list [aria-current="true"] { color: var(--text); font-weight: 500; }
+
+.fs-root .fs-exec-body { display: flex; flex-direction: column; gap: 4px; }
+.fs-root .fs-exec-body .file-preview { white-space: pre-wrap; overflow-wrap: anywhere; }
+.fs-root .fs-exec-value { font: 400 12px var(--font-mono); }
+.fs-root .fs-human-queue { padding: 8px 12px; }
+.fs-root .fs-exec-observed { fill: none; stroke: var(--text-3); stroke-width: 1px; stroke-linecap: round;
+  stroke-dasharray: .01 4; opacity: .5; pointer-events: stroke; }
+.fs-root .port.fs-evt-port { position: absolute; inset: 0 auto auto 50%; width: 10px; height: 10px; padding: 0;
+  min-width: 0; border: 1.3px solid var(--text-3); border-radius: 2px; background: var(--surface);
+  transform: translate(-50%, -50%) rotate(45deg); opacity: .4; }
+.fs-root .port.fs-evt-port:is(:hover, :focus-visible, .is-linked),
+.fs-root .node.selected .port.fs-evt-port { opacity: 1; border-color: var(--accent); }
+.fs-root [data-fs-semantic] .port.fs-evt-port:not(.is-linked) { opacity: 0; }
+.fs-root .edge-path.fs-evt-line { stroke: var(--text-3); stroke-width: 1.2px; stroke-dasharray: 2 4; }
+.fs-root .edge-path.fs-evt-error { stroke: var(--evt-error); }
+.fs-root .edge-path.fs-evt-waiting { stroke: var(--evt-wait); }
+.fs-root .edge-path.fs-evt-done { stroke: var(--evt-done); }
+.fs-root .fs-evt-pulse { fill: none; stroke: var(--accent); stroke-width: 1.2px; stroke-dasharray: 22 178;
+  opacity: 0; animation: fs-wire-travel var(--dur-slower) linear 1, fsx-var-return var(--dur-slower) linear 1; }
+.fs-root.fs-replay-mode { position: relative; display: block; }
+.fs-root .fs-replay-scene { position: absolute; inset: 32px 0 48px; }
+.fs-root .fs-replay-banner {
+  position: absolute; inset: 0 0 auto; min-height: 32px; display: flex; align-items: center; gap: 8px;
+  padding: 0 12px; background: var(--accent-soft); color: var(--text); font-size: 12px;
+}
+.fs-root .fs-replay-wires { width: 1px; height: 1px; overflow: visible; }
+.fs-root .fs-replay-dock {
+  position: absolute; inset: auto 0 0; min-height: 48px; display: flex; align-items: center; gap: 8px;
+  padding: 4px 12px; background: var(--surface); border-top: 1px solid var(--border);
+}
+.fs-root .fs-replay-track { position: relative; flex: 1; display: flex; align-items: center; height: 28px; }
+.fs-root .fs-replay-track progress { appearance: none; width: 100%; height: 4px; border: 0; }
+.fs-root .fs-replay-track progress::-webkit-progress-bar { background: var(--surface-3); border-radius: var(--r-full); }
+.fs-root .fs-replay-track progress::-webkit-progress-value { background: var(--accent); border-radius: var(--r-full); }
+.fs-root .fs-replay-track input { appearance: none; position: absolute; inset: 0; width: 100%; margin: 0; background: transparent; }
+.fs-root .fs-replay-track input::-webkit-slider-thumb { appearance: none; border: 1px solid var(--accent);
+  background: var(--surface); border-radius: var(--r-full); width: 12px; height: 12px; }
+.fs-root .fs-replay-time { font: 400 11px var(--font-mono); color: var(--text-3); }
+.fs-root .fs-replay-table { width: 100%; border-collapse: collapse; margin-block: 12px; }
+.fs-root .fs-replay-table :is(th, td) { height: 32px; text-align: left; padding: 0 8px; border-bottom: 1px solid var(--border); }
+.fs-root .fs-replay-table th { color: var(--text-3); font: 500 11px var(--font-ui); }
+.fs-root .fs-replay-table td { font: 400 12px var(--font-mono); }
+.fs-root .fs-replay-report { display: grid; gap: 12px; padding: 12px; background: var(--surface); }
+.fs-root .fs-replay-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.fs-root .fs-replay-metrics > div { min-width: 0; display: grid; gap: 4px; padding: 12px; background: var(--surface-2); border-radius: var(--r-8); }
+.fs-root .fs-replay-metrics small { color: var(--text-3); font-size: 11px; }
+.fs-root .fs-replay-metrics span { color: var(--text); font: 400 16px var(--font-mono); overflow-wrap: anywhere; }
+.fs-root .fs-bp-marker { position: absolute; top: 8px; left: 8px; width: 7px; height: 7px;
+  border-radius: var(--r-full); background: var(--red); outline: 2px solid var(--ko, var(--surface)); }
+.fs-root .fs-bp-box { margin: 4px 12px; max-height: 200px; overflow: auto; }
+.fs-root .fs-budget-meter {
+  display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--surface); color: var(--text-3); font: 400 11px var(--font-mono);
+}
+.fs-root .fs-budget-meter[data-level="near"] { color: var(--amber); }
+.fs-root .fs-budget-meter[data-level="over"] { color: var(--red); }
+.fs-root .fs-budget-meter progress { appearance: none; width: 40px; height: 3px; border: 0; }
+.fs-root .fs-budget-meter progress::-webkit-progress-bar { background: var(--surface-3); }
+.fs-root .fs-budget-meter progress::-webkit-progress-value { background: currentColor; }
+.fs-root .fs-var-change {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  border-bottom: 1px solid var(--border);
+}
+.fs-root .fs-var-change-copy { min-width: 0; flex: 1; }
+.fs-root .fs-var-change-copy > * { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-root .fs-var-change-copy small { color: var(--text-3); font-size: 11px; }
+.fs-root .fs-var-author { display: inline-flex; flex: 0 0 16px; }
+.fs-root .fs-var-author .fs-tavatar { width: 16px; height: 16px; }
+.fs-root .fs-var-return {
+  fill: none;
+  stroke: var(--cap-updated);
+  stroke-width: var(--wire-ref-w);
+  stroke-dasharray: 26 174;
+  opacity: 0;
+  pointer-events: none;
+  animation: fs-wire-travel var(--dur-slower) linear 1 reverse, fsx-var-return var(--dur-slower) linear 1;
+}
+@keyframes fsx-var-return {
+  0%, 100% { opacity: 0; }
+  12%, 88% { opacity: 1; }
+}
+
+.fs-root[data-perf-tier="L1"] .fsx-motion,
+.fs-root[data-perf-tier="L1"] .fsx-motion::before,
+.fs-root[data-perf-tier="L1"] .fsx-motion::after,
+.fs-root[data-perf-tier="L1"] .fsx-motion *,
+.fs-root[data-perf-tier="L1"] .fsx-motion *::before,
+.fs-root[data-perf-tier="L1"] .fsx-motion *::after {
+  animation: none !important;
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fs-root .fsx-motion,
+  .fs-root .fsx-motion::before,
+  .fs-root .fsx-motion::after,
+  .fs-root .fsx-motion *,
+  .fs-root .fsx-motion *::before,
+  .fs-root .fsx-motion *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

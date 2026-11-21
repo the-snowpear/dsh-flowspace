@@ -2,7 +2,7 @@ import type { Agent, AgentOptions } from "@deepseek-ai/dsh-agent";
 import type { Context } from "@deepseek-ai/cordis";
 import type {} from "@deepseek-ai/dsh-tools";
 import { z } from "zod";
-import type { TeamModel } from "../types.ts";
+import type { TeamModel, TeamSlot } from "../types.ts";
 import type { TeamSessionRecord } from "./storage.ts";
 
 export const teamDelegateName = "team_delegate";
@@ -12,19 +12,34 @@ export function teamAgentOptions(model: TeamModel) {
   return { ...model, reasoningEffort: model.reasoningEffort as AgentOptions["reasoningEffort"] };
 }
 
-export function rosterSlots(roster: TeamSessionRecord["roster"]) {
+export function rosterSlots(roster: Pick<TeamSessionRecord["roster"], "roles"> & { team: { slots: TeamSlot[] } }) {
   return roster.team.slots.map((slot) => {
     const role = roster.roles.find((role) => role.id === slot.roleId)!;
     return { ...slot, role, model: slot.model ?? role.model, maxInstances: slot.maxInstances ?? 1 };
   });
 }
 
+type Delegation = TeamSessionRecord["delegations"][number];
+
+/**
+ * The slot a member fills in the current roster: the role node it was delegated
+ * through (inline roles carry it in their id), else the library slot by name and role.
+ * Slot names freed by a removed role node can be reused, so they never decide alone.
+ */
+export function slotOf<T extends TeamSlot>(slots: readonly T[], child: Delegation): T | undefined {
+  const nodeId = child.nodeId ?? (child.roleId.startsWith("canvas-") ? child.roleId.slice("canvas-".length) : undefined);
+  return nodeId
+    ? slots.find((slot) => slot.nodeId === nodeId)
+    : slots.find((slot) => !slot.nodeId && slot.slotId === child.slotId && slot.roleId === child.roleId);
+}
+
 export function planDelegation(record: TeamSessionRecord, args: unknown, names: Set<string>) {
   const { slot: slotId, task } = inputSchema.parse(args);
-  const slot = rosterSlots(record.roster).find((slot) => slot.slotId === slotId);
+  const slots = rosterSlots(record.roster);
+  const slot = slots.find((slot) => slot.slotId === slotId);
   if (!slot) throw new Error(`Unknown team slot "${slotId}". Use a slot ID from <team-brief>.`);
   const count = record.delegations.filter((child) =>
-    child.slotId === slotId &&
+    slotOf(slots, child)?.slotId === slotId &&
     child.roleId === slot.roleId &&
     child.roleRevision === slot.role.revision &&
     child.model.provider === slot.model.provider &&

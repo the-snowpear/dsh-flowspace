@@ -782,12 +782,17 @@
 .fs-root .fs-canvas-area.has-right-window .fs-viewport {
   right: 50%;
 }
+.fs-root .fs-camera,
 .fs-root .fs-world {
   position: absolute;
   inset: 0 auto auto 0;
   transform-origin: 0 0;
   width: 1px;
   height: 1px;
+}
+.fs-root .fs-camera[data-raster],
+.fs-root .fs-camera:not([data-raster]) > .fs-world[data-moving] {
+  will-change: transform;
 }
 .fs-root .fs-scene-clip {
   position: absolute;

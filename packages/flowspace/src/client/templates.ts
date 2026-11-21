@@ -15,11 +15,14 @@ import {
   emptyDocument,
   groupDescendants,
   newEdge,
+  newFlowNode,
   newNode,
   uid,
 } from "../core/document.ts";
 import { inferGroupPorts } from "./geometry.ts";
-import { getLanguage, t, type Locale } from "./i18n.ts";
+import { createFanoutPair } from "../core/fanout.ts";
+import { authoredPairHeight, remapFanout, remapLaneNode } from "./laneIds.ts";
+import { getLanguage, t, tFor, type Locale } from "./i18n.ts";
 
 const pick = <T,>(locale: Locale, zh: T, en: T): T =>
   locale === "en" ? en : zh;
@@ -129,6 +132,124 @@ function tplDisplay(
   };
   delete node.window;
   return node;
+}
+
+export const contentFlowTemplateId = "builtin-split-fanout-merge";
+const playModes = ["arena", "jury", "debate", "wall", "inspiration"] as const;
+
+function playTemplate(locale: Locale, mode: typeof playModes[number]): WorkflowTemplate {
+  const doc = emptyDocument();
+  const label = (key: string) => tFor(locale, `flow_play_${key}`);
+  const outer = { ...newNode("group", 0, 0), color: "teal" as const, width: 1420, height: 660 };
+  doc.nodes.push(outer);
+  const add = (node: FlowNode, slot: string, parentId = outer.id) => {
+    node.templateSlotId = `slot-${mode}-${slot}`;
+    node.parentId = parentId;
+    doc.nodes.push(node);
+    return node;
+  };
+  const link = (source: FlowNode, target: FlowNode, patch: Partial<FlowEdge> = {}) =>
+    doc.edges.push({ ...newEdge(source.id, target.id, "continuation"), ...patch });
+  if (mode === "arena" || mode === "jury") {
+    const models = add(newFlowNode("flowspace/constant", 24, 64, locale), "models");
+    models.title = label("model_list");
+    models.config = { mode: "list", value: JSON.stringify([
+      { provider: "@available", model: "0" }, { provider: "@available", model: "1" },
+      ...(mode === "jury" ? [{ provider: "@available", model: "2" }] : []),
+    ]) };
+    const pair = createFanoutPair(doc, 360, 64, { locale, title: label(mode), masterTitle: label("author"),
+      task: label(mode === "arena" ? "arena_task" : "vote_task"), parentId: outer.id,
+      sourceId: models.id, sourcePort: "out", sourceKind: "continuation" });
+    for (const [index, node] of [pair.group, pair.fan, pair.master, pair.merge].entries()) node.templateSlotId = `slot-${mode}-${index}`;
+    pair.master.laneBindings = { provider: "provider", model: "model" };
+    pair.merge.config = { ...pair.merge.config, wait: mode === "arena" ? "best" : "quorum", quorum: 2,
+      output: "list", arena: mode === "arena", taskTag: mode === "arena" ? "museum-label" : "" };
+    if (mode === "arena") {
+      const score = add(newFlowNode("flowspace/human-score", pair.master.x + 344, pair.master.y, locale), "score", pair.group.id);
+      score.masterOf = pair.fan.id;
+      score.title = label("review");
+      const edge = doc.edges.find(edge => edge.source === pair.master.id && edge.target === pair.merge.id)!;
+      edge.target = score.id;
+      edge.targetPort = "in";
+      link(score, pair.merge);
+      pair.group.width += 344;
+      pair.merge.x += 344;
+      outer.width += 344;
+    }
+  } else if (mode === "debate") {
+    const first = add(tplAgent("pro", label("pro"), 24, 56, label("debate_pro")), "pro");
+    const second = add(tplAgent("con", label("con"), 394, 56, label("debate_con"), { downstream: true }), "con");
+    const judge = add(newFlowNode("flowspace/ai-judge", 768, 56, locale), "judge");
+    judge.title = label("judge");
+    judge.config = { ...judge.config, provider: "@available", model: "0" };
+    link(first, second, { maxRounds: 2 });
+    link(second, first, { maxRounds: 2, logic: { maxTimes: 1 } });
+    link(second, judge, { logic: { fromRound: 2, maxTimes: 1 } });
+  } else if (mode === "wall") {
+    const first = add(tplAgent("first", label("wall_educator"), 24, 60,
+      `${label("wall_educator_task")}\n${label("wall_task")}`), "first");
+    const second = add(tplAgent("second", label("wall_exhibit_designer"), 24, 480,
+      `${label("wall_exhibit_designer_task")}\n${label("wall_task")}`), "second");
+    const board = add(newNode("board", 404, 210, label("wall")), "board");
+    board.columns = [{ id: "ideas", name: label("wall"), cards: [] }];
+    const final = add(tplAgent("implement", label("author"), 1796, 210, label("implement"), { downstream: true }), "implement");
+    for (const [slot, source] of [["educator", first], ["designer", second]] as const) {
+      const human = add(newFlowNode("flowspace/human-score", 1040, source.y, locale), `score-${slot}`);
+      const condition = add(newFlowNode("flowspace/condition", 1420, source.y, locale), `condition-${slot}`);
+      condition.config = { branches: [{ id: "pass", label: label("best"), match: "all",
+        rules: [{ field: "json", path: "score", op: "gt", value: "3" }] }] };
+      link(source, board, { delivery: { mode: "paragraph" } });
+      link(source, human, { trigger: "confirm" });
+      link(human, condition);
+      link(condition, final, { sourcePort: "pass" });
+    }
+    outer.width = 2150;
+    outer.height = 940;
+  } else {
+    const chooser = add(newFlowNode("flowspace/random", 24, 64, locale), "random");
+    const phases = ["story", "question", "demo"];
+    chooser.config = { mode: "random", seed: "", branches: phases.map(id => ({ id, label: label("style_" + id), value: label("style_" + id) })) };
+    const creator = add(tplAgent("creator", label("author"), 430, 64, label("creative"), { downstream: true }), "creator");
+    for (const phase of phases) link(chooser, creator, { sourcePort: phase });
+    outer.width = 810;
+    outer.height = 502;
+  }
+  const template = captureTemplate(doc, outer.id, `flow_play_${mode}`, `flow_play_${mode}_desc`);
+  template.edges.forEach((edge, index) => { edge.id = `e-${mode}-${index}`; });
+  return { ...template, id: `builtin-play-${mode}`, builtin: true, ...(mode === "wall" ? { revision: 2 } : {}) };
+}
+
+function contentFlowTemplate(locale: Locale): WorkflowTemplate {
+  const label = (key: string) => tFor(locale, "flow_tpl_content_" + key);
+  const doc = emptyDocument();
+  const outer = { ...newNode("group", 0, 0), width: 1544, height: 1172, color: "teal" as const };
+  const note = tplNote("slot-content-note", label("note"), 24, 58, label("items"), true);
+  const split = newFlowNode("flowspace/split", 360, 58, locale);
+  const result = newFlowNode("flowspace/join", 1200, 488, locale);
+  split.title = label("split"); split.titleKey = "flow_tpl_content_split";
+  result.title = label("result"); result.titleKey = "flow_tpl_content_result";
+  result.config = { ...result.config, mode: "numbered" };
+  for (const node of [note, split, result]) node.parentId = outer.id;
+  doc.nodes.push(outer, note, split, result);
+  doc.edges.push({ ...newEdge(note.id, split.id, "reference"), targetPort: "in", always: true });
+  const { group, fan, master, merge } = createFanoutPair(doc, 24, 432, {
+    locale, title: label("group"), masterTitle: label("master"), task: label("task"), parentId: outer.id,
+    sourceId: split.id, sourcePort: "out", sourceKind: "continuation",
+  });
+  master.expanded = false;
+  for (const [node, slot] of [[split, "split"], [group, "lanes"], [fan, "fan"], [master, "master"],
+    [merge, "merge"], [result, "result"]] as const) node.templateSlotId = "slot-content-" + slot;
+  doc.edges.find(edge => edge.target === fan.id)!.waypoints = [{ x: 696, y: 320 }, { x: 24, y: 320 }];
+  doc.edges.push({ ...newEdge(merge.id, result.id, "continuation"), sourcePort: "out", targetPort: "in" });
+  const template = captureTemplate(doc, outer.id, "flow_tpl_content_title", "flow_tpl_content_description");
+  template.edges.forEach((edge, i) => { edge.id = `e-content-${i + 1}`; });
+  const inner = template.nodes.find(node => node.fanout)!;
+  for (const port of inner.ports ?? []) port.id = `content-lanes-${port.kind}-${port.direction}`;
+  template.ports = [
+    { id: "content-in", kind: "reference", direction: "in", portId: "in", name: label("input"), nodes: [split.templateSlotId!], hidden: false },
+    { id: "content-out", kind: "continuation", direction: "out", portId: "out", name: result.title, nodes: [result.templateSlotId!], hidden: false },
+  ];
+  return { ...template, id: contentFlowTemplateId, builtin: true };
 }
 
 export function builtinTemplates(
@@ -279,6 +400,8 @@ export function builtinTemplates(
     {
       id: "col-todo",
       name: pick(locale, "待办验收项", "Acceptance To-Do"),
+      role: "todo",
+      color: "neutral",
       cards: [
         {
           id: "card-red-green",
@@ -287,17 +410,33 @@ export function builtinTemplates(
             "先补失败单测覆盖目标边界，再做最小代码实现并通过类型检查",
             "Write failing regression test first, implement minimal fix, pass typecheck",
           ),
+          priority: "high",
+          tags: [pick(locale, "验收", "Acceptance"), "TDD"],
+          description: pick(
+            locale,
+            "记录回归测试的失败原因，并在修复后重新运行同一组检查。",
+            "Record why the regression test fails and rerun the same checks after the fix.",
+          ),
+          checklist: [
+            { id: "tdd-reproduce", text: pick(locale, "确认可复现的失败场景", "Confirm a reproducible failure"), done: true },
+            { id: "tdd-edge-case", text: pick(locale, "补齐边界条件测试", "Cover the edge case"), done: false },
+            { id: "tdd-check", text: pick(locale, "运行类型检查与测试", "Run typecheck and tests"), done: false },
+          ],
         },
       ],
     },
     {
       id: "col-doing",
       name: pick(locale, "进行中", "In Progress"),
+      role: "doing",
+      color: "blue",
       cards: [],
     },
     {
       id: "col-done",
       name: pick(locale, "已验证", "Verified"),
+      role: "done",
+      color: "green",
       cards: [],
     },
   ];
@@ -347,13 +486,21 @@ export function builtinTemplates(
         locale,
         "结合本轮改动 Diff 独立运行类型检查与测试套件：若仍有缺陷请列出精确文件行号触发回环修复；若全部通过请给出验收通过结论。",
         "Audit the turn diff and run typecheck + tests independently: cite exact file/line failures for repair, or sign off when clean.",
-      ),
+      ) + "\n\n" + tFor(locale, "flow_tdd_marker"),
       { roleLabel: "review", downstream: true, expanded: true },
     ),
+    {
+      ...newFlowNode("flowspace/condition", 744, 180, locale),
+      id: "slot-tdd-gate", templateSlotId: "slot-tdd-gate",
+      title: tFor(locale, "flow_tdd_gate"), titleKey: "flow_tdd_gate",
+      expanded: true,
+      config: { branches: [{ id: "pass", label: tFor(locale, "flow_tdd_pass"), match: "all",
+        rules: [{ field: "text", op: "regex", value: "(?:^|\\n)结论：通过(?:\\r?\\n)?$" }] }] },
+    },
     tplAgent(
       "slot-tdd-summary",
       pick(locale, "变更签收摘要", "Verified Delivery Summary"),
-      744,
+      1104,
       180,
       pick(
         locale,
@@ -382,19 +529,25 @@ export function builtinTemplates(
       maxRounds: 3,
     },
     {
-      ...newEdge("slot-tdd-verifier", "slot-tdd-author", "continuation"),
+      ...newEdge("slot-tdd-verifier", "slot-tdd-gate", "continuation"),
+      id: "etdd-verdict", targetPort: "in", trigger: "auto",
+    },
+    {
+      ...newEdge("slot-tdd-gate", "slot-tdd-author", "continuation"),
       id: "etdd-loopback",
+      sourcePort: "else",
       mode: "conclusion",
       trigger: "auto",
       maxRounds: 3,
       waypoints: [
-        { x: 696, y: 604 },
+        { x: 1080, y: 604 },
         { x: 24, y: 604 },
       ],
     },
     {
-      ...newEdge("slot-tdd-verifier", "slot-tdd-summary", "continuation"),
+      ...newEdge("slot-tdd-gate", "slot-tdd-summary", "continuation"),
       id: "etdd-exit",
+      sourcePort: "pass",
       mode: "conclusion",
       trigger: "confirm",
     },
@@ -696,10 +849,10 @@ export function builtinTemplates(
       id: "builtin-tdd-loop",
       title: "tddLoopWorkflow",
       description: "tddLoopWorkflowDescription",
-      revision: 1,
+      revision: 2,
       builtin: true,
       color: "amber",
-      w: 1060,
+      w: 1440,
       h: 644,
       nodes: tddNodes,
       edges: tddEdges,
@@ -828,6 +981,8 @@ export function builtinTemplates(
         },
       ],
     },
+    contentFlowTemplate(locale),
+    ...playModes.map(mode => playTemplate(locale, mode)),
   ];
 }
 
@@ -1000,19 +1155,26 @@ export function captureTemplate(
 ): WorkflowTemplate {
   const group = doc.nodes.find((n) => n.id === groupId && n.kind === "group");
   if (!group) throw new Error(t("groupNotFound"));
-  const descendantIds = groupDescendants(doc, group.id);
-  const inside = new Set(descendantIds);
-  const slotOf = new Map<string, string>(
-    doc.nodes
-      .filter((n) => inside.has(n.id))
-      .map((n) => [n.id, n.templateSlotId ?? n.id]),
-  );
+  const descendants = new Set(groupDescendants(doc, group.id));
+  const authored = doc.nodes.filter(node => descendants.has(node.id) && !node.generatedBy);
+  const inside = new Set(authored.map(node => node.id));
+  const slotOf = new Map<string, string>();
+  const usedSlots = new Set<string>();
+  for (const node of authored) {
+    const preferred = node.templateSlotId ?? node.id;
+    const slot = usedSlots.has(preferred) ? node.id : preferred;
+    slotOf.set(node.id, slot);
+    usedSlots.add(slot);
+  }
 
-  const nodes = doc.nodes
-    .filter((n) => inside.has(n.id))
+  const nodes = authored
     .map((n) => {
       const slot = slotOf.get(n.id)!;
       const clone = structuredClone(n);
+      if (clone.fanout) clone.height = authoredPairHeight(n, doc.nodes);
+      remapLaneNode(clone, slotOf);
+      if (clone.staffOf) clone.staffOf = slotOf.get(clone.staffOf);
+      if (clone.ports) clone.ports = remapGroupPorts(clone.ports, slotOf);
       const revision = clone.teamRef && teams.find((team) => team.id === clone.teamRef?.teamId)?.revision;
       if (clone.teamRef && revision !== undefined) clone.teamRef.revision = revision;
       /* Strip all machine/session-bound state so exported templates stay portable */
@@ -1050,7 +1212,7 @@ export function captureTemplate(
     });
 
   const edges = doc.edges
-    .filter((e) => inside.has(e.source) && inside.has(e.target))
+    .filter((e) => !e.generatedBy && inside.has(e.source) && inside.has(e.target))
     .map((e) => {
       const clone = structuredClone(e);
       delete clone.sentVersion;
@@ -1089,7 +1251,8 @@ export function captureTemplate(
     revision: 1,
     color: group.color ?? "blue",
     w: group.width,
-    h: group.height,
+    h: authoredPairHeight(group, doc.nodes),
+    ...(group.fanout ? { fanout: remapFanout(group.fanout, slotOf) } : {}),
     nodes,
     edges,
     ports,
@@ -1099,7 +1262,10 @@ export function captureTemplate(
 export function teamDependenciesFor(nodes: FlowNode[], snapshot: FlowspaceSnapshot | null): TeamDependencies {
   const teamIds = new Set(nodes.flatMap((node) => node.teamRef ? [node.teamRef.teamId] : []));
   const teams = (snapshot?.teamBlueprints ?? []).filter((team) => teamIds.has(team.id));
-  const roleIds = new Set(teams.flatMap((team) => team.slots.map((slot) => slot.roleId)));
+  const roleIds = new Set([
+    ...teams.flatMap((team) => team.slots.map((slot) => slot.roleId)),
+    ...nodes.flatMap((node) => node.kind === "role" && node.roleRef ? [node.roleRef] : []),
+  ]);
   const roles = (snapshot?.roles ?? []).filter((role) => roleIds.has(role.id));
   return { teams, roles };
 }
@@ -1138,9 +1304,12 @@ export function instantiateTemplate(
     idMap.set(n.templateSlotId ?? n.id, uid());
     idMap.set(n.id, idMap.get(n.templateSlotId ?? n.id)!);
   }
+  if (template.fanout) group.fanout = remapFanout(template.fanout, idMap);
 
   const createdNodes: FlowNode[] = template.nodes.map((n) => {
     const clone = structuredClone(n);
+    remapLaneNode(clone, idMap);
+    if (clone.ports) clone.ports = remapGroupPorts(clone.ports, idMap);
     delete clone.sessionId;
     delete clone.lastSubmittedTask;
     delete clone.window;
@@ -1154,6 +1323,8 @@ export function instantiateTemplate(
       sourceNodeId: n.sourceNodeId
         ? (idMap.get(n.sourceNodeId) ?? n.sourceNodeId)
         : undefined,
+      staffOf: n.staffOf ? idMap.get(n.staffOf) : undefined,
+      slotId: n.staffOf && idMap.has(n.staffOf) ? n.slotId : undefined,
       x: x + n.x,
       y: y + n.y,
       ...(n.kind === "agent"
@@ -1181,13 +1352,7 @@ export function instantiateTemplate(
       waypoints: e.waypoints?.map((p) => ({ x: x + p.x, y: y + p.y })),
     }));
 
-  group.ports = template.ports
-    .map((p) => ({
-      ...structuredClone(p),
-      id: uid(),
-      nodes: p.nodes.map((s) => idMap.get(s)).filter(Boolean) as string[],
-    }))
-    .filter((p) => p.nodes.length > 0);
+  group.ports = remapGroupPorts(template.ports, idMap);
 
   doc.nodes.push(group, ...createdNodes);
   doc.edges.push(...createdEdges);
@@ -1203,6 +1368,18 @@ export interface SyncPlan {
   edited: FlowNode[];
 }
 
+function remapGroupPorts(ports: GroupPort[], ids: ReadonlyMap<string, string>, previous: GroupPort[] = [],
+  keepNames = false): GroupPort[] {
+  return ports.flatMap(port => {
+    const nodes = port.nodes.map(id => ids.get(id)).filter((id): id is string => !!id);
+    if (!nodes.length) return [];
+    const prior = previous.find(old => old.kind === port.kind && old.direction === port.direction &&
+      old.portId === port.portId && old.nodes.length === nodes.length && nodes.every(id => old.nodes.includes(id)));
+    return [{ ...structuredClone(port), id: prior?.id ?? uid(), nodes,
+      hidden: prior?.hidden ?? port.hidden, name: keepNames && prior ? prior.name : port.name }];
+  });
+}
+
 export function computeSyncPlan(
   doc: FlowspaceDocument,
   group: FlowNode,
@@ -1210,7 +1387,7 @@ export function computeSyncPlan(
 ): SyncPlan {
   const desc = groupDescendants(doc, group.id);
   const inside = new Set(desc);
-  const members = doc.nodes.filter((n) => inside.has(n.id));
+  const members = doc.nodes.filter((n) => inside.has(n.id) && !n.generatedBy);
   const outside = doc.edges.filter(
     (e) => inside.has(e.source) !== inside.has(e.target),
   ).length;
@@ -1245,7 +1422,7 @@ export function synchronizeTemplate(
   const inside = new Set(desc);
   const existingBySlot = new Map<string, FlowNode>();
   for (const n of doc.nodes) {
-    if (inside.has(n.id) && n.templateSlotId) {
+    if (inside.has(n.id) && !n.generatedBy && n.templateSlotId) {
       existingBySlot.set(n.templateSlotId, n);
     }
   }
@@ -1260,9 +1437,12 @@ export function synchronizeTemplate(
     slotToNodeId.set(src.id, assignedId);
   }
 
+  const upgradingTddGate = group.templateId === "builtin-tdd-loop" && template.id === group.templateId &&
+    (group.templateRevision ?? 1) < 2 && template.revision >= 2;
   group.width = template.w;
   group.height = template.h;
   group.templateRevision = template.revision;
+  if (group.fanout || template.fanout) group.fanout = remapFanout(template.fanout, slotToNodeId);
 
   /* Pass 2: Update existing slots in-place and insert newly added template slots */
   for (const src of template.nodes) {
@@ -1277,11 +1457,23 @@ export function synchronizeTemplate(
 
     if (existing) {
       existing.parentId = resolvedParentId;
+      if (existing.fanout || src.fanout) existing.fanout = remapFanout(src.fanout, slotToNodeId);
+      if (existing.masterOf || src.masterOf) existing.masterOf = src.masterOf && slotToNodeId.get(src.masterOf);
+      if (src.ports) existing.ports = remapGroupPorts(src.ports, slotToNodeId, existing.ports, keepTasks);
       existing.x = group.x + src.x;
       existing.y = group.y + src.y;
       existing.width = src.width;
       existing.height = src.height;
       if (resolvedSourceNodeId) existing.sourceNodeId = resolvedSourceNodeId;
+      if (upgradingTddGate && slot === "slot-tdd-verifier" && (existing.sessionId || keepTasks)) {
+        // R1 preserves the session and authored task. Only the continuation
+        // that feeds the new gate needs its machine-readable output contract.
+        const contract = (["zh", "en"] as const).map(locale => tFor(locale, "flow_tdd_marker"))
+          .find(text => src.continuationPrompt?.endsWith(text));
+        const prompt = existing.continuationPrompt?.trim() ? existing.continuationPrompt :
+          (existing.sessionId ? existing.task || existing.draft : existing.draft || existing.task);
+        if (contract && !prompt.endsWith(contract)) existing.continuationPrompt = [prompt, contract].filter(Boolean).join("\n\n");
+      }
       if (!keepTasks && !existing.sessionId) {
         existing.title = src.title;
         existing.task = src.task;
@@ -1299,6 +1491,9 @@ export function synchronizeTemplate(
     } else {
       const freshId = slotToNodeId.get(slot)!;
       const clone = structuredClone(src);
+      remapLaneNode(clone, slotToNodeId);
+      if (clone.ports) clone.ports = remapGroupPorts(clone.ports, slotToNodeId);
+      if (clone.staffOf) clone.staffOf = slotToNodeId.get(clone.staffOf);
       delete clone.sessionId;
       delete clone.lastSubmittedTask;
       delete clone.window;
@@ -1334,6 +1529,7 @@ export function synchronizeTemplate(
       .filter(
         (n) =>
           inside.has(n.id) &&
+          !n.generatedBy &&
           n.templateSlotId &&
           !templateSlots.has(n.templateSlotId) &&
           !n.sessionId,
@@ -1359,7 +1555,8 @@ export function synchronizeTemplate(
       target = slotToNodeId.get(e.target);
     if (!source || !target) continue;
     const prev = oldInternal.find(
-      (o) => o.source === source && o.target === target && o.kind === e.kind,
+      (o) => o.source === source && o.target === target && o.kind === e.kind &&
+        o.sourcePort === e.sourcePort && o.targetPort === e.targetPort,
     );
     doc.edges.push({
       ...structuredClone(e),
@@ -1375,28 +1572,7 @@ export function synchronizeTemplate(
     });
   }
 
-  const prevPorts = group.ports ?? [];
-  group.ports = template.ports
-    .map((p) => {
-      const mappedTargets = p.nodes
-        .map((s) => slotToNodeId.get(s))
-        .filter(Boolean) as string[];
-      const prevMatch = prevPorts.find(
-        (old) =>
-          old.kind === p.kind &&
-          old.direction === p.direction &&
-          old.nodes.length === mappedTargets.length &&
-          mappedTargets.every((id) => old.nodes.includes(id)),
-      );
-      return {
-        ...structuredClone(p),
-        id: prevMatch?.id ?? uid(),
-        name: keepTasks && prevMatch ? prevMatch.name : p.name,
-        hidden: prevMatch ? prevMatch.hidden : p.hidden,
-        nodes: mappedTargets,
-      };
-    })
-    .filter((p) => p.nodes.length > 0);
+  group.ports = remapGroupPorts(template.ports, slotToNodeId, group.ports, keepTasks);
 }
 
 export function buildSnapshot(

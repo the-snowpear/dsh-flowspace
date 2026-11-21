@@ -4,7 +4,11 @@ import type {
   FlowspaceDocument,
   GroupPort,
 } from "../types.ts";
-import { members } from "../core/document.ts";
+import { groupDescendants, members } from "../core/document.ts";
+import { judges } from "../core/nodes/judge/index.ts";
+import { DEFAULT_FLOW_SIZE, descriptorOf, portsOf, sizeOf } from "../core/nodes/registry.ts";
+import { dataMode } from "../core/nodes/data/descriptors.ts";
+import { t } from "./i18n.ts";
 
 export const clamp = (value: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, value));
@@ -21,18 +25,21 @@ export const MOTION = {
 
 /** Below this zoom unpinned cards fold to compact form and quiet wires step back. */
 export const LOD_ZOOM = 0.5;
+export const BOARD_MIN_SIZE = [320, 280] as const;
 
 export const COMPACT_SIZE: Record<FlowNode["kind"], [number, number]> = {
   agent: [280, 118],
   note: [276, 98],
   file: [256, 82],
   display: [280, 126],
-  board: [280, 100],
+  board: [280, 112],
   detail: [280, 112],
   group: [312, 152],
   git: [280, 108],
   changes: [276, 104],
   terminal: [280, 108],
+  role: [252, 96],
+  flow: DEFAULT_FLOW_SIZE.compact,
 };
 
 export const FULL_SIZE: Record<FlowNode["kind"], [number, number]> = {
@@ -40,12 +47,14 @@ export const FULL_SIZE: Record<FlowNode["kind"], [number, number]> = {
   note: [276, 200],
   file: [300, 286],
   display: [300, 252],
-  board: [520, 310],
+  board: [580, 380],
   detail: [340, 362],
   group: [1152, 474],
   git: [420, 410],
   changes: [360, 340],
   terminal: [380, 320],
+  role: [260, 336],
+  flow: DEFAULT_FLOW_SIZE.full,
 };
 
 export type CapsuleState = "pending" | "sent" | "updated" | "always";
@@ -82,29 +91,57 @@ export function isCompactNode(
   return false;
 }
 
+// Every flow card is header 48 → summary band 48 → outlet rows → work area, so answering a
+// question or growing a preview never moves an outlet socket.
+const judgeTypes = new Set([...judges.map(judge => judge.flowType), "flowspace/merge-sort"]);
+const rowHeight = 32;
+const branchTop = (_node: FlowNode) => 1 + 48 + 48;
+/** World-space top of the first outlet row inside a full flow card. */
+export const flowBranchTop = branchTop;
+const branchBottom = (height: number) => height - 1 - 12;
+
+function judgeHeight(node: FlowNode, minHeight: number) {
+  const rows = portsOf(node).filter(port => port.direction === "out").length;
+  return clamp(Math.max(node.height ?? 0, branchTop(node) + rows * rowHeight + 13), minHeight, 480);
+}
+
+/** Total card height for the currently visible preview lines, footnotes and trial button. */
+export function dataCardHeight(node: FlowNode, lines: number, notes: number, button: boolean): number {
+  const ports = portsOf(node).filter(port => port.direction === "out").length;
+  const blocks = Number(lines > 0) + notes + Number(button);
+  const preview = (lines ? Math.min(6, lines) * 16 + 18 : 0) + notes * 16 + (button ? 28 : 0) + blocks * 4;
+  return clamp(Math.max(node.height, branchTop(node) + ports * rowHeight + 12 + preview), 200, 480);
+}
+
 export function nodeBox(
   node: FlowNode,
   lod = false,
   keepExpanded = false,
+  previewHeight?: number,
 ): Box {
   if (node.kind === "group") return groupBox(node);
   const compact = isCompactNode(node, lod, keepExpanded);
+  const flowSize = node.kind === "flow" ? sizeOf(node, compact) : undefined;
   if (compact) {
-    const [cw, ch] = COMPACT_SIZE[node.kind] ?? [280, 110];
+    const [cw, ch] = flowSize ?? COMPACT_SIZE[node.kind] ?? [280, 110];
     return { x: node.x, y: node.y, w: cw, h: ch, compact: true };
   }
-  const [fw, fh] = FULL_SIZE[node.kind] ?? [320, 280];
+  const [fw, fh] = flowSize ?? FULL_SIZE[node.kind] ?? [320, 280];
   const inLiveChat =
     node.kind === "agent" &&
     Boolean(node.sessionId) &&
     (node.tab ?? "task") === "conversation";
-  const minW = inLiveChat ? 420 : fw;
-  const minH = inLiveChat ? 490 : fh;
+  const minW = inLiveChat ? 420 : node.kind === "board" ? BOARD_MIN_SIZE[0] : fw;
+  const minH = inLiveChat ? 490 : node.kind === "board" ? BOARD_MIN_SIZE[1] : fh;
+  const data = node.kind === "flow" && descriptorOf(node.flowType)?.family === "data";
+  // Keep the six-line preview below the outlet rows at the same world coordinates as portY.
+  const dataHeight = data ? previewHeight ?? dataCardHeight(node, 6, 1, dataMode(node) === "ai") : 0;
   return {
     x: node.x,
     y: node.y,
     w: Math.max(node.width || fw, minW),
-    h: Math.max(node.height || fh, minH),
+    h: data || previewHeight !== undefined ? clamp(Math.max(node.height || fh, dataHeight, previewHeight ?? 0), minH, 480) :
+      node.flowType && judgeTypes.has(node.flowType) ? judgeHeight(node, minH) : Math.max(node.height || fh, minH),
     compact: false,
   };
 }
@@ -197,14 +234,14 @@ export function expandedGroupBox(
 
 export function bounds(boxes: Box[]): Box {
   if (!boxes.length) return { x: 0, y: 0, w: 1000, h: 600 };
-  const x = Math.min(...boxes.map((b) => b.x)),
-    y = Math.min(...boxes.map((b) => b.y));
-  return {
-    x,
-    y,
-    w: Math.max(...boxes.map((b) => b.x + b.w)) - x,
-    h: Math.max(...boxes.map((b) => b.y + b.h)) - y,
-  };
+  let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const box of boxes) {
+    x = Math.min(x, box.x);
+    y = Math.min(y, box.y);
+    right = Math.max(right, box.x + box.w);
+    bottom = Math.max(bottom, box.y + box.h);
+  }
+  return { x, y, w: right - x, h: bottom - y };
 }
 
 export function toWorld(
@@ -222,10 +259,35 @@ export function toWorld(
 /** World-space offsets include the card border above the header and body. */
 export function portY(
   node: FlowNode,
-  kind: "reference" | "continuation",
+  kind: FlowEdge["kind"],
   compact: boolean,
+  portId?: string,
+  scrollTop = 0,
+  height?: number,
+  direction?: "in" | "out",
 ): number {
   const border = 1;
+  if (node.kind === "flow" && portId) {
+    const ports = portsOf(node);
+    const outputs = ports.filter(port => port.direction === "out");
+    const index = direction === "in" ? -1 : outputs.findIndex(port => port.id === portId && port.role === kind);
+    if (index >= 0) {
+      if (compact) return border + 12 + (index + 0.5) * 70 / outputs.length;
+      const center = branchTop(node) + (index + 0.5) * rowHeight - scrollTop;
+      return height === undefined ? center : clamp(center, branchTop(node), branchBottom(height));
+    }
+    if (direction !== "out") {
+      const inputs = ports.filter(port => port.direction === "in");
+      const i = inputs.findIndex(port => port.id === portId && port.role === kind);
+      // Single sockets keep the familiar header/reference positions. Named inputs
+      // share the left edge; both their DOM buttons and SVG endpoints use this spacing.
+      if (i >= 0 && (inputs.length > 2 || inputs.filter(port => port.role === kind).length > 1)) {
+        if (compact) return border + 12 + (i + 0.5) * 70 / inputs.length;
+        const available = Math.max(node.height, sizeOf(node, false)[1]) - 48;
+        return border + 24 + i * Math.min(rowHeight, available / (inputs.length - 1));
+      }
+    }
+  }
   if (kind === "continuation") return border + (compact ? 21 : 24);
   return border + (compact ? (node.kind === "agent" ? 78 : 56) : 62);
 }
@@ -247,6 +309,7 @@ export function inferGroupPorts(
       );
       for (const edge of matching) {
         const nodeId = direction === "in" ? edge.target : edge.source;
+        const portId = direction === "in" ? edge.targetPort : edge.sourcePort;
         const targetNode = doc.nodes.find((n) => n.id === nodeId);
         if (!targetNode) continue;
         if (
@@ -254,20 +317,43 @@ export function inferGroupPorts(
             (p) =>
               p.kind === kind &&
               p.direction === direction &&
+              (p.portId ?? direction) === (portId ?? direction) &&
               p.nodes.includes(nodeId),
           )
         ) {
+          const port = portId && portsOf(targetNode).find((item) => item.id === portId);
           inferred.push({
-            id: `${kind}-${direction}-${nodeId}`,
+            id: `${kind}-${direction}-${nodeId}${portId && portId !== direction ? "-" + portId : ""}`,
+            ...(portId ? { portId } : {}),
             kind,
             direction,
-            name: targetNode.title,
+            name: port ? `${targetNode.title} · ${port.label ?? t(port.labelKey ?? port.id)}` : targetNode.title,
             nodes: [nodeId],
             hidden: false,
           });
         }
       }
     }
+  }
+  if (group.fanout) {
+    const fan = doc.nodes.find(node => node.id === group.fanout!.fanId);
+    const merge = doc.nodes.find(node => node.id === group.fanout!.mergeId);
+    const boundary = [fan, merge].flatMap(node => !node ? [] : portsOf(node)
+      .filter(port => port.role !== "event" && port.direction === (node === fan ? "in" : "out"))
+      .map((port): GroupPort => ({
+        id: `${node.id}:${port.role}:${port.id}`, kind: port.role as GroupPort["kind"], direction: port.direction,
+        portId: port.id, name: port.label ?? (port.labelKey ? t(port.labelKey) : node.title),
+        nodes: [node.id], hidden: false,
+      })));
+    const realExternal = inferred.filter(port => port.nodes.every(id => {
+      const node = doc.nodes.find(candidate => candidate.id === id);
+      return node && !node.generatedBy && node !== fan && node !== merge;
+    }));
+    const valid = [...boundary, ...realExternal];
+    const matches = (a: GroupPort, b: GroupPort) => a.kind === b.kind && a.direction === b.direction &&
+      (a.portId ?? a.direction) === (b.portId ?? b.direction) && b.nodes.every(id => a.nodes.includes(id));
+    const customized = (group.ports ?? []).filter(port => valid.some(real => matches(port, real)));
+    return [...customized, ...valid.filter(port => !customized.some(custom => matches(custom, port)))];
   }
   const agents = doc.nodes.filter(
     (n) => n.kind === "agent" && inside.has(n.id),
@@ -337,6 +423,7 @@ export function inferGroupPorts(
             c.id === p.id ||
             (c.kind === p.kind &&
               c.direction === p.direction &&
+              (c.portId ?? c.direction) === (p.portId ?? p.direction) &&
               p.nodes.every((id) => c.nodes.includes(id))),
         ) && !mergedKeys.has(p.id),
     ),
@@ -361,15 +448,18 @@ export function collapsedAncestor(
 export function endpoint(
   doc: FlowspaceDocument,
   nodeId: string,
-  kind: "reference" | "continuation",
+  kind: FlowEdge["kind"],
   direction: "in" | "out",
   lod = false,
   keepExpandedIds?: Set<string>,
   index?: {
     nodes: Map<string, FlowNode>;
     ancestors: Map<string, FlowNode | undefined>;
+    branchScroll?: ReadonlyMap<string, number>;
+    previewHeights?: ReadonlyMap<string, number>;
     ports: Map<string, GroupPort[]>;
   },
+  portId?: string,
 ): { x: number; y: number; groupId?: string; box: Box } {
   const node = index ? index.nodes.get(nodeId) : doc.nodes.find((n) => n.id === nodeId);
   if (!node) return { x: 0, y: 0, box: { x: 0, y: 0, w: 0, h: 0 } };
@@ -387,7 +477,8 @@ export function endpoint(
     );
     const idx = Math.max(
       0,
-      dirPorts.findIndex((p) => p.kind === kind && p.nodes.includes(nodeId)),
+      dirPorts.findIndex((p) => p.kind === kind && p.nodes.includes(nodeId) &&
+        (p.portId ?? direction) === (portId ?? direction)),
     );
     const box = groupBox(collapsed, rows);
     return {
@@ -397,10 +488,11 @@ export function endpoint(
       box,
     };
   }
-  const box = nodeBox(node, lod, Boolean(node.window) || keepExpandedIds?.has(node.id));
+  const box = nodeBox(node, lod, Boolean(node.window) || keepExpandedIds?.has(node.id), index?.previewHeights?.get(node.id));
+  if (kind === "event" && direction === "out") return { x: box.x + box.w / 2, y: box.y, box };
   return {
     x: box.x + (direction === "out" ? box.w : 0),
-    y: box.y + portY(node, kind, !!box.compact),
+    y: box.y + portY(node, kind === "event" ? "continuation" : kind, !!box.compact, portId ?? direction, index?.branchScroll?.get(nodeId), box.h, direction),
     box,
   };
 }
@@ -413,12 +505,13 @@ export function endpoint(
  */
 export function alignedWireDropPosition(
   sourceBox: Box,
-  sourcePortKind: "reference" | "continuation",
+  sourcePortKind: FlowEdge["kind"],
   dropPt: { x: number; y: number },
   targetKind: FlowNode["kind"] = "agent",
   opts?: {
     direction?: "out" | "in";
     sourceKind?: FlowNode["kind"];
+    sourcePortOffset?: number;
     targetCompact?: boolean;
     snapGrid?: number;
   },
@@ -437,7 +530,7 @@ export function alignedWireDropPosition(
     );
   const grid = opts?.snapGrid ?? 12;
 
-  const sourcePortOffset = portY(
+  const sourcePortOffset = opts?.sourcePortOffset ?? portY(
     { kind: sourceKind } as FlowNode,
     sourcePortKind,
     Boolean(sourceBox.compact),
@@ -538,10 +631,10 @@ export function exchangeRoute(
         ? { x: 3.5 * k * sx, y: 0 }
         : start;
     return [
-      { x: p.x + start.x, y: p.y + start.y },
+      { x: a.x + a.w / 2, y: a.y + a.h / 2 },
       { x: c1.x + nx * bow * k, y: c1.y + ny * bow * k },
       { x: c2.x + nx * bow * k, y: c2.y + ny * bow * k },
-      { x: q.x + end.x, y: q.y + end.y },
+      { x: b.x + b.w / 2, y: b.y + b.h / 2 },
     ];
   };
   const cubic = (pts: { x: number; y: number }[]) =>
@@ -652,96 +745,150 @@ export const easeView = bezier(0.32, 0.72, 0, 1);
 /** Horizontal / vertical clearance kept between a grown card and the cards it moves. */
 const ROOM_GAP = 24;
 
-function overlapArea(a: Box, b: Box, gap: number): number {
-  const w = Math.min(a.x + a.w, b.x + b.w + gap) - Math.max(a.x, b.x);
-  const h = Math.min(a.y + a.h, b.y + b.h + gap) - Math.max(a.y, b.y);
-  return w > 4 && h > 0 ? w * h : 0;
+function overlapArea(a: Box, b: Box, gap = 0): number {
+  const w = Math.min(a.x + a.w, b.x + b.w + gap) - Math.max(a.x, b.x - gap);
+  const h = Math.min(a.y + a.h, b.y + b.h + gap) - Math.max(a.y, b.y - gap);
+  return Math.max(0, w) * Math.max(0, h);
 }
 
-/**
- * A card grew (expanded, or switched into the wider live-chat form): move only the cards
- * it now covers out of its way. A card sitting beside it on the same row slides right,
- * a card underneath slides down, and displaced cards push their own neighbours in turn,
- * so a left-to-right pipeline stays a readable row. Enclosing groups grow to fit.
- * Every moved card / group remembers its original geometry for `giveRoomBack`.
- */
-export function makeRoom(doc: FlowspaceDocument, expandedNode: FlowNode): void {
-  const gap = ROOM_GAP;
-  const origin = { x: expandedNode.x, y: expandedNode.y };
-  const others = doc.nodes
-    .filter(
-      (other) =>
-        other.id !== expandedNode.id &&
-        other.kind !== "group" &&
-        !other.window &&
-        (other.y >= origin.y - 8 || other.x >= origin.x + 8),
-    )
-    .sort(
-      (a, b) =>
-        a.x - origin.x + (a.y - origin.y) - (b.x - origin.x + (b.y - origin.y)),
-    );
-  // Only the grown card and cards it displaced can push others, so unrelated
-  // pre-existing overlaps are left exactly as the user arranged them.
-  const pushers = new Map<string, Box>([
-    [expandedNode.id, nodeBox(expandedNode, false, true)],
-  ]);
-  const moved = new Set<string>();
-  for (let pass = 0; pass < 6; pass++) {
-    let changed = false;
-    for (const other of others) {
-      const box = nodeBox(other, false, Boolean(other.pinned));
-      let primary: Box | null = null;
-      let best = 0;
-      for (const [pid, s] of pushers) {
-        if (pid === other.id) continue;
-        const area = overlapArea(box, s, gap);
-        if (area > best) {
-          best = area;
-          primary = s;
-        }
-      }
-      if (!primary) continue;
-      const beside = box.x >= primary.x + 24 && box.y < primary.y + primary.h * 0.5;
-      if (!other.nudge) {
-        other.nudge = { by: expandedNode.id, origX: other.x, origY: other.y };
-      }
-      if (beside) other.x = Math.max(other.x, primary.x + primary.w + gap);
-      else other.y = Math.max(other.y, primary.y + primary.h + gap);
-      changed = true;
-      moved.add(other.id);
-      pushers.set(other.id, nodeBox(other, false, Boolean(other.pinned)));
-    }
-    if (!changed) break;
+export function clearBoxAlong(
+  box: Box,
+  obstacles: readonly Box[],
+  axis: "x" | "y" = "y",
+  direction: 1 | -1 = 1,
+  gap = ROOM_GAP,
+): Box {
+  const span = axis === "x" ? "w" : "h";
+  const across = axis === "x" ? "y" : "x";
+  const acrossSpan = axis === "x" ? "h" : "w";
+  const blocked = obstacles.flatMap((obstacle) => {
+    if (box[across] >= obstacle[across] + obstacle[acrossSpan] + gap ||
+        box[across] + box[acrossSpan] + gap <= obstacle[across]) return [];
+    const start = obstacle[axis] - box[span] - gap;
+    const end = obstacle[axis] + obstacle[span] + gap;
+    return [direction === 1 ? { start, end } : { start: -end, end: -start }];
+  }).sort((a, b) => a.start - b.start);
+  let position = direction * box[axis];
+  for (const { start, end } of blocked) {
+    if (position <= start) break;
+    position = Math.max(position, end);
   }
-  // Grow every group that encloses the grown card or a displaced card.
-  const groupIds = new Set<string>();
-  for (const id of [expandedNode.id, ...moved]) {
-    let parentId = doc.nodes.find((n) => n.id === id)?.parentId;
-    while (parentId && !groupIds.has(parentId)) {
-      groupIds.add(parentId);
-      parentId = doc.nodes.find((n) => n.id === parentId)?.parentId;
+  return { ...box, [axis]: position * direction };
+}
+
+/** Size of a canvas card or frame, including the visible ports on composites. */
+export function canvasItemBox(doc: FlowspaceDocument, node: FlowNode): Box {
+  return node.kind === "group" && node.collapsed ? expandedGroupBox(doc, node) : nodeBox(node);
+}
+
+export function lockedCanvasItems(doc: FlowspaceDocument): Set<string> {
+  const byId = new Map(doc.nodes.map((node) => [node.id, node]));
+  const locked = new Set<string>();
+  for (const node of doc.nodes) {
+    if (!node.pinned && !node.window) continue;
+    let item: FlowNode | undefined = node;
+    while (item && !locked.has(item.id)) {
+      locked.add(item.id);
+      item = item.parentId ? byId.get(item.parentId) : undefined;
     }
   }
-  for (const gid of groupIds) {
-    const g = doc.nodes.find((n) => n.id === gid && n.kind === "group");
-    if (!g) continue;
-    const memberIds = members(doc, g.id);
-    const memberBoxes = doc.nodes
-      .filter((n) => memberIds.includes(n.id))
-      .map((n) =>
-        nodeBox(n, false, n.id === expandedNode.id || Boolean(n.pinned)),
+  return locked;
+}
+
+function shiftWithGroup(doc: FlowspaceDocument, node: FlowNode, x: number, y: number): void {
+  const dx = x - node.x;
+  const dy = y - node.y;
+  node.x = x;
+  node.y = y;
+  if (node.kind !== "group") return;
+  const descendants = new Set(groupDescendants(doc, node.id));
+  for (const child of doc.nodes) {
+    if (!descendants.has(child.id)) continue;
+    child.x += dx;
+    child.y += dy;
+    if (child.nudge?.origX !== undefined) child.nudge.origX += dx;
+    if (child.nudge?.origY !== undefined) child.nudge.origY += dy;
+  }
+}
+
+function nearestClearBox(box: Box, obstacles: Box[], parent?: FlowNode): Box {
+  const options = [
+    clearBoxAlong(box, obstacles, "y", 1),
+    clearBoxAlong(box, obstacles, "x", 1),
+    clearBoxAlong(box, obstacles, "y", -1),
+    clearBoxAlong(box, obstacles, "x", -1),
+  ];
+  const distance = (candidate: Box) => Math.abs(candidate.x - box.x) + Math.abs(candidate.y - box.y);
+  return options.filter((candidate) => staysInGroup(candidate, box, parent)).sort((a, b) => distance(a) - distance(b))[0];
+}
+
+function staysInGroup(candidate: Box, original: Box, parent?: FlowNode): boolean {
+  return !parent || (candidate.x >= Math.min(original.x, parent.x + 24) &&
+    candidate.y >= Math.min(original.y, parent.y + 54));
+}
+
+/** Propagate a size change through siblings, then through the frames that contain them. */
+export function makeRoom(doc: FlowspaceDocument, expandedNode: FlowNode, previous?: Box): void {
+  if (collapsedAncestor(doc, expandedNode.id)) return;
+  const byId = new Map(doc.nodes.map((node) => [node.id, node]));
+  const locked = lockedCanvasItems(doc);
+  const owner = expandedNode.id;
+  const move = (node: FlowNode, box: Box) => {
+    if (node.x === box.x && node.y === box.y) return;
+    node.nudge ??= { by: owner };
+    node.nudge.origX ??= node.x;
+    node.nudge.origY ??= node.y;
+    shiftWithGroup(doc, node, box.x, box.y);
+  };
+
+  for (let item: FlowNode | undefined = expandedNode; item;) {
+    const parentId: string | undefined = item.parentId;
+    const parent: FlowNode | undefined = parentId ? byId.get(parentId) : undefined;
+    if (item.kind === "group" && !item.collapsed) {
+      const { w, h } = expandedGroupBox(doc, item);
+      if (w > item.width || h > item.height) {
+        item.nudge ??= { by: owner };
+        item.nudge.origW ??= item.width;
+        item.nudge.origH ??= item.height;
+        item.width = w;
+        item.height = h;
+      }
+    }
+    let box = canvasItemBox(doc, item);
+    if (previous && box.w <= previous.w && box.h <= previous.h) break;
+    const siblings = doc.nodes.filter((node) => node.parentId === parentId && node !== item);
+    const fixed = siblings.filter((n) => locked.has(n.id)).map((n) => canvasItemBox(doc, n));
+    if (!locked.has(item.id) && fixed.some((b) => overlapArea(box, b) > (previous ? overlapArea(previous, b) : 0))) {
+      box = nearestClearBox(box, fixed, parent);
+      move(item, box);
+    }
+
+    const pending = new Map(siblings.filter((n) => !locked.has(n.id)).map((n) => [n, canvasItemBox(doc, n)]));
+    const placed = [...fixed, box];
+    const pushers = [box];
+    for (const pusher of pushers) {
+      const prior = pusher === box ? previous : undefined;
+      const hits = [...pending].filter(([, other]) =>
+        overlapArea(other, pusher, ROOM_GAP) > (prior ? overlapArea(other, prior, ROOM_GAP) : 0),
+      ).sort(([, a], [, b]) =>
+        Math.hypot(a.x - pusher.x, a.y - pusher.y) - Math.hypot(b.x - pusher.x, b.y - pusher.y),
       );
-    if (!memberBoxes.length) continue;
-    const b = bounds(memberBoxes);
-    const neededH = b.y + b.h + 28 - g.y;
-    const neededW = b.x + b.w + 28 - g.x;
-    if (neededH > g.height || neededW > g.width) {
-      if (!g.nudge) {
-        g.nudge = { by: expandedNode.id, origW: g.width, origH: g.height };
+      for (const [node, other] of hits) {
+        const beside = Math.abs(other.x - pusher.x) >= ROOM_GAP &&
+          Math.abs(other.y - pusher.y) < Math.min(other.h, prior?.h ?? pusher.h) / 2;
+        const axis = beside ? "x" : "y";
+        const next = clearBoxAlong(other, [pusher], axis, other[axis] < pusher[axis] ? -1 : 1);
+        const destination = staysInGroup(next, other, parent) && !placed.some((b) => overlapArea(next, b, ROOM_GAP))
+          ? next
+          : nearestClearBox(other, placed, parent);
+        move(node, destination);
+        pending.delete(node);
+        placed.push(destination);
+        pushers.push(destination);
       }
-      g.height = Math.max(g.height, neededH);
-      g.width = Math.max(g.width, neededW);
     }
+    previous = parent && canvasItemBox(doc, parent);
+    item = parent;
   }
 }
 
@@ -749,15 +896,82 @@ export function giveRoomBack(
   doc: FlowspaceDocument,
   collapsedNode: FlowNode,
 ): void {
-  for (const other of doc.nodes) {
-    if (other.nudge?.by === collapsedNode.id) {
-      if (other.nudge.origX !== undefined) other.x = other.nudge.origX;
-      if (other.nudge.origY !== undefined) other.y = other.nudge.origY;
-      if (other.nudge.origW !== undefined) other.width = other.nudge.origW;
-      if (other.nudge.origH !== undefined) other.height = other.nudge.origH;
-      delete other.nudge;
+  const displaced = doc.nodes.filter((node) => node.nudge?.by === collapsedNode.id);
+  if (!displaced.length) return;
+  const locked = lockedCanvasItems(doc);
+  const children = new Map<string | undefined, FlowNode[]>();
+  for (const node of doc.nodes) {
+    if (!children.has(node.parentId)) children.set(node.parentId, []);
+    children.get(node.parentId)!.push(node);
+  }
+
+  function restoreLevel(parentId?: string): void {
+    const siblings = children.get(parentId) ?? [];
+    const stillGrown = new Set<FlowNode>();
+    for (const node of siblings) {
+      if (node.kind !== "group") continue;
+      restoreLevel(node.id);
+      const nudge = node.nudge;
+      if (nudge?.by !== collapsedNode.id || (nudge.origW === undefined && nudge.origH === undefined)) continue;
+      const width = nudge.origW ?? node.width;
+      const height = nudge.origH ?? node.height;
+      node.width = width;
+      node.height = height;
+      if (!node.collapsed) {
+        const { w, h } = expandedGroupBox(doc, node);
+        node.width = w;
+        node.height = h;
+        if (w > width || h > height) stillGrown.add(node);
+      }
+    }
+
+    // A card in a chain may need to wait for the card occupying its original spot.
+    const owned = siblings.filter((node) => node.nudge?.by === collapsedNode.id);
+    const pending = new Set(owned.filter(({ nudge }) => nudge?.origX !== undefined || nudge?.origY !== undefined));
+    const blockers = new Map<FlowNode, FlowNode>();
+    for (let restored = true; pending.size && restored;) {
+      restored = false;
+      for (const node of pending) {
+        if (locked.has(node.id)) continue;
+        const current = canvasItemBox(doc, node);
+        const candidate = { ...current, x: node.nudge!.origX ?? node.x, y: node.nudge!.origY ?? node.y };
+        const blocker = siblings.find((other) => {
+          if (other === node) return false;
+          const box = canvasItemBox(doc, other);
+          return overlapArea(candidate, box) > overlapArea(current, box);
+        });
+        if (blocker) {
+          blockers.set(node, blocker);
+          continue;
+        }
+        shiftWithGroup(doc, node, candidate.x, candidate.y);
+        pending.delete(node);
+        restored = true;
+      }
+    }
+
+    for (const node of owned) {
+      const nudge = node.nudge!;
+      const blocker = pending.has(node) ? blockers.get(node) : undefined;
+      const nextOwner = blocker?.nudge?.by;
+      if (nextOwner && nextOwner !== node.id) {
+        node.nudge = { ...nudge, by: nextOwner };
+      } else if (blocker && (blocker.kind === "group" ? !blocker.collapsed : blocker.expanded)) {
+        node.nudge = { ...nudge, by: blocker.id };
+      } else if (stillGrown.has(node)) {
+        node.nudge = { by: nudge.by, origW: nudge.origW, origH: nudge.origH };
+      } else {
+        delete node.nudge;
+      }
     }
   }
+  restoreLevel();
+}
+
+export function reflowCanvasItem(doc: FlowspaceDocument, node: FlowNode, previous: Box): void {
+  const next = node.kind === "group" && !node.collapsed ? expandedGroupBox(doc, node) : canvasItemBox(doc, node);
+  if (next.w < previous.w || next.h < previous.h) giveRoomBack(doc, node);
+  if (next.w > previous.w || next.h > previous.h) makeRoom(doc, node, previous);
 }
 
 export interface HubSatelliteItem {
@@ -779,7 +993,7 @@ export interface HubSatelliteItem {
 
 export interface InputHubLayout {
   nodeId: string;
-  kind: "reference" | "continuation";
+  kind: FlowEdge["kind"];
   portPoint: { x: number; y: number; box: Box };
   progress: number;
   satellites: HubSatelliteItem[];
@@ -793,7 +1007,7 @@ export interface InputHubLayout {
 export function computeInputHubLayout(params: {
   doc: FlowspaceDocument;
   nodeId: string;
-  kind: "reference" | "continuation";
+  kind: FlowEdge["kind"];
   progress: number;
   closing?: boolean;
   reducedMotion?: boolean;

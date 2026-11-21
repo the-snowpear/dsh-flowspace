@@ -1,0 +1,219 @@
+/* Compact previews: a stable icon/title row and one quiet line of context.
+   Geometry and port origins stay in world coordinates; only text and controls
+   receive the camera's quantised compensation. */
+.fs-root .compact-kind {
+  display: none;
+}
+
+.fs-root .node.compact {
+  --compact-bg: var(--surface);
+  border-radius: 16px;
+  border-color: var(--border-strong);
+  background: var(--compact-bg);
+  box-shadow: 0 2px 5px -2px var(--shadow), 0 8px 20px -12px var(--shadow);
+}
+.fs-root .node-note.compact {
+  --compact-bg: color-mix(in oklab, var(--k-note) 4%, var(--surface));
+}
+.fs-root .node.compact::before,
+.fs-root .node.compact::after {
+  display: none;
+}
+.fs-root .node.compact:hover {
+  border-color: color-mix(in oklab, var(--kc) 34%, var(--border-strong));
+  box-shadow: 0 3px 7px -3px var(--shadow), 0 12px 24px -14px var(--shadow);
+}
+.fs-root .node.compact.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 6px 16px -10px var(--shadow);
+}
+.fs-root .node.compact:is(.status-running, .status-settling) {
+  border-color: color-mix(in oklab, var(--running) 45%, var(--border-strong));
+}
+.fs-root .node.compact:is(.status-waiting, .status-input, .needs-confirmation) {
+  border-color: color-mix(in oklab, var(--amber) 60%, var(--border-strong));
+}
+.fs-root .node.compact:is(.status-error, .status-aborted, .status-interrupted) {
+  border-color: color-mix(in oklab, var(--red) 55%, var(--border-strong));
+}
+.fs-root .node.compact .node-avatar {
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--kc) 9%, var(--surface));
+  box-shadow: none;
+}
+.fs-root .node.compact .node-heading strong {
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.fs-root .node.compact .node-actions {
+  background: linear-gradient(90deg, transparent, var(--compact-bg) 14px);
+}
+
+/* Overview cards have different world heights. A proportional header keeps
+   the same two-row rhythm on the shorter file, note and role cards as well. */
+.fs-root .node.compact[data-fs-semantic] .node-header {
+  height: 58%;
+  padding: 5px 18px 0;
+  gap: 12px;
+}
+.fs-root .node.compact[data-fs-semantic] .node-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  scale: none;
+  margin: 0;
+}
+.fs-root .node.compact[data-fs-semantic] .node-avatar > .ic {
+  width: 21px;
+  height: 21px;
+  stroke-width: 1.7;
+}
+.fs-root .node.compact[data-fs-semantic] .node-avatar::before,
+.fs-root .node.compact[data-fs-semantic] .node-avatar::after {
+  display: none;
+}
+.fs-root .node.compact[data-fs-semantic] .node-heading strong {
+  font-size: calc(12px * min(var(--fs-type-scale, 1), 2.1));
+  line-height: 1.35;
+}
+.fs-root :is(.node-agent, .node-display, .node-detail).compact[data-fs-semantic] .node-heading strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+  line-height: 1.2;
+}
+.fs-root .node.compact[data-fs-semantic] .node-heading > small {
+  display: none;
+}
+.fs-root .node.compact[data-fs-semantic] .node-body:not([hidden]) {
+  padding-top: 3px;
+}
+.fs-root .node.compact[data-fs-semantic] :is(.compact-status, .compact-overview) {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+  min-width: 0;
+  overflow: hidden;
+}
+.fs-root .node.compact[data-fs-semantic] .compact-kind {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin: 0;
+  color: var(--text-3);
+  font: 450 calc(10px * min(var(--fs-type-scale, 1), 2)) / 1.4 var(--font-ui);
+}
+.fs-root .node.compact[data-fs-semantic] .compact-kind:has(+ :is(.status, .compact-overview-detail))::after {
+  content: "";
+  width: 1px;
+  height: 0.75em;
+  margin-left: 12px;
+  background: var(--border-strong);
+}
+.fs-root .node.compact[data-fs-semantic] :is(.compact-status .status, .compact-overview-detail) {
+  min-width: 0;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  gap: 7px;
+  border-radius: 0;
+  background: none;
+  color: var(--text-3);
+  font: 450 calc(10px * min(var(--fs-type-scale, 1), 2)) / 1.4 var(--font-ui);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fs-root .node.compact[data-fs-semantic] .status:not(.status-draft) {
+  color: var(--sc);
+}
+.fs-root .node.compact[data-fs-semantic] .status > i {
+  width: 0.38em;
+  height: 0.38em;
+}
+.fs-root .node.compact[data-fs-semantic] .status-draft > i {
+  --sc: var(--text-faint);
+  background: var(--sc);
+  box-shadow: none;
+}
+.fs-root .node.compact[data-fs-semantic] .compact-status:has(.fs-team-node-summary) .compact-kind {
+  display: none;
+}
+.fs-root .node.compact[data-fs-semantic] .compact-status .fs-team-node-summary {
+  display: flex;
+  margin-left: auto;
+  font-size: calc(9px * min(var(--fs-type-scale, 1), 2));
+  line-height: 1.4;
+}
+.fs-root .node.compact[data-fs-semantic] .node-participation-badge {
+  position: absolute;
+  top: -8px;
+  right: 10px;
+}
+.fs-root .node.compact[data-fs-semantic] .progress-line {
+  left: 18px;
+  right: 18px;
+  height: 2px;
+}
+.fs-root .node.compact[data-fs-semantic] .compact-release {
+  right: 12px;
+  bottom: 9px;
+  transform: scale(min(var(--fs-type-scale, 1), 1.7));
+  transform-origin: bottom right;
+  box-shadow: none;
+}
+.fs-root .node.compact[data-fs-semantic].needs-confirmation .compact-kind {
+  display: none;
+}
+
+/* Hover and keyboard focus reveal a readable toolbar above the card, leaving
+   the title visible. Scale does not change the card or its wire anchors. */
+.fs-root .node.compact[data-fs-semantic] .node-actions {
+  top: auto;
+  bottom: calc(100% + 8px);
+  right: 0;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 3px 12px -5px var(--shadow);
+  transform: scale(min(var(--fs-type-scale, 1), 2.2));
+  transform-origin: bottom right;
+}
+.fs-root .node.compact[data-fs-semantic] .node-actions::after {
+  content: "";
+  position: absolute;
+  inset: 100% 0 -10px;
+}
+
+/* Quiet, shape-coded sockets. Unused sockets reappear on intent, while linked
+   sockets keep their exact centre and remain draggable at every zoom level. */
+.fs-root .node.compact[data-fs-semantic] > .port {
+  --ko: var(--compact-bg);
+  scale: min(var(--fs-type-scale, 1), 1.35);
+  opacity: 0;
+}
+.fs-root .node.compact[data-fs-semantic] > .port.is-linked {
+  opacity: 0.7;
+}
+.fs-root .node.compact[data-fs-semantic]:is(:hover, :focus-within, .selected) > .port,
+.fs-root .connecting .node.compact[data-fs-semantic] > .port,
+.fs-root .node.compact[data-fs-semantic] > .port:focus-visible {
+  opacity: 1;
+}
+.fs-root .group-header[data-fs-semantic] > strong {
+  font-size: calc(11px * min(var(--fs-type-scale, 1), 2.1));
+  font-weight: 550;
+  color: var(--text-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fs-root .node.compact,
+  .fs-root .node.compact .node-actions {
+    transition: none;
+  }
+}

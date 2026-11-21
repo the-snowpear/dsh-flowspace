@@ -5,8 +5,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { boardSummaryText } from "../core/document.ts";
+import { boardContent, resolveBoardReference } from "../core/board.ts";
+import { DEFAULT_LIST_LIMIT, textOfContent } from "../core/content.ts";
+import { referenceTitle } from "../core/document.ts";
 import type {
+  ContextSnapshot,
+  EdgePayloadPreview,
   FlowEdge,
   FlowNode,
   FlowspaceDocument,
@@ -22,20 +26,7 @@ const SPILL_THRESHOLD_BYTES = 65_536;
 const useClientLayoutEffect =
   typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
-export interface EdgePayloadPreviewData {
-  edgeId: string;
-  kind: "reference" | "continuation";
-  mode: string;
-  sourceTitle: string;
-  targetTitle: string;
-  sessionId?: string;
-  seq?: number;
-  byteLength: number;
-  willSpill: boolean;
-  freshness: "pending" | "sent" | "updated" | "always" | "live";
-  summary: string;
-  content: string;
-}
+export type EdgePayloadPreviewData = EdgePayloadPreview;
 
 type InspectableBridge = CanvasBridge & {
   inspectEdgePayload?: (req: {
@@ -54,6 +45,8 @@ export function formatPayloadBytes(bytes: number): string {
 function extractNodeText(
   node: FlowNode | undefined,
   snapshot: FlowspaceSnapshot | null,
+  edge: FlowEdge,
+  listLimit = DEFAULT_LIST_LIMIT,
 ): { text: string; seq?: number; sessionId?: string } {
   if (!node) return { text: "" };
   if (node.kind === "agent") {
@@ -74,8 +67,8 @@ function extractNodeText(
       sessionId: node.sessionId ?? live?.sessionId ?? lastStep?.sessionId,
     };
   }
-  if (node.kind === "board" && node.columns?.length) {
-    return { text: boardSummaryText(node.columns, node.selectedItems) };
+  if (node.kind === "board") {
+    return { text: resolveBoardReference(node, edge.sourceItemKey, listLimit).text };
   }
   if (node.kind === "file") {
     const selected = node.selectedItems?.length
@@ -101,28 +94,33 @@ export function buildLocalEdgePayloadFallback(
   snapshot: FlowspaceSnapshot | null,
   edge: FlowEdge,
   runId?: string,
+  capturedSource?: ContextSnapshot,
 ): EdgePayloadPreviewData {
   const src = doc.nodes.find((n) => n.id === edge.source);
   const tgt = doc.nodes.find((n) => n.id === edge.target);
-  const sourceTitle = edge.snapshotTitle || src?.title || edge.source;
   const targetTitle = tgt?.title || edge.target;
 
   const candidateRuns = runId
     ? (snapshot?.runs ?? []).filter((r) => r.id === runId)
-    : (snapshot?.runs ?? []).toReversed();
+    : src?.kind === "board" ? [] : (snapshot?.runs ?? []);
   const capturedToken = candidateRuns
     .flatMap((r) => r.tokens)
     .findLast((tk) => tk.edgeId === edge.id);
 
-  const liveResolved = extractNodeText(src, snapshot);
-  const content =
-    capturedToken?.source.text ||
-    edge.snapshotText ||
-    liveResolved.text ||
-    "";
-  const seq = capturedToken?.source.seq ?? liveResolved.seq;
+  const liveResolved = extractNodeText(src, snapshot, edge, doc.settings.listLimit);
+  const boardItem = src?.kind === "board" && edge.sourceItemKey !== undefined;
+  const captured = capturedSource ?? capturedToken?.source;
+  const frozenText = edge.snapshotContent
+    ? edge.snapshotText ?? textOfContent(edge.snapshotContent)
+    : edge.snapshotText || undefined;
+  const content = captured?.text ?? (boardItem && !edge.snapshotContent ? liveResolved.text : frozenText ?? liveResolved.text);
+  const structured = captured ? captured.content : edge.snapshotContent ??
+    (src?.kind === "board" && (boardItem || !edge.snapshotText)
+      ? boardContent(src, edge.sourceItemKey, doc.settings.listLimit) : undefined);
+  const sourceTitle = capturedSource?.title ?? (src?.kind === "board" ? capturedToken?.source.title : undefined) ?? referenceTitle(src, edge);
+  const seq = capturedSource?.seq ?? capturedToken?.source.seq ?? liveResolved.seq;
   const sessionId =
-    capturedToken?.source.sourceSessionId ?? liveResolved.sessionId;
+    capturedSource?.sourceSessionId ?? capturedToken?.source.sourceSessionId ?? liveResolved.sessionId;
   const byteLength = utf8Encoder.encode(content).byteLength;
   const willSpill = byteLength > SPILL_THRESHOLD_BYTES;
 
@@ -148,6 +146,9 @@ export function buildLocalEdgePayloadFallback(
     sessionId,
     seq,
     byteLength,
+    itemCount: structured?.items?.length ?? (structured?.dataType === "file" && Array.isArray(structured.value)
+      ? structured.value.length : undefined),
+    originalCount: structured?.originalCount,
     willSpill,
     freshness,
     summary: firstLine.slice(0, 120),
@@ -167,6 +168,7 @@ export interface PayloadPeekCardProps {
   snapshot: FlowspaceSnapshot | null;
   bridge?: CanvasBridge;
   runId?: string;
+  capturedSource?: ContextSnapshot;
   defaultExpanded?: boolean;
 }
 
@@ -176,11 +178,12 @@ export function PayloadPeekCard({
   snapshot,
   bridge,
   runId,
+  capturedSource,
   defaultExpanded = false,
 }: PayloadPeekCardProps) {
   const fallback = useMemo(
-    () => buildLocalEdgePayloadFallback(doc, snapshot, edge, runId),
-    [doc, snapshot, edge, runId],
+    () => buildLocalEdgePayloadFallback(doc, snapshot, edge, runId, capturedSource),
+    [doc, snapshot, edge, runId, capturedSource],
   );
   const [remoteData, setRemoteData] = useState<EdgePayloadPreviewData | null>(
     null,
@@ -188,12 +191,15 @@ export function PayloadPeekCard({
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [copied, setCopied] = useState(false);
+  const srcNode = doc.nodes.find((n) => n.id === edge.source);
+  const boardLive = srcNode?.kind === "board" && !runId;
 
   useEffect(() => {
     const inspect = (bridge as InspectableBridge | undefined)
       ?.inspectEdgePayload;
-    if (!inspect) {
+    if (!inspect || boardLive || capturedSource) {
       setRemoteData(null);
+      setLoading(false);
       return;
     }
     let active = true;
@@ -212,10 +218,9 @@ export function PayloadPeekCard({
     return () => {
       active = false;
     };
-  }, [bridge, edge.id, edge.mode, edge.always, edge.sentVersion, runId, snapshot?.live]);
+  }, [bridge, edge.id, edge.mode, edge.always, edge.sentVersion, runId, snapshot?.live, boardLive, capturedSource]);
 
-  const data = remoteData ?? fallback;
-  const srcNode = doc.nodes.find((n) => n.id === edge.source);
+  const data = capturedSource || boardLive ? fallback : remoteData ?? fallback;
   const modeLabel =
     edge.kind === "continuation"
       ? t(edge.mode)
@@ -292,7 +297,7 @@ export function PayloadPeekCard({
                 ? { conclusion: "turn", session: "clock", fork: "fork" }[
                     edge.mode
                   ]
-                : kindIconName(srcNode?.kind ?? "file")
+                : kindIconName(srcNode?.kind ?? "file", srcNode?.flowType)
             }
           />{" "}
           {modeLabel}
@@ -304,6 +309,11 @@ export function PayloadPeekCard({
           <span>{t("seqWatermark", { seq: data.seq })}</span>
         )}
         <span>{formatPayloadBytes(data.byteLength)}</span>
+        {data.itemCount !== undefined && data.originalCount !== undefined && data.originalCount > data.itemCount && (
+          <span className="fs-content-count">
+            {t("flow_list_truncated", { kept: data.itemCount, total: data.originalCount })}
+          </span>
+        )}
         <span className={data.willSpill ? "warn" : ""}>
           {t(data.willSpill ? "spillBadge" : "withinInlineLimit")}
         </span>
@@ -442,8 +452,7 @@ export function PayloadPeekPopover({
     };
   }, [onClose]);
 
-  const srcTitle =
-    doc.nodes.find((n) => n.id === edge.source)?.title ?? edge.source;
+  const srcTitle = referenceTitle(doc.nodes.find((n) => n.id === edge.source), edge);
   const tgtTitle =
     doc.nodes.find((n) => n.id === edge.target)?.title ?? edge.target;
 

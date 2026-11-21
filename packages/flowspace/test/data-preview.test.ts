@@ -1,0 +1,173 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { contentList } from "../src/core/content.ts";
+import { emptyDocument, newEdge, newFlowNode, newNode } from "../src/core/document.ts";
+import { createFanoutPair, reconcileFanout, staticFanoutContent } from "../src/core/fanout.ts";
+import { createStaticResolver, previewLines } from "../src/core/nodes/data/preview.ts";
+import { snapshotWithContent } from "../src/core/nodes/input.ts";
+import type { FlowContent } from "../src/types.ts";
+
+test("static draft edits propagate across transforms into keyed lanes and never replace continuation delivery", () => {
+  const doc = emptyDocument();
+  const note = { ...newNode("note", 0, 0), text: "甲\n乙\n甲" };
+  const split = newFlowNode("flowspace/split", 320, 0);
+  const ref = { ...newEdge(note.id, split.id, "reference"), targetPort: "in" };
+  doc.nodes.push(note, split);
+  doc.edges.push(ref);
+  const { fan } = createFanoutPair(doc, 720, 0, { sourceId: split.id });
+  const wire = doc.edges.find(edge => edge.source === split.id && edge.target === fan.id)!;
+  const initial = contentList(["甲", "乙", "甲"]);
+  const resolver = createStaticResolver(doc);
+  assert.deepEqual(resolver.output(split.id), { state: "ready", content: initial });
+  assert.deepEqual(resolver.edge(wire.id), { state: "ready", content: initial });
+  assert.deepEqual(staticFanoutContent(doc, fan.id), initial);
+  reconcileFanout(doc, fan.id, initial.items!);
+  const identity = new Map(doc.nodes.filter(n => n.generatedBy === fan.id).map(n => [n.itemKey, n.id]));
+  note.text = "乙\n丙\n甲\n甲";
+  const changed = staticFanoutContent(doc, fan.id)!;
+  assert.deepEqual(changed.items?.map(item => item.value), ["乙", "丙", "甲", "甲"]);
+  reconcileFanout(doc, fan.id, changed.items!);
+  for (const n of doc.nodes.filter(n => n.generatedBy === fan.id)) if (identity.has(n.itemKey))
+    assert.equal(n.id, identity.get(n.itemKey));
+  assert.equal(wire.snapshotContent, undefined);
+  assert.equal(staticFanoutContent({ ...doc, edges: [wire] }, fan.id), undefined);
+  note.text = "";
+  const empty = staticFanoutContent(doc, fan.id);
+  assert.deepEqual(empty?.items, []);
+  wire.source = newNode("agent", 0, 0).id;
+  assert.equal(staticFanoutContent(doc, fan.id), undefined);
+});
+
+test("named-port previews mirror dispatch order and distinguish frozen references from live edits", () => {
+  const doc = emptyDocument();
+  const text = { ...newNode("note", 0, 0), text: "note" };
+  const constant = newFlowNode("flowspace/constant", 0, 0);
+  constant.config = { mode: "text", value: "static" };
+  const tpl = newFlowNode("flowspace/template", 0, 0);
+  tpl.config = { inputs: ["主动", "引用"], template: "{{主动}} + {{引用}}" };
+  const ref = { ...newEdge(text.id, tpl.id, "reference"), targetPort: "引用", snapshotText: "" };
+  const cont = { ...newEdge(constant.id, tpl.id, "continuation"), targetPort: "主动" };
+  doc.nodes = [text, constant, tpl]; doc.edges = [ref, cont];
+  const a = createStaticResolver(doc);
+  const inputs = a.inputs(tpl.id);
+  assert.ok(inputs.state === "ready");
+  assert.deepEqual(inputs.inputs.map(input => input.port), ["主动", "引用"]);
+  assert.deepEqual(a.output(tpl.id), { state: "ready", content: { dataType: "text", value: "static + note" } });
+  const original = a.signature(tpl.id);
+  text.x += 600; doc.viewport.zoom = .4; doc.prefs = { theme: "light" };
+  assert.equal(createStaticResolver(doc).signature(tpl.id), original);
+  text.text = "edited";
+  assert.notEqual(createStaticResolver(doc).signature(tpl.id), original);
+  ref.snapshotText = "frozen";
+  const frozen = createStaticResolver(doc).signature(tpl.id);
+  text.text = "another edit";
+  assert.equal(createStaticResolver(doc).signature(tpl.id), frozen);
+  assert.deepEqual(createStaticResolver(doc).output(tpl.id), { state: "ready", content: { dataType: "text", value: "static + frozen" } });
+});
+
+test("selected board cards, file path lists, file bytes and spills are resolved at their own receiving port", () => {
+  const doc = emptyDocument();
+  const board = newNode("board", 0, 0);
+  board.columns = [{ id: "todo", name: "Todo", cards: [{ id: "b", text: "Card B" }, { id: "a", text: "Card A" }] }];
+  const file = { ...newNode("file", 0, 0), selectedItems: ["a.md", "b.md"] };
+  const split = newFlowNode("flowspace/split", 0, 0), map = newFlowNode("flowspace/map", 0, 0);
+  const card = { ...newEdge(board.id, split.id, "reference"), sourceItemKey: "a" };
+  const paths = newEdge(file.id, map.id, "reference"), bytes = newEdge(file.id, split.id, "reference");
+  doc.nodes = [board, file, split, map]; doc.edges = [card, paths, bytes];
+  const resolver = createStaticResolver(doc);
+  const selected = resolver.edge(card.id);
+  assert.ok(selected.state === "ready" && selected.content.dataType === "record");
+  assert.equal((selected.content.value as { id: string }).id, "a");
+  const list = resolver.edge(paths.id);
+  assert.ok(list.state === "ready");
+  assert.deepEqual(list.content.items, [{ key: "a.md", value: "a.md" }, { key: "b.md", value: "b.md" }]);
+  assert.deepEqual(resolver.edge(bytes.id), { state: "needs-file", sourceId: file.id, targetId: split.id, edgeId: bytes.id });
+  assert.notEqual(createStaticResolver(doc, {}, { [file.id]: "v2" }).signature(split.id), resolver.signature(split.id));
+  const content = snapshotWithContent(file, { dataType: "text", value: "from disk\ntwo rows" });
+  const hydrated = createStaticResolver(doc, { edges: new Map([[bytes.id, content]]) });
+  assert.deepEqual(hydrated.edge(bytes.id), { state: "ready", content: content.content });
+  board.columns[0].cards[0].text = "Unselected card edit";
+  assert.equal(createStaticResolver(doc).signature(split.id), resolver.signature(split.id));
+
+  const spill = { locator: "spill://example", bytes: 72000, preview: "bounded preview" };
+  const frozen = { ...bytes, snapshotContent: { dataType: "text", spill } as FlowContent };
+  doc.edges = [frozen];
+  const need = createStaticResolver(doc).output(split.id);
+  assert.ok(need.state === "needs-spill" && need.edgeId === bytes.id);
+  assert.deepEqual(need.source.content, frozen.snapshotContent);
+  assert.deepEqual(createStaticResolver(doc, { edges: new Map([[bytes.id, content]]) }).output(split.id),
+    { state: "ready", content: contentList(["from disk", "two rows"]) });
+});
+
+test("rules stop at model, code, dynamic or cyclic dependencies and accept explicit trial results", () => {
+  const doc = emptyDocument();
+  const note = { ...newNode("note", 0, 0), text: "a" };
+  const split = newFlowNode("flowspace/split", 0, 0);
+  const map = newFlowNode("flowspace/map", 0, 0);
+  map.config!.mode = "ai";
+  const end = newFlowNode("flowspace/join", 0, 0);
+  const edges = [newEdge(note.id, split.id, "reference"), newEdge(split.id, map.id, "continuation"), newEdge(map.id, end.id, "continuation")];
+  doc.nodes = [note, split, map, end]; doc.edges = [...edges];
+  let result = createStaticResolver(doc).output(end.id);
+  assert.ok(result.state === "needs-ai" && result.nodeId === map.id);
+  assert.deepEqual(result.inputs[0].source.content, contentList(["a"]));
+  map.config!.mode = "code";
+  result = createStaticResolver(doc).output(end.id);
+  assert.ok(result.state === "needs-code" && result.nodeId === map.id);
+  assert.deepEqual(createStaticResolver(doc, { nodes: new Map([[map.id, contentList(["result"])]]) }).output(end.id),
+    { state: "ready", content: { dataType: "text", value: "result" } });
+  const agent = newNode("agent", 0, 0); doc.nodes.push(agent);
+  doc.edges.push(newEdge(agent.id, end.id, "continuation"));
+  assert.equal(createStaticResolver(doc).output(end.id).state, "dynamic");
+  doc.edges = [...edges, newEdge(end.id, split.id, "continuation")];
+  const cycle = createStaticResolver(doc);
+  assert.equal(cycle.output(end.id).state, "dynamic");
+  assert.equal(typeof cycle.signature(end.id), "string");
+});
+
+test("file-byte and isolated-code overrides produce bounded fanout drafts with exact upstream item keys", () => {
+  const doc = emptyDocument();
+  doc.settings.listLimit = 2;
+  const file = { ...newNode("file", 0, 0), selectedItems: ["notes.txt"] };
+  const split = newFlowNode("flowspace/split", 320, 0), map = newFlowNode("flowspace/map", 660, 0);
+  map.config!.mode = "code";
+  doc.nodes.push(file, split, map);
+  const fileEdge = newEdge(file.id, split.id, "reference");
+  doc.edges.push(fileEdge, newEdge(split.id, map.id, "continuation"));
+  const { fan } = createFanoutPair(doc, 1000, 0, { sourceId: map.id });
+  assert.equal(createStaticResolver(doc).inputs(fan.id).state, "needs-file");
+  assert.equal(staticFanoutContent(doc, fan.id), undefined);
+  const edges = new Map([[fileEdge.id, snapshotWithContent(file, { dataType: "text", value: "乙\n甲\n乙" })]]);
+  const work = createStaticResolver(doc, { edges }).inputs(fan.id);
+  assert.ok(work.state === "needs-code" && work.nodeId === map.id);
+  const frozen = work.inputs[0].source.content!;
+  assert.deepEqual(frozen.items?.map(item => item.value), ["乙", "甲"]);
+  assert.equal(frozen.originalCount, 3);
+  const mapped: FlowContent = { ...frozen, items: frozen.items!.map(item => ({ ...item, value: item.value + "!" })) };
+  const overrides = { edges, nodes: new Map([[map.id, mapped]]) };
+  assert.deepEqual(staticFanoutContent(doc, fan.id, overrides), mapped);
+  assert.equal(doc.nodes.some(node => node.generatedBy), false);
+  map.config!.mode = "ai";
+  assert.equal(createStaticResolver(doc, { edges }).inputs(fan.id).state, "needs-ai");
+  assert.equal(staticFanoutContent(doc, fan.id, { edges }), undefined);
+  const agent = newNode("agent", 0, 0);
+  doc.nodes.push(agent);
+  const unrelated = newEdge(agent.id, fan.id, "continuation");
+  unrelated.trigger = "off";
+  doc.edges.push(unrelated);
+  assert.equal(createStaticResolver(doc, { edges }).inputs(fan.id).state, "needs-ai");
+  unrelated.trigger = "auto";
+  assert.equal(createStaticResolver(doc, { edges }).inputs(fan.id).state, "dynamic");
+});
+
+test("preview is bounded to six physical rows for list items, multiline strings and JSON", () => {
+  const list = contentList(["a\nb", { x: "q\nz" }, "c", "d", "e", "f", "g", 8, 9], 8);
+  assert.deepEqual(previewLines(list), { lines: ["a\\nb", '{"x":"q\\nz"}', "c", "d", "e", "f"], count: 8, remaining: 2, originalCount: 9 });
+  const multiline = previewLines({ dataType: "text", value: "a\r\nb\nc\nd\ne\nf\ng\n" });
+  assert.deepEqual(multiline, { lines: ["a","b","c","d","e","f"], count: 7, remaining: 1 });
+  const json = previewLines({ dataType: "record", value: { nested: ["a","b","c","d","e","f","g"] } });
+  assert.equal(json.lines.length, 6);
+  assert.ok(json.remaining > 0);
+  assert.equal(previewLines({ dataType: "text", value: "x".repeat(100000) }).lines[0].length, 512);
+  assert.deepEqual(previewLines(contentList([])), { lines: [], count: 0, remaining: 0 });
+});

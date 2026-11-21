@@ -115,22 +115,32 @@ export function indexNodes(nodes: FlowNode[]) {
 function indexSnapshot(snapshot: FlowspaceSnapshot | null) {
   const live = new Map(snapshot?.live.map(item => [item.nodeId, item]));
   const steps = new Map<string, RunStep[]>();
+  const missingEmissions = new Map<string, { runId: string; step: RunStep }>();
   const waiting = new Map<string, { run: FlowspaceRun; token: FlowToken }[]>();
+  const waitingByEdge = new Map<string, { run: FlowspaceRun; token: FlowToken }>();
   const tokens = new Map<string, FlowToken[]>();
+  const latestToken = new Map<string, FlowToken>();
   const consumed = new Set<string>();
   const runningConsumed = new Set<string>();
   for (const run of snapshot?.runs ?? []) {
     const active = ["running", "waiting", "paused"].includes(run.state);
     const edges = active ? byId(run.graph.edges) : undefined;
-    for (const step of run.steps) append(steps, step.nodeId, step);
+    for (const step of run.steps) {
+      append(steps, step.nodeId, step);
+      if (step.emission?.missing && !step.emission.reminderStepId && !["cancelled", "interrupted", "paused"].includes(run.state))
+        missingEmissions.set(step.nodeId, { runId: run.id, step });
+    }
     for (const token of run.tokens) {
+      latestToken.set(token.edgeId, token);
       if (active) append(tokens, token.edgeId, token);
       if (token.consumed) {
         consumed.add(token.edgeId);
         if (run.state === "running") runningConsumed.add(token.edgeId);
-      } else if (active && !token.ready && !token.dismissed) {
+      } else if (active && !token.ready && !token.dismissed && (!token.delayUntil || token.needsRelease)) {
+        const gate = { run, token };
+        if (!waitingByEdge.has(token.edgeId)) waitingByEdge.set(token.edgeId, gate);
         const target = edges?.get(token.edgeId)?.target;
-        if (target) append(waiting, target, { run, token });
+        if (target) append(waiting, target, gate);
       }
     }
   }
@@ -143,7 +153,7 @@ function indexSnapshot(snapshot: FlowspaceSnapshot | null) {
       : steps.get(node.id)?.at(-1)?.state ?? (node.sessionId && hasHistory ? "completed" : "draft");
     statuses.set(node.id, status);
   }
-  return { live, steps, waiting, tokens, consumed, runningConsumed, statuses };
+  return { live, steps, missingEmissions, waiting, waitingByEdge, tokens, latestToken, consumed, runningConsumed, statuses };
 }
 
 const indexes = new WeakMap<FlowspaceSnapshot, ReturnType<typeof indexSnapshot>>();

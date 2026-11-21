@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   emptyDocument,
   newEdge,
+  newFlowNode,
   newNode,
   sanitizeDocumentForWire,
 } from "../src/core/document.ts";
@@ -11,6 +12,7 @@ import {
   LOD_ZOOM,
   alignedWireDropPosition,
   comfortableFit,
+  endpoint,
   groupBox,
   nodeBox,
   portY,
@@ -81,6 +83,22 @@ test("Wave 2B: wire-drop placement keeps a horizontal continuation at 0px vertic
   const target = { ...newNode("agent", pos.x, pos.y, "Target") };
   assert.equal(pos.y + portY(target, "continuation", false), sourcePortY);
   assert.ok(pos.x >= sourceBox.x + sourceBox.w + 56, "lands right of source");
+});
+
+test("merge item and list sockets stay individually selectable in both levels of detail", () => {
+  const doc = emptyDocument();
+  const merge = newFlowNode("flowspace/merge-sort", 250, 300);
+  doc.nodes.push(merge);
+  for (const compact of [false, true]) {
+    const ordinary = endpoint(doc, merge.id, "continuation", "in", compact, undefined, undefined, "in");
+    const list = endpoint(doc, merge.id, "continuation", "in", compact, undefined, undefined, "list");
+    assert.equal(ordinary.x, list.x);
+    assert.ok(list.y - ordinary.y >= 28);
+    assert.equal(list.y - list.box.y, portY(merge, "continuation", compact, "list", 0, list.box.h, "in"));
+    const fan = newFlowNode("flowspace/fanout", 0, 0);
+    assert.notEqual(portY(fan, "reference", compact, "in", 0, undefined, "in"),
+      portY(fan, "continuation", compact, "in", 0, undefined, "in"));
+  }
 });
 
 test("Wave 2B: subgraph paste and fork drafts stay runtime-free and Host-valid", () => {

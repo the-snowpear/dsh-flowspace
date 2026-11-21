@@ -13,6 +13,9 @@ import type {
   NodeKind,
   WorkflowTemplate,
 } from "../types.ts";
+import { canConnect } from "../core/connect.ts";
+import { newFlowNode, newNode } from "../core/document.ts";
+import { listDescriptors } from "../core/nodes/registry.ts";
 import { getLanguage, t } from "./i18n.ts";
 import { Icon } from "./icons.tsx";
 import { allTemplates } from "./templates.ts";
@@ -20,20 +23,25 @@ import { allTemplates } from "./templates.ts";
 const useClientLayoutEffect =
   typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
-export type QuickCreateCategory = "all" | "nodes" | "tools" | "blueprints";
+export type QuickCreateCategory = "all" | "nodes" | "logic" | "data" | "tools" | "blueprints";
 
 export interface WireDropContext {
-  portKind: "reference" | "continuation";
+  portKind: FlowEdge["kind"];
   direction: "out" | "in";
+  portId?: string;
+  sourceItemKey?: string;
+  nodeIds?: string[];
   sourceNode?: FlowNode;
   targetNode?: FlowNode;
   worldPoint?: { x: number; y: number };
 }
 
 export type QuickCreateSelection =
+  | { action: "create-fanout" }
   | {
       action: "create-node";
       nodeKind: NodeKind;
+      flowType?: string;
       nodePatch?: Partial<FlowNode>;
       edgePatch?: Partial<FlowEdge>;
     }
@@ -102,6 +110,16 @@ export function QuickCreateMenu({
   );
 
   const entries = useMemo<QuickCreateEntry[]>(() => {
+    const flowEntries: QuickCreateEntry[] = listDescriptors()
+      .filter(d => wireContext ? wireContext.direction === "out" &&
+        (wireContext.portKind === "continuation" ? d.quickCreate.afterContinuationOut : d.quickCreate.afterReferenceOut) : d.quickCreate.canvas)
+      .map(d => ({
+        id: d.flowType, label: t(d.titleKey), description: t(d.descKey), icon: d.icon,
+        category: d.family === "logic" || d.family === "data" ? d.family : "nodes",
+        selection: d.flowType === "flowspace/fanout"
+          ? { action: "create-fanout" }
+          : { action: "create-node", nodeKind: "flow", flowType: d.flowType },
+      }));
     /* Mode B: Wire-Drop Contextual Quick-Connect */
     if (wireContext) {
       const { portKind, direction } = wireContext;
@@ -206,7 +224,7 @@ export function QuickCreateMenu({
             },
           });
         }
-        return items;
+        return [...items, ...flowEntries];
       }
 
       if (portKind === "reference" && direction === "out") {
@@ -268,11 +286,13 @@ export function QuickCreateMenu({
             },
           });
         }
-        return items;
+        return [...items, ...flowEntries];
       }
 
       if (portKind === "continuation" && direction === "in") {
         return [
+          { id: "fan-in", label: t("flow_fanout"), description: t("flow_fanout_desc"), icon: "fanout",
+            category: "logic", selection: { action: "create-fanout" } },
           {
             id: "cont-in-upstream",
             label: t("qcUpstreamAgent"),
@@ -401,6 +421,14 @@ export function QuickCreateMenu({
         selection: { action: "create-team" },
       },
       {
+        id: "node-role",
+        label: t("newRole"),
+        description: t("newRoleDesc"),
+        icon: "person",
+        category: "nodes",
+        selection: { action: "create-node", nodeKind: "role" },
+      },
+      {
         id: "node-plan-agent",
         label: `${t("newAgent")} · ${t("planMode")}`,
         description: t("qcUpstreamPlanAgentDesc"),
@@ -478,6 +506,7 @@ export function QuickCreateMenu({
       },
     ];
 
+    list.push(...flowEntries);
     for (const tpl of templates) {
       list.push({
         id: `tpl-${tpl.id}`,
@@ -492,9 +521,43 @@ export function QuickCreateMenu({
     return list;
   }, [wireContext, allowExistingSession, templates]);
 
+  const compatibleEntries = useMemo(() => {
+    if (!wireContext) return entries;
+    const { direction, sourceNode, targetNode, portKind, portId } = wireContext;
+    const fixed = direction === "out" ? sourceNode : targetNode;
+    const ids = wireContext.nodeIds ?? (fixed ? [fixed.id] : []);
+    const anchors = doc.nodes.filter(node => ids.includes(node.id));
+    const accepts = (candidate: FlowNode, patch: Partial<FlowEdge> = {}) => anchors.some(anchor => {
+      const ends = direction === "out"
+        ? { source: anchor, target: candidate, sourcePort: portId }
+        : { source: candidate, target: anchor, targetPort: portId };
+      return canConnect({ ...patch, ...ends, kind: patch.kind ?? portKind, edges: doc.edges }).ok;
+    });
+    return entries.filter(({ selection }) => {
+      if (selection.action === "create-fanout") return direction === "out"
+        ? accepts(newFlowNode("flowspace/fanout", 0, 0), { targetPort: "in" })
+        : accepts(newFlowNode("flowspace/merge-sort", 0, 0), { sourcePort: "out" });
+      if (selection.action === "create-node") {
+        const candidate = selection.flowType ? newFlowNode(selection.flowType, 0, 0, getLanguage()) : newNode(selection.nodeKind, 0, 0);
+        return accepts({ ...candidate, ...selection.nodePatch }, selection.edgePatch);
+      }
+      if (selection.action === "existing-session")
+        return accepts(newNode("agent", 0, 0));
+      if (selection.action === "instantiate-template") {
+        const template = selection.template;
+        const entry = template.ports.find(p => p.direction === "in" && !p.hidden && p.kind === portKind);
+        if (entry) return template.nodes.some(n => (entry.nodes.includes(n.id) ||
+          (n.templateSlotId && entry.nodes.includes(n.templateSlotId))) && accepts(n, { ...selection.edgePatch, targetPort: entry.portId }));
+        // Instantiation infers default continuation inputs from the template's roots.
+        return portKind === "continuation" && template.nodes.some(n => n.kind === "agent" && accepts(n, selection.edgePatch));
+      }
+      return true;
+    });
+  }, [doc, entries, wireContext]);
+
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return entries.filter((item) => {
+    return compatibleEntries.filter((item) => {
       if (category !== "all" && item.category !== category) return false;
       if (!needle) return true;
       const haystack = `${item.label} ${item.description ?? ""} ${item.badge ?? ""}`.toLowerCase();
@@ -502,7 +565,7 @@ export function QuickCreateMenu({
         .split(/\s+/)
         .every((tok) => haystack.includes(tok));
     });
-  }, [entries, category, query]);
+  }, [compatibleEntries, category, query]);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -575,11 +638,10 @@ export function QuickCreateMenu({
         })
     : t("quickCreateTitle");
 
-  const availableCategories: QuickCreateCategory[] = wireContext
-    ? entries.some((e) => e.category === "blueprints")
-      ? ["all", "nodes", "blueprints"]
-      : ["all"]
-    : ["all", "nodes", "tools", "blueprints"];
+  const availableCategories: QuickCreateCategory[] = ["all"];
+  for (const group of ["nodes", "logic", "data", "tools", "blueprints"] as const) {
+    if (compatibleEntries.some(e => e.category === group)) availableCategories.push(group);
+  }
 
   return (
     <div
@@ -727,6 +789,8 @@ export function QuickCreateMenu({
                 {
                   all: "catAll",
                   nodes: "catNodes",
+                  logic: "flow_qc_logic",
+                  data: "flow_qc_data",
                   tools: "catTools",
                   blueprints: "catBlueprints",
                 }[cat],

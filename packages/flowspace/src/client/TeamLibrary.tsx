@@ -1,8 +1,8 @@
-import { useId, useRef, useState, type ReactNode } from "react";
-import type { FlowspaceSnapshot, RoleDefinition, TeamBlueprint, TeamModel } from "../types.ts";
+import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import type { FlowspaceSnapshot, RoleDefinition, TeamBlueprint, TeamModel, TeamSlot } from "../types.ts";
 import type { CanvasBridge } from "./bridge.ts";
 import { TeamAssetEditor, newTeamAsset, type TeamAsset } from "./TeamAssetEditor.tsx";
-import { TeamMark, TeamSwitch } from "./TeamControls.tsx";
+import { AvatarStack, ModelChip, TeamAvatar, TeamMark, TeamSwitch, hueStyle, modelTitle, useFlip, useSlidingIndicator } from "./TeamControls.tsx";
 import { Icon } from "./icons.tsx";
 import { t } from "./i18n.ts";
 
@@ -20,6 +20,7 @@ export function TeamLibrary({ bridge, snapshot }: { bridge: CanvasBridge; snapsh
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const directoryId = useId();
   const detailTitle = useRef<HTMLHeadingElement>(null);
+  const list = useRef<HTMLDivElement>(null);
   const isTeam = kind === "team";
   const assets = isTeam
     ? teams.map((value): TeamAsset => ({ kind: "team", value }))
@@ -30,6 +31,11 @@ export function TeamLibrary({ bridge, snapshot }: { bridge: CanvasBridge; snapsh
   const selected = visible.find(({ value }) => value.id === selectedId) ?? visible[0];
   const needsRole = isTeam && !roles.some((role) => !role.archived);
   const newLabel = t(isTeam ? "teamNewBlueprint" : "teamNewRole");
+  const roleById = new Map(roles.map((role) => [role.id, role]));
+  const slotModel = (slot: TeamSlot) => slot.model ?? roleById.get(slot.roleId)?.model;
+
+  useSlidingIndicator(list, '[aria-pressed="true"]', [selected?.value.id, kind, visible.length, search, showArchived]);
+  useFlip(list, [kind, visible.map(({ value }) => value.id).join()]);
 
   function navigate(next: Kind, id?: string, archived = false) {
     setKind(next);
@@ -47,6 +53,8 @@ export function TeamLibrary({ bridge, snapshot }: { bridge: CanvasBridge; snapsh
     setEditor(undefined);
   }
 
+  const count = (items: { archived?: boolean }[]) => items.filter((item) => !item.archived).length;
+
   return (
     <div className="fs-team-library">
       <aside className="fs-team-directory" aria-label={t("teamDirectory")} data-open={directoryOpen}>
@@ -56,53 +64,65 @@ export function TeamLibrary({ bridge, snapshot }: { bridge: CanvasBridge; snapsh
           <span>{t(isTeam ? "teamBlueprints" : "teamRoles")}</span><Icon name="chev" />
         </button>
         <div id={directoryId} className="fs-team-directory-body">
-        <TeamSwitch<Kind> label={t("teamDirectory")} value={kind} onChange={(next) => navigate(next)}
-          choices={[{ value: "team", label: t("teamBlueprints"), icon: "team" }, { value: "role", label: t("teamRoles"), icon: "person" }]} />
-        <div className="fs-team-directory-tools">
-          <label className="fs-team-search">
-            <Icon name="search" />
-            <input type="search" aria-label={t(isTeam ? "teamSearchBlueprint" : "teamSearchRole")}
-              placeholder={t(isTeam ? "teamSearchBlueprint" : "teamSearchRole")} value={query}
-              onChange={(event) => setQuery(event.target.value)} />
+          <TeamSwitch<Kind> label={t("teamDirectory")} value={kind} onChange={(next) => navigate(next)}
+            choices={[
+              { value: "team", label: t("teamBlueprints"), icon: "team", badge: count(teams) || "" },
+              { value: "role", label: t("teamRoles"), icon: "person", badge: count(roles) || "" },
+            ]} />
+          <div className="fs-team-directory-tools">
+            <label className="fs-team-search">
+              <Icon name="search" />
+              <input type="search" aria-label={t(isTeam ? "teamSearchBlueprint" : "teamSearchRole")}
+                placeholder={t(isTeam ? "teamSearchBlueprint" : "teamSearchRole")} value={query}
+                onChange={(event) => setQuery(event.target.value)} />
+            </label>
+            <button type="button" className="fs-team-add" title={needsRole ? t("teamNeedsRole") : newLabel}
+              aria-label={newLabel} disabled={needsRole} onClick={() => setEditor(newTeamAsset(kind))}><Icon name="plus" /></button>
+          </div>
+          <div ref={list} className="fs-team-asset-list fs-indicator-host">
+            {visible.map((item) => (
+              <button type="button" key={item.value.id} data-flip={item.value.id}
+                aria-pressed={selected?.value.id === item.value.id} data-archived={item.value.archived || undefined}
+                className="fs-team-asset-row" title={item.value.title} onClick={() => {
+                  if (directoryOpen) navigate(kind, item.value.id);
+                  else setSelectedId(item.value.id);
+                }}>
+                {item.kind === "team"
+                  ? <TeamAvatar variant="team" label={item.value.title} model={item.value.lead.model} />
+                  : <TeamAvatar label={item.value.title} seed={item.value.id} model={item.value.model} />}
+                <span className="fs-team-row-copy">
+                  <strong className="user-content">{item.value.title || t("teamUntitled")}</strong>
+                  <small>{item.value.archived ? t("teamArchived") : item.kind === "team"
+                    ? t("teamSlotCount", { count: item.value.slots.length }) : item.value.model.model}</small>
+                </span>
+                {item.kind === "team" && <AvatarStack max={3} items={item.value.slots.map((slot) =>
+                  ({ key: slot.slotId, label: slot.label, model: slotModel(slot) }))} />}
+              </button>
+            ))}
+          </div>
+          <label className="fs-team-archive-filter">
+            <input type="checkbox" role="switch" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
+            <Icon name="archive" />{t("teamShowArchived")}<i aria-hidden="true" />
           </label>
-          <button type="button" className="icon-button fs-team-add" title={needsRole ? t("teamNeedsRole") : newLabel}
-            aria-label={newLabel} disabled={needsRole} onClick={() => setEditor(newTeamAsset(kind))}><Icon name="plus" /></button>
-        </div>
-        <div className="fs-team-asset-list">
-          {visible.map((item) => (
-            <button type="button" key={item.value.id} aria-pressed={selected?.value.id === item.value.id}
-              className="fs-team-asset-row" title={item.value.title} onClick={() => {
-                if (directoryOpen) navigate(kind, item.value.id);
-                else setSelectedId(item.value.id);
-              }}>
-              <TeamMark icon={isTeam ? "team" : "person"} />
-              <span className="fs-team-row-copy">
-                <strong className="user-content">{item.value.title}</strong>
-                <small>{item.value.archived ? t("teamArchived") : item.kind === "team"
-                  ? t("teamSlotCount", { count: item.value.slots.length }) : item.value.model.model}</small>
-              </span>
-              <Icon name="chev" />
-            </button>
-          ))}
-        </div>
-        <label className="fs-team-archive-filter">
-          <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
-          <Icon name="archive" />{t("teamShowArchived")}<i aria-hidden="true" />
-        </label>
         </div>
       </aside>
       <section className="fs-team-detail" aria-label={t(isTeam ? "teamBlueprint" : "teamRole")}>
         {selected ? <div className="fs-team-detail-content" key={kind + selected.value.id}>
-          <header className="fs-team-detail-heading">
-            <div>
+          <header className="fs-team-hero">
+            {selected.kind === "team"
+              ? <TeamAvatar variant="team" size="lg" label={selected.value.title} model={selected.value.lead.model} />
+              : <TeamAvatar size="lg" label={selected.value.title} seed={selected.value.id} model={selected.value.model} />}
+            <div className="fs-team-hero-copy">
               <div className="fs-team-byline">
-                {t(isTeam ? "teamBlueprint" : "teamRole")}<i aria-hidden="true" />
-                <span>{t("teamRevision", { revision: selected.value.revision })}</span>
-                {selected.value.archived && <span>{t("teamArchived")}</span>}
+                <span>{t(isTeam ? "teamBlueprint" : "teamRole")}</span>
+                <span className="fs-team-rev">v{selected.value.revision}</span>
+                {selected.value.archived && <span className="fs-team-tag">{t("teamArchived")}</span>}
               </div>
-              <h2 ref={detailTitle} tabIndex={-1} className="user-content">{selected.value.title}</h2>
+              <h2 ref={detailTitle} tabIndex={-1} className="user-content">{selected.value.title || t("teamUntitled")}</h2>
+              {selected.kind === "role" && selected.value.description &&
+                <p className="user-content">{selected.value.description}</p>}
             </div>
-            {!selected.value.archived && <button type="button" className="button" onClick={() => setEditor(selected)}>
+            {!selected.value.archived && <button type="button" className="button fs-team-hero-action" onClick={() => setEditor(selected)}>
               <Icon name="edit" />{t(isTeam ? "teamEditBlueprint" : "teamEditRole")}
             </button>}
           </header>
@@ -114,7 +134,7 @@ export function TeamLibrary({ bridge, snapshot }: { bridge: CanvasBridge; snapsh
           <TeamMark icon={search ? "search" : isTeam ? "team" : "person"} />
           <h2>{t(search ? "teamNoMatch" : isTeam ? "teamEmptyBlueprints" : "teamEmptyRoles")}</h2>
           {!search && <p>{t(needsRole ? "teamNeedsRole" : isTeam ? "teamEmptyBlueprintHint" : "teamEmptyRoleHint")}</p>}
-          <button type="button" className="button" onClick={() => search ? setQuery("") : setEditor(newTeamAsset(needsRole ? "role" : kind))}>
+          <button type="button" className="button button-primary" onClick={() => search ? setQuery("") : setEditor(newTeamAsset(needsRole ? "role" : kind))}>
             <Icon name={search ? "x" : "plus"} />{search ? t("teamClearSearch") : needsRole ? t("teamNewRole") : newLabel}
           </button>
         </div>}
@@ -124,14 +144,97 @@ export function TeamLibrary({ bridge, snapshot }: { bridge: CanvasBridge; snapsh
   );
 }
 
-function ModelName({ model }: { model: TeamModel }) {
-  return <span className="fs-team-model-name">
-    <span>{model.provider}</span> / {model.model}{model.reasoningEffort && " · " + model.reasoningEffort}
-  </span>;
+function Prose({ children }: { children?: string }) {
+  return children?.trim()
+    ? <p className="fs-team-prose user-content">{children}</p>
+    : <p className="fs-team-prose fs-team-muted">{t("teamNoInstructions")}</p>;
 }
 
-function Fact({ label, children }: { label: string; children?: ReactNode }) {
-  return <div><dt>{label}</dt><dd className="user-content">{children || <span className="fs-team-muted">{t("teamNoInstructions")}</span>}</dd></div>;
+function Fact({ label, children, wide }: { label: string; children?: ReactNode; wide?: boolean }) {
+  return <div className="fs-team-fact" data-wide={wide || undefined}><dt>{label}</dt>
+    <dd className="user-content">{children ?? <span className="fs-team-muted">{t("teamNoInstructions")}</span>}</dd></div>;
+}
+
+function OrgChart({ team, roles, focus, onFocus }: {
+  team: TeamBlueprint; roles: RoleDefinition[]; focus?: string; onFocus: (slotId?: string) => void;
+}) {
+  const frame = useRef<HTMLDivElement>(null);
+  const [paths, setPaths] = useState<{ id: string; d: string }[]>([]);
+  const [hot, setHot] = useState<string>();
+  const roleById = new Map(roles.map((role) => [role.id, role]));
+  const layout = team.slots.map((slot) => slot.slotId).join();
+
+  useLayoutEffect(() => {
+    const root = frame.current;
+    if (!root) return;
+    const measure = () => {
+      const box = root.getBoundingClientRect();
+      const lead = root.querySelector<HTMLElement>("[data-org-lead]")?.getBoundingClientRect();
+      if (!lead || !box.width) return;
+      const stacked = getComputedStyle(root).getPropertyValue("--org-stacked").trim() === "1";
+      setPaths(Array.from(root.querySelectorAll<HTMLElement>("[data-org-slot]")).map((node) => {
+        const slot = node.getBoundingClientRect();
+        if (stacked) {
+          const x = lead.left - box.left + 22;
+          const y1 = lead.bottom - box.top;
+          const y2 = slot.top - box.top + slot.height / 2;
+          const x2 = slot.left - box.left;
+          return { id: node.dataset.orgSlot!, d: `M ${x} ${y1} V ${y2 - 10} Q ${x} ${y2} ${x + 10} ${y2} H ${x2}` };
+        }
+        const x1 = lead.right - box.left;
+        const y1 = lead.top - box.top + lead.height / 2;
+        const x2 = slot.left - box.left;
+        const y2 = slot.top - box.top + slot.height / 2;
+        const mid = (x1 + x2) / 2;
+        return { id: node.dataset.orgSlot!, d: `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}` };
+      }));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [layout]);
+
+  const lit = hot ?? focus;
+  return (
+    <div ref={frame} className="fs-org" data-lit={lit ? "slot" : "lead"} style={{ "--slots": team.slots.length } as CSSProperties}>
+      <svg className="fs-org-wires" aria-hidden="true">
+        {paths.map((path, index) => {
+          const slot = team.slots.find((item) => item.slotId === path.id);
+          const model = slot?.model ?? roleById.get(slot?.roleId ?? "")?.model;
+          return <path key={path.id} d={path.d} pathLength={1} data-lit={lit === path.id || !lit || undefined}
+            style={hueStyle(model, { "--i": index } as CSSProperties)} />;
+        })}
+      </svg>
+      <button type="button" data-org-lead className="fs-org-node fs-org-lead" aria-pressed={!focus}
+        style={hueStyle(team.lead.model)} onClick={() => onFocus(undefined)}>
+        <TeamAvatar variant="lead" label={t("teamLead")} model={team.lead.model} />
+        <span className="fs-team-row-copy"><strong>{t("teamLead")}</strong><ModelChip model={team.lead.model} quiet /></span>
+      </button>
+      <ul className="fs-org-slots">
+        {team.slots.map((slot, index) => {
+          const role = roleById.get(slot.roleId);
+          const model = slot.model ?? role?.model;
+          return <li key={slot.slotId} style={{ "--i": index } as CSSProperties}>
+            <button type="button" data-org-slot={slot.slotId} className="fs-org-node" aria-pressed={slot.slotId === focus}
+              style={hueStyle(model)} onClick={() => onFocus(slot.slotId === focus ? undefined : slot.slotId)}
+              onPointerEnter={() => setHot(slot.slotId)} onPointerLeave={() => setHot(undefined)}
+              onFocus={() => setHot(slot.slotId)} onBlur={() => setHot(undefined)}>
+              <TeamAvatar label={slot.label} seed={slot.slotId} model={model} />
+              <span className="fs-team-row-copy">
+                <strong className="user-content">{slot.label}</strong>
+                <small className="user-content">{role?.title ?? slot.roleId}</small>
+              </span>
+              <span className="fs-org-meta">
+                <ModelChip model={model} quiet />
+                {(slot.maxInstances ?? 1) > 1 && <span className="fs-team-tag" title={t("teamMaxInstances")}>×{slot.maxInstances}</span>}
+              </span>
+            </button>
+          </li>;
+        })}
+      </ul>
+    </div>
+  );
 }
 
 function BlueprintOverview({ team, roles, snapshot, onRole }: {
@@ -140,7 +243,7 @@ function BlueprintOverview({ team, roles, snapshot, onRole }: {
   const [slotId, setSlotId] = useState<string>();
   const slot = team.slots.find((item) => item.slotId === slotId);
   const role = roles.find((item) => item.id === slot?.roleId);
-  const slotModel = slot?.model ?? role?.model;
+  const slotModel: TeamModel | undefined = slot?.model ?? role?.model;
   const running = new Set(Object.values(snapshot?.teams ?? {}).filter((runtime) =>
     runtime.teamId === team.id && (snapshot?.live.some((node) => node.sessionId === runtime.leadSessionId && node.running) ||
       snapshot?.runs.some((run) => run.steps.some((step) => step.sessionId === runtime.leadSessionId &&
@@ -149,40 +252,37 @@ function BlueprintOverview({ team, roles, snapshot, onRole }: {
   return <>
     <figure className="fs-team-map">
       <figcaption><span><Icon name="team" />{t("teamStructure")}</span><small>{t("teamSlotCount", { count: team.slots.length })}</small></figcaption>
-      <div className="fs-team-branches">
-        <button type="button" className="fs-team-map-node fs-team-map-lead" aria-pressed={!slot} onClick={() => setSlotId(undefined)}>
-          <TeamMark icon="lead" /><span className="fs-team-row-copy"><strong>{t("teamLead")}</strong><small>{team.lead.model.model}</small></span>
-        </button>
-        <ul>{team.slots.map((item) => {
-          const model = item.model ?? roles.find((role) => role.id === item.roleId)?.model;
-          return <li key={item.slotId} data-selected={item.slotId === slot?.slotId}>
-            <button type="button" className="fs-team-map-node" aria-pressed={item.slotId === slot?.slotId} onClick={() => setSlotId(item.slotId)}>
-              <TeamMark icon="person" /><span className="fs-team-row-copy"><strong className="user-content">{item.label}</strong>
-                {model && <small>{model.model}</small>}</span>
-            </button>
-          </li>;
-        })}</ul>
-      </div>
+      <OrgChart team={team} roles={roles} focus={slot?.slotId} onFocus={setSlotId} />
     </figure>
-    <div className="fs-team-focus" data-slot={!!slot} key={slot?.slotId ?? "lead"}>
-      <div className="fs-team-section-heading"><h3>{slot ? t("teamSlotDetails") : t("teamLead")}</h3>
+    <section className="fs-team-card fs-team-inspector" key={slot?.slotId ?? "lead"} style={hueStyle(slot ? slotModel : team.lead.model)}>
+      <header>
+        {slot ? <TeamAvatar label={slot.label} seed={slot.slotId} model={slotModel} size="sm" /> : <TeamAvatar variant="lead" label={t("teamLead")} model={team.lead.model} size="sm" />}
+        <div className="fs-team-row-copy">
+          <strong className="user-content">{slot ? slot.label : t("teamLead")}</strong>
+          <small>{slot ? t("teamSlotDetails") : t("teamLeadDuty")}</small>
+        </div>
         {role && <button type="button" className="text-button" onClick={() => onRole(role)}>{t("teamOpenRole")}<Icon name="chev" /></button>}
-      </div>
+      </header>
       <dl className="fs-team-facts">
         {slot ? <>
           <Fact label={t("teamRole")}>{role?.title ?? slot.roleId}</Fact>
-          <Fact label={t("teamSlotId")}>{slot.slotId}</Fact>
-          <Fact label={t("teamModel")}>{slotModel && <ModelName model={slotModel} />}</Fact>
+          <Fact label={t("teamModel")}>{slotModel && <span className="fs-team-fact-model"><ModelChip model={slotModel} />
+            {slot.model && <span className="fs-team-tag">{t("teamOverrideModel")}</span>}</span>}</Fact>
+          <Fact label={t("teamSlotId")}><code>{slot.slotId}</code></Fact>
           <Fact label={t("teamMaxInstances")}>{slot.maxInstances ?? 1}</Fact>
+          {role && <Fact label={t("teamResponsibility")} wide>{role.description || undefined}</Fact>}
         </> : <>
-          <Fact label={t("teamLeadModel")}><ModelName model={team.lead.model} /></Fact>
-          <Fact label={t("teamLeadPersona")}>{team.lead.persona}</Fact>
+          <Fact label={t("teamLeadModel")}><span title={modelTitle(team.lead.model)}><ModelChip model={team.lead.model} /></span></Fact>
+          <Fact label={t("teamLeadPersona")} wide>{team.lead.persona || undefined}</Fact>
         </>}
       </dl>
-    </div>
-    <div className="fs-team-notes"><h3>{t("teamNorms")}</h3><p className="user-content">{team.norms || t("teamNoInstructions")}</p></div>
+    </section>
+    <section className="fs-team-card fs-team-notes">
+      <h3><Icon name="note" />{t("teamNorms")}</h3>
+      <Prose>{team.norms}</Prose>
+    </section>
     <p className="fs-team-revision-note"><Icon name="clock" /><span>
-      {running.size > 0 && t("teamRunningRevisions", { revisions: [...running].map((rev) => "v" + rev).join(", ") }) + " · "}
+      {running.size > 0 && <b>{t("teamRunningRevisions", { revisions: [...running].map((rev) => "v" + rev).join(", ") })}</b>}
       {t("teamRevisionHint")}
     </span></p>
   </>;
@@ -193,22 +293,25 @@ function RoleOverview({ role, teams, onTeam }: {
 }) {
   const usedBy = teams.filter((team) => team.slots.some((slot) => slot.roleId === role.id));
   return <>
-    <div className="fs-team-role-profile">
-      <TeamMark icon="person" />
-      <div><h3>{t("teamResponsibility")}</h3><p className="user-content">{role.description || t("teamNoInstructions")}</p></div>
-    </div>
-    <dl className="fs-team-facts">
-      <Fact label={t("teamModel")}><ModelName model={role.model} /></Fact>
-      <Fact label={t("teamPersona")}>{role.persona}</Fact>
-    </dl>
-    <div className="fs-team-notes">
-      <h3>{t("teamRoleUsedIn")}</h3>
+    <section className="fs-team-card" style={hueStyle(role.model)}>
+      <dl className="fs-team-facts">
+        <Fact label={t("teamModel")}><ModelChip model={role.model} /></Fact>
+        <Fact label={t("teamResponsibility")}>{role.description || undefined}</Fact>
+      </dl>
+    </section>
+    <section className="fs-team-card fs-team-notes">
+      <h3><Icon name="person" />{t("teamPersona")}</h3>
+      <Prose>{role.persona}</Prose>
+    </section>
+    <section className="fs-team-card fs-team-notes">
+      <h3><Icon name="team" />{t("teamRoleUsedIn")}</h3>
       {usedBy.length ? <div className="fs-team-related">{usedBy.map((team) => (
-        <button type="button" className="fs-team-link-row" key={team.id} onClick={() => onTeam(team)}>
-          <Icon name="team" /><strong className="user-content">{team.title}</strong>
+        <button type="button" className="fs-team-pill" key={team.id} onClick={() => onTeam(team)}>
+          <TeamAvatar variant="team" size="xs" label={team.title} model={team.lead.model} />
+          <strong className="user-content">{team.title}</strong>
           {team.archived && <small>{t("teamArchived")}</small>}<Icon name="chev" />
         </button>
-      ))}</div> : <p>{t("teamRoleUnused")}</p>}
-    </div>
+      ))}</div> : <p className="fs-team-prose fs-team-muted">{t("teamRoleUnused")}</p>}
+    </section>
   </>;
 }

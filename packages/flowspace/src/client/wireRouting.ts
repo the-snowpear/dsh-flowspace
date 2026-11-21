@@ -1,4 +1,4 @@
-import type { Waypoint as Point, WireRoutingMode } from "../types.ts";
+import type { FlowEdge, Waypoint as Point, WireRoutingMode } from "../types.ts";
 import type { Box } from "./geometry.ts";
 
 type WireEnd = Point & { box?: Box };
@@ -13,6 +13,10 @@ const CORNER_RADIUS = 16;
 const PORT_STUB = 24;
 const TURN_COST = 32;
 const MAX_SEARCH_STEPS = 384;
+const SEARCH_MOVES = [
+  { dx: 1, dy: 0, axis: 1 }, { dx: 0, dy: -1, axis: 2 },
+  { dx: 0, dy: 1, axis: 2 }, { dx: -1, dy: 0, axis: 1 },
+];
 const LABEL_HALF_WIDTH = 54;
 const LABEL_HALF_HEIGHT = 12;
 const COMPACT_LABEL_HALF_WIDTH = 24;
@@ -146,14 +150,90 @@ function boxDistance(point: Point, r: Rect): number {
 }
 
 interface SearchStep {
-  point: Point;
   col: number;
   row: number;
   axis: number;
   key: number;
   cost: number;
   estimate: number;
+  order: number;
   prev?: SearchStep;
+}
+
+// Preserve the search's tie order: lower estimate, then lower cost, then newest.
+function precedes(a: SearchStep, b: SearchStep): boolean {
+  return a.estimate < b.estimate || (a.estimate === b.estimate &&
+    (a.cost < b.cost || (a.cost === b.cost && a.order > b.order)));
+}
+
+function pushStep(heap: SearchStep[], next: SearchStep) {
+  let i = heap.length;
+  heap.push(next);
+  while (i > 0) {
+    const parent = (i - 1) >>> 1;
+    if (!precedes(next, heap[parent])) break;
+    heap[i] = heap[parent];
+    i = parent;
+  }
+  heap[i] = next;
+}
+
+function popStep(heap: SearchStep[]) {
+  const first = heap[0], tail = heap.pop()!;
+  if (!heap.length) return first;
+  let i = 0, child = 1;
+  while (child < heap.length) {
+    if (child + 1 < heap.length && precedes(heap[child + 1], heap[child])) child++;
+    if (!precedes(heap[child], tail)) break;
+    heap[i] = heap[child];
+    i = child;
+    child = 2 * i + 1;
+  }
+  heap[i] = tail;
+  return first;
+}
+
+function coordinateBound(coords: number[], value: number, after: boolean) {
+  let low = 0, high = coords.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (coords[mid] < value || (after && coords[mid] === value)) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+
+/** Mark the same strict rectangle intersections for every edge of a small grid. */
+function blockedEdges(xs: number[], ys: number[], obstacles: Rect[]) {
+  const stride = xs.length + 1;
+  const horizontal = new Int32Array(stride * (ys.length + 1));
+  const vertical = new Int32Array(horizontal.length);
+  function mark(grid: Int32Array, left: number, top: number, right: number, bottom: number) {
+    if (left >= right || top >= bottom) return;
+    grid[top * stride + left]++;
+    grid[top * stride + right]--;
+    grid[bottom * stride + left]--;
+    grid[bottom * stride + right]++;
+  }
+  for (const box of obstacles) {
+    if (box.left >= box.right || box.top >= box.bottom) continue;
+    const xStart = coordinateBound(xs, box.left, true), xEnd = coordinateBound(xs, box.right, false);
+    const yStart = coordinateBound(ys, box.top, true), yEnd = coordinateBound(ys, box.bottom, false);
+    mark(horizontal, Math.max(0, xStart - 1), yStart, Math.min(xs.length - 1, xEnd), yEnd);
+    mark(vertical, xStart, Math.max(0, yStart - 1), xEnd, Math.min(ys.length - 1, yEnd));
+  }
+  // Summing the corner marks gives the number of overlapping obstacles at each edge.
+  for (let y = 0, row = 0; y < ys.length; y++, row += stride) {
+    let across = 0, down = 0;
+    for (let x = 0; x < xs.length; x++) {
+      const index = row + x;
+      across += horizontal[index];
+      down += vertical[index];
+      horizontal[index] = y ? across + horizontal[index - stride] : across;
+      vertical[index] = y ? down + vertical[index - stride] : down;
+    }
+  }
+  return { horizontal, vertical, stride };
 }
 
 /** Search orthogonal corridors defined by nearby card sides. Bends have a fixed cost. */
@@ -162,76 +242,101 @@ function findDetour(
   leavesPort: boolean, entersPort: boolean, feedback: boolean,
 ): Point[] | undefined {
   const localMargin = 160;
-  const padded = obstacles.map((box) => {
+  const left = Math.min(start.x, finish.x) - localMargin;
+  const right = Math.max(start.x, finish.x) + localMargin;
+  const top = Math.min(start.y, finish.y) - localMargin;
+  const bottom = Math.max(start.y, finish.y) + localMargin;
+  const padded: Rect[] = [];
+  const columnsInRange = new Set([start.x, finish.x]);
+  const rowsInRange = new Set([start.y, finish.y]);
+  for (const box of obstacles) {
     const pad = Math.min(clearance, boxDistance(start, box), boxDistance(finish, box));
-    return { left: box.left - pad, right: box.right + pad, top: box.top - pad, bottom: box.bottom + pad };
-  });
-  const nearby = padded.filter((box) =>
-    box.right >= Math.min(start.x, finish.x) - localMargin &&
-    box.left <= Math.max(start.x, finish.x) + localMargin &&
-    box.bottom >= Math.min(start.y, finish.y) - localMargin &&
-    box.top <= Math.max(start.y, finish.y) + localMargin,
-  );
-  const xs = [...new Set([start.x, finish.x, ...nearby.flatMap((r) => [r.left, r.right])])].sort((a, b) => a - b);
-  const ys = [...new Set([start.y, finish.y, ...nearby.flatMap((r) => [r.top, r.bottom])])].sort((a, b) => a - b);
+    const rect = { left: box.left - pad, right: box.right + pad, top: box.top - pad, bottom: box.bottom + pad };
+    padded.push(rect);
+    if (rect.right < left || rect.left > right || rect.bottom < top || rect.top > bottom) continue;
+    columnsInRange.add(rect.left).add(rect.right);
+    rowsInRange.add(rect.top).add(rect.bottom);
+  }
+  const xs = [...columnsInRange].sort((a, b) => a - b);
+  const ys = [...rowsInRange].sort((a, b) => a - b);
   const feedbackY = (start.y + finish.y) / 2;
   const open: SearchStep[] = [];
-  const best = new Map<number, number>();
-  const rowBlockers = new Map<number, Rect[]>();
-  const columnBlockers = new Map<number, Rect[]>();
+  const cells = xs.length * ys.length;
+  const states = cells * 3;
+  // A regular grid is cheaper to address directly. Highly irregular diagrams
+  // only pay for states the bounded search actually visits.
+  const costs = states <= MAX_SEARCH_STEPS * 12 ? new Float64Array(states).fill(Infinity) : undefined;
+  const sparseCosts = costs ? undefined : new Map<number, number>();
+  const blocked = cells <= 4096 ? blockedEdges(xs, ys, padded) : undefined;
+  type Lane = { blockers: Rect[]; checked: Int8Array };
+  const rows: (Lane | undefined)[] = new Array(ys.length);
+  const columns: (Lane | undefined)[] = new Array(xs.length);
+  let order = 0;
 
-  function queue(col: number, row: number, axis: number, cost: number, point: Point, prev?: SearchStep) {
+  function queue(col: number, row: number, axis: number, cost: number, prev?: SearchStep) {
     const key = (row * xs.length + col) * 3 + axis;
-    if (cost >= (best.get(key) ?? Infinity)) return;
-    best.set(key, cost);
-    const estimate = cost + manhattan(point, finish);
-    let low = 0;
-    let high = open.length;
-    while (low < high) {
-      const mid = (low + high) >>> 1;
-      const other = open[mid];
-      if (other.estimate > estimate || (other.estimate === estimate && other.cost >= cost)) low = mid + 1;
-      else high = mid;
-    }
-    open.splice(low, 0, { col, row, axis, key, cost, estimate, point, prev });
+    if (cost >= (costs ? costs[key] : sparseCosts!.get(key) ?? Infinity)) return;
+    if (costs) costs[key] = cost;
+    else sparseCosts!.set(key, cost);
+    const estimate = cost + (Math.abs(xs[col] - finish.x) + Math.abs(ys[row] - finish.y));
+    pushStep(open, { col, row, axis, key, cost, estimate, prev, order: order++ });
   }
 
-  queue(xs.indexOf(start.x), ys.indexOf(start.y), leavesPort ? 1 : 0, 0, start);
-  const moves = [
-    { dx: 1, dy: 0, axis: 1 }, { dx: 0, dy: -1, axis: 2 },
-    { dx: 0, dy: 1, axis: 2 }, { dx: -1, dy: 0, axis: 1 },
-  ];
+  function crossesObstacle(horizontal: boolean, laneIndex: number, interval: number) {
+    const lanes = horizontal ? rows : columns;
+    const coords = horizontal ? xs : ys;
+    let lane = lanes[laneIndex];
+    if (!lane) {
+      const fixed = (horizontal ? ys : xs)[laneIndex];
+      const blockers = padded.filter(box => horizontal ? fixed > box.top && fixed < box.bottom : fixed > box.left && fixed < box.right);
+      lane = { blockers, checked: new Int8Array(coords.length) };
+      lanes[laneIndex] = lane;
+    }
+    // Both directions and both incoming axes share the same collision result.
+    if (!lane.checked[interval]) {
+      const lo = coords[interval], hi = coords[interval + 1];
+      lane.checked[interval] = 1;
+      for (const box of lane.blockers) {
+        const start = horizontal ? box.left : box.top;
+        const end = horizontal ? box.right : box.bottom;
+        if (Math.max(lo, start) < Math.min(hi, end)) {
+          lane.checked[interval] = -1;
+          break;
+        }
+      }
+    }
+    return lane.checked[interval] < 0;
+  }
+
+  const finalCol = xs.indexOf(finish.x), finalRow = ys.indexOf(finish.y);
+  queue(xs.indexOf(start.x), ys.indexOf(start.y), leavesPort ? 1 : 0, 0);
   for (let i = 0; i < MAX_SEARCH_STEPS && open.length; i++) {
-    const step = open.pop()!;
-    if (step.cost !== best.get(step.key)) continue;
-    if (manhattan(step.point, finish) === 0) {
+    const step = popStep(open);
+    if (step.cost !== (costs ? costs[step.key] : sparseCosts!.get(step.key))) continue;
+    if (step.col === finalCol && step.row === finalRow) {
       const points: Point[] = [];
       for (let current: SearchStep | undefined = step; current; current = current.prev) {
-        points.push(current.point);
+        points.push({ x: xs[current.col], y: ys[current.row] });
       }
       return points.reverse();
     }
-    for (const { dx, dy, axis } of moves) {
+    for (const { dx, dy, axis } of SEARCH_MOVES) {
       const col = step.col + dx;
       const row = step.row + dy;
       if (col < 0 || col >= xs.length || row < 0 || row >= ys.length) continue;
-      const next = { x: xs[col], y: ys[row] };
-      const atFinish = manhattan(next, finish) === 0;
+      const atFinish = col === finalCol && row === finalRow;
       if (dx < 0 && ((!step.prev && leavesPort) || (atFinish && entersPort))) continue;
-      const lanes = dx ? rowBlockers : columnBlockers;
-      const lane = dx ? next.y : next.x;
-      let blockers = lanes.get(lane);
-      if (!blockers) {
-        blockers = padded.filter(box => dx ? lane > box.top && lane < box.bottom : lane > box.left && lane < box.right);
-        lanes.set(lane, blockers);
-      }
-      if (blockers.some((box) => coveredSpan(step.point, next, box))) continue;
+      const interval = dx ? Math.min(col, step.col) : Math.min(row, step.row);
+      if (blocked) {
+        const count = dx ? blocked.horizontal[row * blocked.stride + interval] : blocked.vertical[interval * blocked.stride + col];
+        if (count > 0) continue;
+      } else if (crossesObstacle(Boolean(dx), dx ? row : col, interval)) continue;
       const bend = step.axis !== 0 && step.axis !== axis ? TURN_COST : 0;
       const lastBend = atFinish && entersPort && axis !== 1 ? TURN_COST : 0;
-      const length = manhattan(step.point, next);
+      const length = dx ? Math.abs(xs[col] - xs[step.col]) : Math.abs(ys[row] - ys[step.row]);
       // Give feedback loops space below the main chain when the detour is comparable.
-      const feedbackCost = feedback && dx < 0 && next.y < feedbackY ? length * 0.45 : 0;
-      queue(col, row, axis, step.cost + length + bend + lastBend + feedbackCost, next, step);
+      const feedbackCost = feedback && dx < 0 && ys[row] < feedbackY ? length * 0.45 : 0;
+      queue(col, row, axis, step.cost + length + bend + lastBend + feedbackCost, step);
     }
   }
 }
@@ -297,7 +402,7 @@ interface WireOptions {
   waypoints?: Point[];
   obstacles?: Box[];
   freeEnd?: boolean;
-  kind?: "reference" | "continuation";
+  kind?: FlowEdge["kind"];
   mode?: WireRoutingMode;
 }
 

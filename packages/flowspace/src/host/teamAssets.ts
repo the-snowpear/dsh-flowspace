@@ -2,8 +2,11 @@ import type { Context } from "@deepseek-ai/cordis";
 import type { LlmCallConfig } from "@deepseek-ai/dsh-llm";
 import type { Domain } from "@deepseek-ai/dsh-storage-domain";
 import { uid } from "../core/document.ts";
+import { canvasTeamId, slotIdFor, staffNodes } from "../core/team.ts";
 import type {
   ArchiveTeamAssetRequest,
+  FlowNode,
+  TeamSlot,
   RoleDefinition,
   SaveRoleRequest,
   SaveTeamRequest,
@@ -16,6 +19,7 @@ import type {
 import {
   archiveTeamAssetSchema,
   flowspaceDomain,
+  maxTeamSlots,
   saveRoleSchema,
   saveTeamSchema,
   teamDependenciesSchema,
@@ -23,7 +27,13 @@ import {
   type TeamSessionRecord,
 } from "./storage.ts";
 
-const modelKey = (model: TeamModel) => JSON.stringify([model.provider, model.model, model.reasoningEffort ?? ""]);
+type Roster = TeamSessionRecord["roster"];
+/** A roster whose lead may still take the new session's default model. */
+export type DraftRoster = Omit<Roster, "team"> & {
+  team: Omit<Roster["team"], "lead"> & { lead: { persona: string; model?: TeamModel } };
+};
+
+const modelKey =(model: TeamModel) => JSON.stringify([model.provider, model.model, model.reasoningEffort ?? ""]);
 
 function nextRevision(expected: number, current?: number): number {
   if (expected !== (current ?? 0)) throw new Error("版本已更新，请重新打开编辑。 / Revision changed. Reopen the editor.");
@@ -56,6 +66,50 @@ export class TeamAssets {
       if (!role) throw new Error(`找不到角色 / Role not found: ${id}`);
       return role;
     });
+    return { team, roles };
+  }
+
+  /**
+   * The roster a team node runs with: its library blueprint (or canvas lead
+   * settings) plus every role node wired into it. Without a lead model, the
+   * roster keeps `leadModel` so a new lead session can supply its default.
+   */
+  rosterForNode(node: FlowNode, nodes: readonly FlowNode[], leadModel?: TeamModel): DraftRoster {
+    if (node.kind !== "agent") throw new Error(`不是 Agent 节点 / Not an agent node: ${node.id}`);
+    const base = node.teamRef ? this.roster(node.teamRef.teamId) : undefined;
+    const roles = [...(base?.roles ?? [])];
+    const slots: TeamSlot[] = [...(base?.team.slots ?? [])];
+    const taken = new Set(slots.map((slot) => slot.slotId));
+    for (const staff of staffNodes(nodes, node.id)) {
+      const label = staff.title.trim() || "成员";
+      let role: RoleDefinition | undefined;
+      if (staff.roleRef) {
+        role = this.domain.table("roles").get(staff.roleRef);
+        if (!role) throw new Error(`找不到角色 / Role not found: ${staff.roleRef}`);
+      } else {
+        if (!staff.teamModel) throw new Error(`岗位「${label}」还没有选择模型 / Role "${label}" needs a model`);
+        role = {
+          id: `canvas-${staff.id}`, title: label, revision: 1, persona: staff.text, model: staff.teamModel,
+          description: staff.task.trim() || staff.text.split(/\r?\n/).find((line) => line.trim())?.trim() || label,
+        };
+      }
+      if (!roles.some((known) => known.id === role.id)) roles.push(role);
+      const slotId = staff.slotId && !taken.has(staff.slotId) ? staff.slotId : slotIdFor(label, taken);
+      taken.add(slotId);
+      slots.push({
+        slotId, roleId: role.id, label, nodeId: staff.id,
+        ...(staff.roleRef && staff.teamModel ? { model: staff.teamModel } : {}),
+        ...(staff.maxInstances ? { maxInstances: staff.maxInstances } : {}),
+      });
+    }
+    if (!slots.length) throw new Error("团队至少需要一个岗位：把岗位节点连到团队上。 / Wire at least one role node into the team.");
+    if (slots.length > maxTeamSlots) throw new Error(`团队最多 ${maxTeamSlots} 个岗位 / A team has at most ${maxTeamSlots} slots`);
+    const team = base
+      ? { ...base.team, slots }
+      : {
+          id: canvasTeamId(node.id), title: node.title, revision: 1, slots, norms: node.teamConfig?.norms ?? "",
+          lead: { persona: node.teamConfig?.persona ?? "", model: node.teamConfig?.model ?? leadModel },
+        };
     return { team, roles };
   }
 
@@ -140,7 +194,7 @@ export class TeamAssets {
         if (slot.model) models.push(slot.model);
       }
     }
-    return { additions, teamIds, missing: await this.missingModels(models) };
+    return { additions, teamIds, roleIds, missing: await this.missingModels(models) };
   }
 
   async addImported(assets: TeamDependencies): Promise<void> {

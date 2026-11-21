@@ -5,6 +5,16 @@
     "src/client/**/*.ts",
     "src/client/**/*.tsx",
     "src/types.ts",
-    "src/core/document.ts"
+    "src/core/board.ts",
+    "src/core/budget.ts",
+    "src/core/content.ts",
+    "src/core/fanout.ts",
+    "src/core/generation.ts",
+    "src/core/connect.ts",
+    "src/core/containers.ts",
+    "src/core/document.ts",
+    "src/core/graph.ts",
+    "src/core/nodes/**/*.ts",
+    "src/core/team.ts"
   ]
 }

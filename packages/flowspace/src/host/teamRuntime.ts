@@ -6,14 +6,32 @@ import type { SessionId } from "@deepseek-ai/dsh-session";
 import type {} from "@deepseek-ai/dsh-subagent";
 import type { FlowNode, TeamMemberView, TeamModel, TeamReference, TeamRuntimeBrief, TeamTaskView } from "../types.ts";
 import type { flowspaceDomain, TeamSessionRecord } from "./storage.ts";
-import type { TeamAssets } from "./teamAssets.ts";
-import { planDelegation, registerTeamDelegate, rosterSlots, teamAgentOptions } from "./teamDelegate.ts";
+import type { DraftRoster, TeamAssets } from "./teamAssets.ts";
+import { isTeamNode, staffedIds } from "../core/team.ts";
+import { planDelegation, registerTeamDelegate, rosterSlots, slotOf, teamAgentOptions } from "./teamDelegate.ts";
 
 type Board = { enabled: boolean; tasks: TeamTaskView[] };
 const delegationTools = ["subagent", "subagent_fork", "workflow"];
 
+/** Key-order independent JSON, so stored and rebuilt rosters compare equal. */
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) => item && typeof item === "object" && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b)))
+    : item);
+}
+
+/** A canvas team without a lead model keeps the session's default model. */
+function leadDefault(agent: Agent): TeamModel {
+  const current = agent.model.current();
+  if (!current) throw new Error("请为团队主管选择模型。 / Choose a model for the team lead.");
+  return { provider: current.provider, model: current.model,
+    ...(current.reasoningEffort ? { reasoningEffort: current.reasoningEffort } : {}) };
+}
+
 export class TeamRuntime {
   private records = new Map<string, TeamSessionRecord>();
+  /** Released leads: plain agents again, keeping who their members were. */
+  private dormant = new Map<string, TeamSessionRecord>();
   private views = new Map<string, TeamRuntimeBrief>();
   private boards = new Map<string, Board>();
   private models = new Map<string, TeamModel>();
@@ -26,14 +44,17 @@ export class TeamRuntime {
   private userTurns = new Map<string, number>();
   private epochs = new Set<string>();
   private pendingSaves = new Map<string, Promise<void>>();
+  private syncs = new Map<string, Promise<void>>();
 
   constructor(
     private ctx: Context,
     private domain: Domain<typeof flowspaceDomain>,
     private assets: TeamAssets,
     private publish: () => void,
+    private nodes: () => readonly FlowNode[],
   ) {
-    this.records = new Map(domain.table("team_sessions").entries());
+    for (const [id, record] of domain.table("team_sessions").entries())
+      (record.released ? this.dormant : this.records).set(id, record);
     const unregister = registerTeamDelegate(ctx, (id) => this.isLead(id), (agent, args, signal) =>
       this.delegate(agent, args, signal));
     ctx.effect(() => () => {
@@ -93,24 +114,90 @@ export class TeamRuntime {
     return this.isLead(sessionId) && this.userTurns.get(sessionId) !== turn;
   }
 
-  async validateRoster(teamId: string) {
-    const roster = this.assets.roster(teamId);
-    await this.assets.validateModels([roster.team.lead.model, ...rosterSlots(roster).map((slot) => slot.model)]);
+  wantsTeam(node: FlowNode): boolean {
+    return isTeamNode(node, staffedIds(this.nodes()));
+  }
+
+  async validateRoster(node: FlowNode): Promise<DraftRoster> {
+    const roster = this.assets.rosterForNode(node, this.nodes());
+    const lead = roster.team.lead.model;
+    await this.assets.validateModels([...lead ? [lead] : [], ...rosterSlots(roster).map((slot) => slot.model)]);
     return roster;
   }
 
-  async bind(node: FlowNode, sessionId: SessionId, roster: TeamSessionRecord["roster"]): Promise<void> {
+  async bind(node: FlowNode, sessionId: SessionId, draft: DraftRoster): Promise<void> {
     const service = this.ctx.get("agentTeams") as TeamService | undefined;
     if (!service) throw new Error("DSH Agent Teams service is unavailable");
     const result = await this.ctx.sessionController.resolveAgent(sessionId);
     if ("error" in result) throw result.error;
-    const record = { leadSessionId: sessionId, nodeId: node.id, roster, delegations: [] };
+    const model = draft.team.lead.model ?? leadDefault(result.agent);
+    const roster = { ...draft, team: { ...draft.team, lead: { ...draft.team.lead, model } } };
+    // Members from an earlier spell as a team come back to their roles; any other
+    // subagent the session already has stays a plain subagent.
+    const earlier = this.dormant.get(sessionId);
+    const delegations = earlier?.nodeId === node.id ? earlier.delegations : [];
+    const members = new Set(delegations.map((child) => child.sessionId));
+    const children = await this.ctx.subagents.listDescendants(sessionId);
+    const priorChildren = children.flatMap((row) => row.kind === "child" && !members.has(row.id) ? [row.id] : []);
+    const record: TeamSessionRecord = { leadSessionId: sessionId, nodeId: node.id, roster, delegations,
+      ...(priorChildren.length ? { priorChildren } : {}) };
     result.agent.model.select(teamAgentOptions(roster.team.lead.model));
     await service.setEnabled(result.agent, true);
     await this.save(record);
+    this.dormant.delete(sessionId);
     this.applyLead(result.agent, record);
     this.boards.set(sessionId, { enabled: true, tasks: [] });
     await this.refresh(sessionId);
+  }
+
+  /**
+   * Brings an existing session in line with its node's wiring: an agent that
+   * gains role nodes becomes a team lead in place; a canvas team that loses all
+   * of them goes back to a plain agent once its tree is idle. Library teams stay bound.
+   */
+  sync(nodeId: string): Promise<void> {
+    const sessionId = this.nodes().find((node) => node.id === nodeId)?.sessionId;
+    if (!sessionId) return Promise.resolve();
+    const previous = this.syncs.get(sessionId) ?? Promise.resolve();
+    const next = previous.catch(() => {}).then(async () => {
+      const wanted = () => {
+        const nodes = this.nodes();
+        const node = nodes.find((candidate) => candidate.id === nodeId && candidate.sessionId === sessionId);
+        return node && { node, team: isTeamNode(node, staffedIds(nodes)) };
+      };
+      const record = this.records.get(sessionId);
+      const now = wanted();
+      if (!now) return;
+      if (now.team && !record) {
+        await this.bind(now.node, sessionId as SessionId, await this.validateRoster(now.node));
+      } else if (!now.team && record?.nodeId === nodeId && !now.node.teamRef) {
+        await this.waitForIdle(sessionId);
+        const later = wanted();
+        if (later && !later.team && this.records.has(sessionId)) await this.release(sessionId);
+      }
+    });
+    this.syncs.set(sessionId, next);
+    void next.finally(() => {
+      if (this.syncs.get(sessionId) === next) this.syncs.delete(sessionId);
+    }).catch(() => {});
+    return next;
+  }
+
+  private async release(sessionId: string) {
+    const record = { ...this.records.get(sessionId)!, released: true };
+    await this.domain.table("team_sessions").put(sessionId, record);
+    this.dormant.set(sessionId, record);
+    this.records.delete(sessionId);
+    this.views.delete(sessionId);
+    this.boards.delete(sessionId);
+    this.userTurns.delete(sessionId);
+    for (const [member, root] of this.leafRoots) if (root === sessionId) this.leafRoots.delete(member);
+    const agent = this.ctx.agents.get(sessionId as SessionId);
+    if (agent) {
+      this.restrictions.get(agent)?.();
+      this.restrictions.delete(agent);
+    }
+    this.publish();
   }
 
   private applyLead(agent: Agent, record: TeamSessionRecord) {
@@ -141,9 +228,8 @@ export class TeamRuntime {
     if (user && this.userTurns.get(agent.id) !== turn) {
       this.userTurns.set(agent.id, turn);
       if (!this.epochs.has(agent.id)) {
-        const roster = this.assets.roster(record.roster.team.id);
-        if (roster.team.revision !== record.roster.team.revision ||
-            roster.roles.some((role, i) => role.revision !== record.roster.roles[i]?.revision)) {
+        const roster = this.currentRoster(record);
+        if (roster && stableJson(roster) !== stableJson(record.roster)) {
           const next = { ...record, roster };
           this.records.set(agent.id, next);
           const saved = this.save(next);
@@ -155,6 +241,21 @@ export class TeamRuntime {
       }
     }
     agent.model.select(teamAgentOptions(this.records.get(agent.id)!.roster.team.lead.model));
+  }
+
+  /** The node's roster as the canvas and library stand now; undefined keeps the bound one. */
+  private currentRoster(record: TeamSessionRecord): TeamSessionRecord["roster"] | undefined {
+    const nodes = this.nodes();
+    const node = nodes.find((candidate) => candidate.id === record.nodeId);
+    if (!node) return;
+    try {
+      const draft = this.assets.rosterForNode(node, nodes, record.roster.team.lead.model);
+      const model = draft.team.lead.model ?? record.roster.team.lead.model;
+      return { ...draft, team: { ...draft.team, lead: { ...draft.team.lead, model } } };
+    } catch (error) {
+      this.warn(error);
+      return;
+    }
   }
 
   async brief(sessionId: string): Promise<string | undefined> {
@@ -192,7 +293,7 @@ export class TeamRuntime {
           const latest = this.records.get(parent.id)!;
           await this.save({ ...latest, delegations: [...latest.delegations, {
             sessionId: activation.childId, slotId: slot.slotId, roleId: slot.role.id,
-            model: slot.model, roleRevision: slot.role.revision,
+            model: slot.model, roleRevision: slot.role.revision, ...(slot.nodeId ? { nodeId: slot.nodeId } : {}),
           }] });
         } catch (error) {
           await activation.dispose();
@@ -254,12 +355,25 @@ export class TeamRuntime {
     const next = previous.catch(() => {}).then(async () => {
       const record = this.records.get(sessionId);
       if (!record) return;
-      const rows = await this.ctx.subagents.listDescendants(sessionId as SessionId);
+      // Subagents from before the session became a team, and their own children, are not members.
+      const prior = new Set(record.priorChildren);
+      const tree = await this.ctx.subagents.listDescendants(sessionId as SessionId);
+      for (let grew = prior.size > 0; grew;) {
+        grew = false;
+        for (const row of tree) {
+          if (prior.has(row.id) || !prior.has(row.parentId)) continue;
+          prior.add(row.id);
+          grew = true;
+        }
+      }
+      const rows = tree.filter((row) => !prior.has(row.id));
       const delegations = new Map(record.delegations.map((child) => [child.sessionId, child]));
+      const slots = rosterSlots(record.roster);
       const members = await Promise.all(rows.flatMap((row) => row.kind !== "child" ? [] : [(
         async (): Promise<TeamMemberView> => {
           this.leafRoots.set(row.id, sessionId);
           const delegated = delegations.get(row.id);
+          const slot = delegated && slotOf(slots, delegated);
           const agent = this.ctx.agents.get(row.id);
           const model = delegated?.model ?? agent?.model.current() ?? await this.memberModel(row.id, row.mode);
           return {
@@ -267,7 +381,8 @@ export class TeamRuntime {
             name: row.path ?? row.id, label: row.label ?? row.path ?? row.id,
             activity: agent?.status === "running" || (row.mode === "external" && this.activations.has(row.id))
               ? "running" : "idle",
-            slotId: delegated?.slotId ?? null, provider: model?.provider, model: model?.model,
+            slotId: slot?.slotId ?? null, ...(slot?.nodeId ? { nodeId: slot.nodeId } : {}),
+            provider: model?.provider, model: model?.model,
           };
         })()]));
       const { team } = record.roster;
@@ -277,8 +392,8 @@ export class TeamRuntime {
         leadSessionId: sessionId, nodeId: record.nodeId, teamId: team.id, title: team.title,
         revision: team.revision, enabled: board?.enabled ?? false, tasks: board?.tasks ?? [],
         leadModel: team.lead.model,
-        slots: rosterSlots(record.roster).map(({ slotId, label, role, model, maxInstances }) => ({
-          slotId, label, roleTitle: role.title, model, maxInstances,
+        slots: slots.map(({ slotId, label, role, model, maxInstances, nodeId }) => ({
+          slotId, label, roleTitle: role.title, model, maxInstances, ...(nodeId ? { nodeId } : {}),
         })),
         members,
         capacity: { active: rows.filter((row) => row.kind === "child" &&

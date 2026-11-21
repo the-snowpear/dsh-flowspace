@@ -9,13 +9,16 @@ export type NodeKind =
   | "detail"
   | "git"
   | "changes"
-  | "terminal";
+  | "terminal"
+  | "role"
+  | "flow";
 export type ContextMode = "conclusion" | "session" | "fork";
 export type Trigger = "off" | "auto" | "confirm";
 export type NativeTrigger = "inherit" | "enabled" | "disabled";
 export type ParticipationMode = "global" | "manual" | "paused" | "bypassed";
 export type GroupColor = "violet" | "teal" | "blue" | "amber";
-export type AgentTab = "task" | "conversation" | "execution";
+export type AgentTab = "task" | "conversation" | "execution" | "crew";
+export type TeamLayout = "row" | "orbit" | "tree";
 export type RerunRule = "change" | "update" | "always";
 export type VisualFilter = "auto" | "running" | "3d" | "7d" | "all";
 export type WireRoutingMode = "avoid" | "overlap";
@@ -43,6 +46,8 @@ export interface TeamSlot {
   label: string;
   model?: TeamModel;
   maxInstances?: number;
+  /** Role node on the canvas that staffs this slot. */
+  nodeId?: string;
 }
 
 export interface TeamBlueprint {
@@ -74,6 +79,14 @@ export interface TeamReference {
   revision?: number;
 }
 
+/** Lead settings of a team composed on the canvas from role nodes. */
+export interface CanvasTeamConfig {
+  persona: string;
+  norms: string;
+  /** Absent: the lead keeps the session's default model. */
+  model?: TeamModel;
+}
+
 export interface TeamDependencies {
   teams: TeamBlueprint[];
   roles: RoleDefinition[];
@@ -90,6 +103,7 @@ export interface WorkflowImportRequest {
   dependencies?: TeamDependencies;
   copyAssets?: boolean;
   replacements?: TeamModelReplacement[];
+  enableTriggers?: boolean;
 }
 
 export type WorkflowImportResult =
@@ -102,6 +116,7 @@ export interface TeamSlotView {
   roleTitle: string;
   model: TeamModel;
   maxInstances: number;
+  nodeId?: string;
 }
 
 export interface TeamMemberView {
@@ -113,6 +128,8 @@ export interface TeamMemberView {
   activity: "running" | "idle";
   mode: "continuable" | "one-shot" | "external";
   slotId: string | null;
+  /** The canvas role node whose slot this member fills now. */
+  nodeId?: string;
   provider?: string;
   model?: string;
 }
@@ -144,22 +161,66 @@ export interface TeamRuntimeBrief {
 
 export interface GroupPort {
   id: string;
-  kind: "reference" | "continuation";
+  portId?: string;
+  kind: WireKind;
   direction: "in" | "out";
   name: string;
   nodes: string[];
   hidden: boolean;
 }
 
+export type BoardCardPriority = "none" | "low" | "medium" | "high" | "urgent";
+export type BoardColumnRole = "backlog" | "todo" | "doing" | "done" | "custom";
+export type BoardColumnColor = "neutral" | "blue" | "teal" | "green" | "amber" | "violet" | "red";
+export type BoardViewMode = "board" | "list";
+export type BoardRefScope = "selected-or-all" | "open-only" | "all";
+
+export type ContainerPermission = "read" | "advance" | "edit";
+
+export interface BoardComment {
+  id: string;
+  by: string;
+  text: string;
+  createdAt: number;
+}
+
+export interface BoardChecklistItem {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
 export interface BoardCard {
   id: string;
   text: string;
+  description?: string;
+  done?: boolean;
+  priority?: BoardCardPriority;
+  tags?: string[];
+  dueDate?: string;
+  checklist?: BoardChecklistItem[];
+  comments?: BoardComment[];
+  author?: string;
+  previousColumnId?: string;
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export interface BoardColumn {
   id: string;
   name: string;
   cards: BoardCard[];
+  role?: BoardColumnRole;
+  color?: BoardColumnColor;
+  wipLimit?: number;
+  collapsed?: boolean;
+}
+
+export interface BoardSettings {
+  view?: BoardViewMode;
+  autoMoveDone?: boolean;
+  showCompleted?: boolean;
+  refScope?: BoardRefScope;
 }
 
 export interface WindowState {
@@ -179,9 +240,51 @@ export interface NodeNudge {
   origH?: number;
 }
 
+/** Flow configs cross the DSH RPC and storage boundaries as JSON. */
+export type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
+
+export type FlowDataType = "text" | "list" | "record" | "signal" | "file";
+
+export interface FlowSpill {
+  locator: string;
+  preview: string;
+  bytes: number;
+}
+
+export interface FlowItem {
+  key: string;
+  value?: JsonValue;
+  spill?: FlowSpill;
+}
+
+/** Lists retain identity and source order. A spilled value is represented by its locator. */
+export interface FlowContent {
+  dataType: FlowDataType;
+  value?: JsonValue;
+  items?: FlowItem[];
+  originalCount?: number;
+  spill?: FlowSpill;
+}
+
+export interface FanoutPairIds {
+  fanId: string;
+  mergeId: string;
+}
+
 export interface FlowNode {
   id: string;
+  breakpoint?: boolean;
+  budget?: BudgetLimits;
+  laneBindings?: { provider?: string; model?: string; persona?: string; cwd?: string };
+  lanePersona?: string;
+  canvasToolsOnly?: boolean;
   kind: NodeKind;
+  flowType?: string;
+  config?: JsonObject;
+  configVersion?: number;
   title: string;
   x: number;
   y: number;
@@ -189,6 +292,16 @@ export interface FlowNode {
   height: number;
   expanded: boolean;
   parentId?: string;
+  fanout?: FanoutPairIds;
+  masterOf?: string;
+  generatedBy?: string;
+  masterNodeId?: string;
+  itemKey?: string;
+  itemTitle?: string;
+  laneIndex?: number;
+  overridden?: boolean;
+  removed?: boolean;
+  generatedRevision?: number;
   sessionId?: string;
   workspaceId?: string;
   cwd?: string;
@@ -196,6 +309,19 @@ export interface FlowNode {
   worktreePath?: string;
   agentPreset?: string;
   teamRef?: TeamReference;
+  /** Canvas-composed team (no library blueprint). Mutually exclusive with `teamRef`. */
+  teamConfig?: CanvasTeamConfig;
+  teamLayout?: TeamLayout;
+  /** Role node: library role it instantiates; absent means an inline role (`text` = persona). */
+  roleRef?: string;
+  /** Role node: model for an inline role, or an override for a library role. */
+  teamModel?: TeamModel;
+  /** Role node: concurrent member limit for this slot. */
+  maxInstances?: number;
+  /** Role node: team node this role staffs (a staffing wire). */
+  staffOf?: string;
+  /** Role node: native subagent slot name. */
+  slotId?: string;
   planMode?: boolean;
   customTitle?: boolean;
   subAgentsExpanded?: boolean;
@@ -225,6 +351,7 @@ export interface FlowNode {
   titleKey?: string;
   window?: WindowState | null;
   columns?: BoardColumn[];
+  boardSettings?: BoardSettings;
   items?: string[];
   selectedItems?: string[];
   nudge?: NodeNudge;
@@ -247,7 +374,24 @@ export interface FlowEdge {
   id: string;
   source: string;
   target: string;
-  kind: "reference" | "continuation";
+  generatedBy?: string;
+  masterEdgeId?: string;
+  itemKey?: string;
+  generatedRevision?: number;
+  sourcePort?: string;
+  targetPort?: string;
+  emitMode?: "stream" | "end";
+  permission?: ContainerPermission;
+  ask?: boolean;
+  delivery?: { mode: "lines" | "paragraph" | "list"; columnId?: string };
+  logic?: {
+    negate?: boolean;
+    fromRound?: number;
+    maxTimes?: number;
+    delayMs?: number;
+  };
+  kind: WireKind;
+  event?: EventPolicy;
   mode: ContextMode;
   trigger: Trigger;
   maxRounds: number;
@@ -257,13 +401,63 @@ export interface FlowEdge {
   sourceItemKey?: string;
   snapshotTitle?: string;
   snapshotText?: string;
+  snapshotContent?: FlowContent;
   originMode?: ContextMode;
   waypoints?: Waypoint[];
   placedCapsules?: string[];
 }
 
+export type WireKind = "reference" | "continuation" | "event";
+export type FlowEventKind = "running" | "waiting" | "done" | "error" | "budget" | "output" | "tool" | "usage" | "container";
+export interface EventPolicy {
+  mode: "end" | "change" | "continuous";
+  kinds: FlowEventKind[];
+  reasons?: string[];
+  cooldownMs?: number;
+  maxTimes?: number;
+  full?: boolean;
+}
+export interface FlowEvent {
+  id: string;
+  nodeId: string;
+  stepId: string;
+  kind: FlowEventKind;
+  at: number;
+  round: number;
+  reason?: string;
+  sessionId?: string;
+  seq?: number;
+  telemetry?: StepTelemetry;
+  summary?: string;
+}
+export interface TriggerGuards {
+  cooldownSec?: number;
+  dailyLimit?: number;
+  busy?: "skip" | "queue" | "interrupt";
+}
+export interface TriggerStatus {
+  id: string;
+  nextAt?: number;
+  lastAt?: number;
+  missed: number;
+  day?: string;
+  hits: number;
+  configKey?: string;
+  queued?: ContextSnapshot[];
+  observed?: Record<string, string>;
+}
+export interface FlowNotice {
+  id: string;
+  title: string;
+  text: string;
+  at: number;
+  system?: boolean;
+  sound?: boolean;
+}
+
 export interface WorkflowTemplate {
   id: string;
+  fanout?: FanoutPairIds;
   title: string;
   description: string;
   revision: number;
@@ -305,15 +499,69 @@ export interface CanvasPrefs {
 
 export interface FlowspaceDocument {
   version: 1;
+  generationRevision?: number;
   id: string;
   title: string;
   nodes: FlowNode[];
   edges: FlowEdge[];
   viewport: { x: number; y: number; zoom: number };
-  settings: { nativeChatTriggers: boolean; reducedMotion: boolean };
+  settings: { nativeChatTriggers: boolean; reducedMotion: boolean; listLimit?: number; automaticTriggers?: boolean;
+    triggerGuards?: TriggerGuards; budget?: BudgetLimits };
+  containerRevision?: number;
   prefs?: CanvasPrefs;
   templates?: WorkflowTemplate[];
   snapshots?: CanvasSnapshot[];
+}
+
+export type ContainerEntry =
+  | { kind: "board"; columnId: string; beforeId?: string; card: BoardCard }
+  | { kind: "note"; text: string }
+  | { kind: "file"; text: string; path: string; cwd: string };
+
+export interface ContainerChange {
+  id: string;
+  nodeId: string;
+  itemId?: string;
+  edgeId?: string;
+  sessionId?: string;
+  runId?: string;
+  stepId?: string;
+  by: string;
+  at: number;
+  revision: number;
+  before: ContainerEntry | null;
+  after: ContainerEntry | null;
+  beforeVersion: string;
+  afterVersion: string;
+  pending?: boolean;
+  revertedBy?: string;
+}
+
+export type VariableScope = "run" | "canvas" | "lane";
+export type VariableType = "text" | "number" | "boolean" | "list" | "record";
+export interface VariableValue {
+  key: string;
+  id: string;
+  name: string;
+  scope: VariableScope;
+  type: VariableType;
+  runId?: string;
+  lane?: string;
+  version: number;
+  value: JsonValue;
+}
+export interface VariableWrite {
+  id: string;
+  writer: string;
+  at: number;
+  from: JsonValue;
+  to: JsonValue;
+  version: number;
+  runId?: string;
+  stepId?: string;
+}
+export interface VariableRecord extends VariableValue {
+  history: VariableWrite[];
 }
 
 export interface ContextSnapshot {
@@ -326,13 +574,17 @@ export interface ContextSnapshot {
     | "terminal"
     | "display"
     | "note"
-    | "board";
+    | "board-card"
+    | "board"
+    | "variable";
   missing?: boolean;
   sourceNodeId: string;
   sourceSessionId?: string;
   seq?: number;
   title: string;
   text: string;
+  content?: FlowContent;
+  textSpill?: FlowSpill;
   capturedAt: number;
   version?: string;
 }
@@ -344,17 +596,60 @@ export interface StepTelemetry {
   durationMs?: number;
 }
 
+export interface DataCallTrace {
+  id: string;
+  operation: string;
+  itemKey?: string;
+  index?: number;
+  provider: string;
+  model: string;
+  startedAt: number;
+  endedAt: number;
+  inputTokens: number;
+  outputTokens: number;
+  error?: string;
+  inputSummary: string;
+  outputSummary?: string;
+}
+
 export type StepState =
   | "queued"
   | "running"
   | "settling"
+  | "awaiting"
+  | "skipped"
   | "completed"
   | "error"
   | "aborted"
   | "interrupted";
+
+export interface StepEmission {
+  items: FlowItem[];
+  calls: { id: string; accepted: number; total: number }[];
+  total: number;
+  limit: number;
+  closed: boolean;
+  missing?: boolean;
+  reminderStepId?: string;
+}
+
 export interface RunStep {
+  debug?: { reason: "breakpoint" | "budget"; tools: string[]; originalTask: string; continuation: boolean;
+    references: { edgeId: string; version: string }[] };
+  startedAt?: number;
+  operationParameters?: Record<string, Record<string, string>>;
+  parameterRetryFor?: string;
+  operation?: PreparedOperation;
+  operationResult?: { exitCode: number | null; timedOut: boolean; stdout: string; stderr: string };
+  upstreamStepIds?: string[];
+  variables?: VariableValue[];
+  resolvedConfig?: JsonObject;
   id: string;
   nodeId: string;
+  fanoutId?: string;
+  itemKey?: string;
+  fanoutBatchId?: string;
+  streamFrom?: string;
   requestId: string;
   sessionId?: string;
   teamRef?: TeamReference;
@@ -363,19 +658,69 @@ export interface RunStep {
   iteration: number;
   task: string;
   sources: ContextSnapshot[];
+  /** Target port for each source of a registered node, in the same order. */
+  sourcePorts?: string[];
   createdAt: number;
   endedAt?: number;
   endSeq?: number;
   output?: string;
+  outputContent?: FlowContent;
+  dataCalls?: DataCallTrace[];
   error?: string;
   telemetry?: StepTelemetry;
+  route?: string;
+  emission?: StepEmission;
+  reminderFor?: string;
+  verdict?: {
+    branch: string; reason?: string; confidence?: number;
+    provider?: string; model?: string; inputSummary?: string; rawOutputs?: string[];
+  };
+  human?: {
+    operation?: boolean;
+    fields?: HumanField[];
+    initial?: JsonObject;
+    question: string;
+    options: string[];
+    deadline?: number;
+    timeoutAction?: "wait" | "skip" | "default" | "timeout-port";
+    defaultOption?: string;
+  };
+}
+
+export interface HumanField {
+  name: string;
+  label: string;
+  type: "text" | "number" | "boolean" | "select" | "score" | "review" | "like";
+  required?: boolean;
+  choices?: string[];
+}
+
+export interface PreparedOperation {
+  cwd: string;
+  sessionId?: string;
+  values: Record<string, string>;
+  missing: string[];
+  preview: string;
+  revision?: string;
+  approved?: boolean;
+  review?: boolean;
 }
 
 export interface FlowToken {
   id: string;
   edgeId: string;
   stepId: string;
+  /** Native emitting step for stream propagation across intermediate transformations. */
+  streamFrom?: string;
+  fanoutBatchId?: string;
   source: ContextSnapshot;
+  skip?: true;
+  createdAt: number;
+  readyAt?: number;
+  readyOrder?: number;
+  delayUntil?: number;
+  needsRelease?: true;
+  consumedAt?: number;
   ready: boolean;
   consumed: boolean;
   boundary: boolean;
@@ -395,10 +740,43 @@ export interface PresentedDeliverable {
   description?: string;
 }
 
+/** Per-run input and delivery state for one generated lane, in source order. */
+export interface RunFanoutLane {
+  item: FlowItem;
+  fanStepId: string;
+  input: ContextSnapshot;
+  state: "queued" | "running" | "completed" | "skipped" | "error" | "cancelled";
+  result?: ContextSnapshot;
+  endedAt?: number;
+  adopted?: boolean;
+  readyOrder?: number;
+  score?: number;
+  model?: TeamModel;
+}
+
+export interface RunFanout {
+  id: string;
+  producerStepId?: string;
+  fanId: string;
+  mergeId: string;
+  groupId: string;
+  closed: boolean;
+  lanes: RunFanoutLane[];
+  mergeStepId?: string;
+}
+
 export interface FlowspaceRun {
   id: string;
   title: string;
-  origin: "canvas" | "chat";
+  origin: "canvas" | "chat" | "trigger";
+  triggerId?: string;
+  events?: FlowEvent[];
+  pendingEvents?: { edgeId: string; event: FlowEvent; content: string; dueAt: number }[];
+  budget?: BudgetLimits;
+  budgetPause?: { nodeId?: string; dimension: keyof BudgetLimits; value: number; limit: number; at: number };
+  budgetAcknowledged?: string[];
+  singleStep?: boolean;
+  report?: RunReport;
   state:
     | "running"
     | "waiting"
@@ -412,10 +790,36 @@ export interface FlowspaceRun {
   roots: string[];
   participants: string[];
   graph: { nodes: FlowNode[]; edges: FlowEdge[] };
+  listLimit?: number;
   steps: RunStep[];
   tokens: FlowToken[];
+  fanouts?: RunFanout[];
+  accumulators?: { nodeId: string; content: FlowContent }[];
+  fanoutReadyOrder?: number;
   notes: string[];
   deliverables?: PresentedDeliverable[];
+}
+
+export interface RunReport {
+  summary: string;
+  seconds: number;
+  tokens: number;
+  rounds: number;
+  bestNode?: string;
+  artifacts: PresentedDeliverable[];
+}
+export interface ArenaResult {
+  id: string;
+  runId: string;
+  tag: string;
+  model: TeamModel;
+  won: boolean;
+}
+
+export interface BudgetLimits {
+  tokens?: number;
+  seconds?: number;
+  rounds?: number;
 }
 
 export interface SessionBrief {
@@ -441,6 +845,15 @@ export interface NativeAgentMessage {
   summary?: string;
   seq: number;
   time: number;
+}
+
+export interface NativeOperation {
+  nodeId: string;
+  kind: "terminal" | "git";
+  command: string;
+  cwd?: string;
+  at: number;
+  seq: number;
 }
 export interface WorkspaceBrief {
   id: string;
@@ -589,11 +1002,17 @@ export interface FlowspaceSnapshot {
   runs: FlowspaceRun[];
   live: LiveNodeState[];
   nativeMessages?: NativeAgentMessage[];
+  nativeOperations?: NativeOperation[];
   subagents?: SubagentBrief[];
   sourceVersions?: Record<string, string>;
   roles?: RoleDefinition[];
   teamBlueprints?: TeamBlueprint[];
   teams?: Record<string, TeamRuntimeBrief>;
+  containerChanges?: ContainerChange[];
+  variables?: VariableRecord[];
+  triggers?: TriggerStatus[];
+  notices?: FlowNotice[];
+  arena?: ArenaResult[];
 }
 export interface StartRequest {
   nodeIds: string[];
@@ -688,13 +1107,32 @@ export interface ExtendLoopRequest {
   nodeId?: string;
   extraRounds?: number;
 }
+export interface HumanAnswerRequest {
+  runId: string;
+  stepId: string;
+  option: string;
+  values?: JsonObject;
+}
 export interface InspectEdgeRequest {
   edgeId: string;
   runId?: string;
 }
+export interface DataPreviewRequest {
+  nodeId: string;
+  tryModel?: boolean;
+}
+export interface DataPreview {
+  state: "ready" | "waiting" | "trial" | "error";
+  lines: string[];
+  count: number;
+  remaining: number;
+  originalCount?: number;
+  message?: string;
+  telemetry?: StepTelemetry;
+}
 export interface EdgePayloadPreview {
   edgeId: string;
-  kind: "reference" | "continuation";
+  kind: WireKind;
   mode: string;
   sourceTitle: string;
   targetTitle: string;
@@ -702,6 +1140,8 @@ export interface EdgePayloadPreview {
   seq?: number;
   byteLength: number;
   willSpill: boolean;
+  itemCount?: number;
+  originalCount?: number;
   freshness: "pending" | "sent" | "updated" | "always" | "live";
   summary: string;
   content: string;

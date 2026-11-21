@@ -1,6 +1,7 @@
 import {
   createContext,
   memo,
+  startTransition,
   useContext,
   useCallback,
   useEffect,
@@ -14,12 +15,13 @@ import { flushSync } from "react-dom";
 import type { SessionReference } from "@deepseek-ai/dsh-api-session-controller/client";
 import type {
   AgentTab,
-  BoardColumn,
   CanvasPrefs,
   CanvasSnapshot,
   FlowEdge,
   FlowNode,
   FlowspaceDocument,
+  FlowspaceRun,
+  FlowNotice,
   FlowspaceSnapshot,
   GroupPort,
   LaunchPlan,
@@ -34,13 +36,29 @@ import type {
   WorkspaceFilePreview,
   WorkspaceStructureBrief,
 } from "../types.ts";
+import { canConnect, connectionPort } from "../core/connect.ts";
+import { containerPermission, isContainer, rebaseContainerChanges } from "../core/containers.ts";
+import { VariablePanel } from "./nodes/Variables.tsx";
+import { ArenaDialog, Breakpoint, BudgetMeter, ReplayDock, ReportDialog, replayAt } from "./nodes/PlayViews.tsx";
+import { hasStatusPort } from "../core/nodes/interactions.ts";
+import { BatchHuman } from "./nodes/InteractionViews.tsx";
+import { appendMasterStep, canInsertFanout, cleanRetiredLanes, createFanoutPair, resumeMasterSync } from "../core/fanout.ts";
+import { edgeLabels } from "./nodes/edgeLabels.ts";
+import { CanvasPreviewContext, useCanvasPreviews, WireListLabel } from "./nodes/DataPreview.tsx";
+import { receiveGeneration, reconcileLaneChanges } from "./generationHistory.ts";
+import { LaneBadges, LaneMetrics, hasUnusedResult, isRemovedLaneWire, laneGroupState } from "./nodes/FanoutView.tsx";
+import { descriptorOf, portsOf } from "../core/nodes/registry.ts";
+import { findBoardCard, normalizeBoardColumns, pruneBoardReferences, resolveBoardReference, type BoardEdit } from "../core/board.ts";
 import {
   boardSummaryText,
+  deriveDraftTitle,
   emptyDocument,
   groupDescendants,
   members,
   newEdge,
+  newFlowNode,
   newNode,
+  referenceTitle,
   uid,
   workflowNodes,
 } from "../core/document.ts";
@@ -48,37 +66,42 @@ import type { CanvasBridge } from "./bridge.ts";
 import { BrandMark, Icon, PortMark, kindIconName } from "./icons.tsx";
 import { getLanguage, setLanguage, subscribeLanguage, t, tr } from "./i18n.ts";
 import {
+  BOARD_MIN_SIZE,
   LOD_ZOOM,
   MOTION,
   alignedWireDropPosition,
   bounds,
+  canvasItemBox,
   capsuleStateOf,
   clamp,
   collapsedAncestor,
   comfortableFit,
+  clearBoxAlong,
   computeInputHubLayout,
   easeView,
   endpoint,
   exchangeRoute,
   expandedGroupBox,
   fit,
-  giveRoomBack,
   groupBox,
   hubFilamentPath,
   inferGroupPorts,
   isCompactNode,
-  makeRoom,
   nodeBox,
   portY,
+  reflowCanvasItem,
   toWorld,
   zoomAt,
   type Box,
   type HubSatelliteItem,
 } from "./geometry.ts";
-import { DEFAULT_WIRE_ROUTING, insertWireWaypoint, route } from "./wireRouting.ts";
+import { DEFAULT_WIRE_ROUTING, insertWireWaypoint, route, type WireRoute } from "./wireRouting.ts";
+import { arrangeCanvas } from "./canvasLayout.ts";
 import { startThemeTransition } from "./themeTransition.ts";
-import { groupExchanges, pathExtent, pathTouches, SceneWires, type ExchangePair } from "./sceneWires.ts";
-import { StructureWireLayer } from "./StructureWireLayer.tsx";
+import { groupExchanges, pathExtent, pathTouches, SceneWires, type ExchangePair, type WireEnd } from "./sceneWires.ts";
+import { GuideWireLayer } from "./GuideWireLayer.tsx";
+import { WireFlowLayer } from "./WireFlowLayer.tsx";
+import { MiniMapNodes } from "./MiniMapNodes.tsx";
 import { paintLayer, settleLayer } from "./cameraFrame.ts";
 import { applyGeometry, byId, encloses, indexEdges, indexNodes, intersects, padded, runtimeIndex, shareSnapshotValue, viewportBox, type GeometryEdit } from "./sceneModel.ts";
 import {
@@ -110,10 +133,19 @@ import {
   type WireDropContext,
 } from "./QuickCreateMenu.tsx";
 import { PayloadPeekPopover } from "./PayloadPeekPopover.tsx";
+import { BoardNodeView } from "./BoardNodeView.tsx";
+import { BoardCompactSummary } from "./BoardControls.tsx";
 import { installHostStyleGuard } from "./hostStyleGuard.ts";
 import { CanvasDialog } from "./CanvasDialog.tsx";
 import { TeamView } from "./TeamView.tsx";
-import { WorkflowImportDialog } from "./WorkflowImportDialog.tsx";
+import { AvatarStack, ModelChip, TeamAvatar, hueStyle } from "./TeamControls.tsx";
+import { ChildCards, ChildLinks, CrewFrame, RoleNodeBody, RoleNodeSummary, StaffWires, staffHover, useModelRoutes,
+  type StaffWire } from "./TeamCanvas.tsx";
+import { buildChildTree } from "./childTree.ts";
+import { draftSlots } from "./teamCrew.ts";
+import { isTeamNode, slotIdFor, staffedIds, staffNodes } from "../core/team.ts";
+import { WorkflowImportDialog, containsCodeNode } from "./WorkflowImportDialog.tsx";
+import { FlowCountdown, viewOf } from "./nodes/index.ts";
 import {
   alignNodes,
   distributeNodes,
@@ -156,6 +188,7 @@ interface MenuState {
   x: number;
   y: number;
   items: MenuItem[];
+  returnFocus?: HTMLElement;
 }
 
 interface PaletteEntry {
@@ -204,6 +237,62 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
+type WireEnds = Pick<FlowEdge, "sourcePort" | "targetPort" | "sourceItemKey">;
+type WireAnchor = WireEnds & { mode?: FlowEdge["mode"]; edgeId?: string; direction?: "in" | "out" };
+
+function wirePortIds(node: FlowNode, kind: FlowEdge["kind"], direction: "in" | "out"): string[] {
+  if (kind === "event") return direction === "in" ? wirePortIds(node, "continuation", "in")
+    : connectionPort(node, kind, direction) ? ["out"] : [];
+  if (node.kind === "flow")
+    return portsOf(node).filter(port => port.direction === direction && port.role === kind).map(port => port.id);
+  return connectionPort(node, kind, direction) ? [direction] : [];
+}
+
+function checkDraggedWire(fixed: FlowNode, candidate: FlowNode, kind: FlowEdge["kind"], anchor: WireAnchor,
+  portId: string | undefined, edges: FlowEdge[]) {
+  const ends = anchor.direction === "in"
+    ? { source: candidate, target: fixed, sourcePort: portId }
+    : { source: fixed, target: candidate, targetPort: portId };
+  return canConnect({ ...anchor, ...ends, kind, edges });
+}
+
+function matchesWire(candidate: FlowEdge, edge: Pick<FlowEdge, "source" | "target" | "kind"> & WireEnds) {
+  return candidate.source === edge.source && candidate.target === edge.target &&
+    candidate.kind === edge.kind && candidate.sourceItemKey === edge.sourceItemKey &&
+    (candidate.sourcePort ?? "out") === (edge.sourcePort ?? "out") &&
+    (candidate.targetPort ?? "in") === (edge.targetPort ?? "in");
+}
+
+function addWire(doc: FlowspaceDocument, source: FlowNode, target: FlowNode, kind: FlowEdge["kind"], patch: Partial<FlowEdge> = {}) {
+  const edge = { ...newEdge(source.id, target.id, kind), ...patch };
+  const check = canConnect({ ...edge, source, target, edges: doc.edges });
+  if (check.ok && !doc.edges.some(candidate => matchesWire(candidate, edge))) doc.edges.push(edge);
+}
+
+function removeCanvasNodes(doc: FlowspaceDocument, selected: string[]) {
+  const ids = new Set(selected);
+  for (const group of doc.nodes.filter(node => node.fanout)) {
+    if (ids.has(group.id) || ids.has(group.fanout!.fanId) || ids.has(group.fanout!.mergeId)) {
+      ids.add(group.id);
+      for (const id of groupDescendants(doc, group.id)) ids.add(id);
+    }
+  }
+  doc.nodes = doc.nodes.filter(node => !ids.has(node.id));
+  for (const node of doc.nodes) if (node.parentId && ids.has(node.parentId)) delete node.parentId;
+  doc.edges = doc.edges.filter(edge => !ids.has(edge.source) && !ids.has(edge.target));
+}
+
+function linkWireDrop(doc: FlowspaceDocument, wire: WireDropContext, created: FlowNode, patch: Partial<FlowEdge> = {}) {
+  const originId = wire.direction === "out" ? wire.sourceNode?.id : wire.targetNode?.id;
+  const ids = wire.nodeIds ?? (originId ? [originId] : []);
+  const kind = patch.kind ?? wire.portKind;
+  for (const anchor of doc.nodes.filter(node => ids.includes(node.id))) {
+    const [source, target] = wire.direction === "out" ? [anchor, created] : [created, anchor];
+    const ports = wire.direction === "out" ? { sourcePort: wire.portId, sourceItemKey: wire.sourceItemKey } : { targetPort: wire.portId };
+    addWire(doc, source, target, kind, { ...patch, ...ports });
+  }
+}
+
 interface QuickCreateState {
   anchor: { x: number; y: number };
   world: { x: number; y: number };
@@ -219,6 +308,9 @@ interface PayloadPeekState {
 const EMBED_RETAIN_ATTEMPTS = 6;
 /** React state follows the live viewport only after the gesture has been idle this long. */
 const VIEW_COMMIT_IDLE_MS = 160;
+// Small documents fit comfortably in the browser's vector scene. Reserve bitmap
+// backing and forward viewport coverage for canvases with many more elements.
+const RASTER_SCENE_NODES = 64;
 /** Time constant of the eased wheel glide (smaller = snappier). */
 const WHEEL_GLIDE_TAU_MS = 72;
 /** Time constant of the momentum decay after a fling-pan. */
@@ -233,6 +325,15 @@ function worldTransform(v: { x: number; y: number; zoom: number }): string {
   return `translate(${v.x}px, ${v.y}px) scale(${v.zoom})`;
 }
 
+function viewAtDetailBoundary(from: FlowspaceDocument["viewport"], target: FlowspaceDocument["viewport"]) {
+  const fraction = (LOD_ZOOM - from.zoom) / (target.zoom - from.zoom);
+  return {
+    x: from.x + (target.x - from.x) * fraction,
+    y: from.y + (target.y - from.y) * fraction,
+    zoom: LOD_ZOOM,
+  };
+}
+
 /** Semantic-zoom text compensation, quantised so zooming does not relayout every frame. */
 function typeScaleFor(zoom: number): number {
   return zoom < LOD_ZOOM ? Math.round(clamp(1 / zoom, 1, 2.6) * 10) / 10 : 1;
@@ -240,6 +341,11 @@ function typeScaleFor(zoom: number): number {
 
 /** Zoom at which each grid layer's tiles were last rasterised. */
 const gridBaseZoom = new WeakMap<HTMLElement, number>();
+
+/** A repeating texture needs at most one tile before the visible origin. */
+function tileOffset(offset: number, period: number) {
+  return offset - Math.ceil(offset / period) * period;
+}
 
 /**
  * Moves the dot-grid layer with a pure compositor transform. While zooming, the cached
@@ -250,8 +356,8 @@ function applyGridFrame(
   grid: HTMLElement,
   v: { x: number; y: number; zoom: number },
   settle = false,
-  mirrors: (HTMLElement | null)[] = [],
-): string {
+  lensGrid: HTMLElement | null = null,
+) {
   let base = gridBaseZoom.get(grid);
   const drift = base ? v.zoom / base : 0;
   if (!base || drift < GRID_REBASE_MIN || drift > GRID_REBASE_MAX || (settle && base !== v.zoom)) {
@@ -260,27 +366,34 @@ function applyGridFrame(
     const minor = 24 * base;
     const major = minor * 5;
     const size = `${major}px ${major}px, ${minor}px ${minor}px`;
+    grid.style.width = grid.style.height = `calc(${100 / GRID_REBASE_MIN}% + ${major + 2}px)`;
     const ga = String(clamp((base - 0.35) / 0.4, 0, 1));
-    for (const el of [grid, ...mirrors]) {
+    for (const el of [grid, lensGrid]) {
       if (!el) continue;
       el.style.backgroundSize = size;
       el.style.setProperty("--ga", ga);
+    }
+    if (lensGrid) {
+      // Only one spare repeat is needed to pan the pattern inside the circular mask.
+      const side = Math.ceil(2 * CURSOR_LENS_R / GRID_REBASE_MIN + major + 2);
+      lensGrid.style.width = lensGrid.style.height = `${side}px`;
     }
   }
   const scale = v.zoom / base;
   const period = 24 * 5 * v.zoom;
   const mod = (n: number) => ((n % period) + period) % period;
-  const tx = mod(v.x + GRID_OVERSCAN);
-  const ty = mod(v.y + GRID_OVERSCAN);
-  const transform =
-    scale === 1
-      ? `translate3d(${Math.round(tx)}px, ${Math.round(ty)}px, 0)`
-      : `translate3d(${tx}px, ${ty}px, 0) scale(${scale})`;
+  const phase = (coordinate: number) => {
+    const pos = mod(coordinate + GRID_OVERSCAN);
+    return scale === 1 ? Math.round(pos) : pos;
+  };
+  const tx = phase(v.x), ty = phase(v.y);
+  const x = tileOffset(tx - GRID_OVERSCAN, period), y = tileOffset(ty - GRID_OVERSCAN, period);
+  const transform = `translate3d(${x}px, ${y}px, 0) scale(${scale})`;
   if (settle) {
     grid.style.transform = transform;
     settleLayer(grid);
   } else paintLayer(grid, { transform });
-  return transform;
+  return { x, y, period, scale };
 }
 
 /** Minimap projection: world frame → map pixels, plus the live camera size. */
@@ -403,7 +516,11 @@ function EmbeddedSession({
   );
 }
 
-type CardRenderer = (node: FlowNode, placement: "canvas" | "window" | "conversation", snapshot: FlowspaceSnapshot | null) => ReactNode;
+type CardRenderer = (
+  node: FlowNode, placement: "canvas" | "window" | "conversation", snapshot: FlowspaceSnapshot | null,
+  box: Box, semantic?: boolean, prewarmFull?: boolean, contentVersion?: object, branchOffset?: number,
+) => ReactNode;
+type WireLayout = { edge: FlowEdge; from: WireEnd; geom: WireRoute; extent: Box; evState: string };
 
 function useCardActions<T extends Record<string, (...args: never[]) => unknown>>(actions: T): T {
   const latest = useRef(actions);
@@ -413,52 +530,86 @@ function useCardActions<T extends Record<string, (...args: never[]) => unknown>>
   )) as T, []);
 }
 
-function CardBody({ compact, preserve, full, summary }: {
-  compact: boolean; preserve: boolean; full: () => ReactNode; summary: () => ReactNode;
+function CardBody({ compact, preserve, prewarmFull, contentVersion, full, summary }: {
+  compact: boolean; preserve: boolean; prewarmFull?: boolean; contentVersion?: object;
+  full: () => ReactNode; summary: () => ReactNode;
 }) {
-  const previous = useRef<ReactNode>(null);
-  if (!compact) previous.current = full();
+  const previous = useRef<{ version?: object; body: ReactNode } | null>(null);
+  if (!compact || prewarmFull) {
+    if (!contentVersion || previous.current?.version !== contentVersion) {
+      previous.current = { version: contentVersion, body: full() };
+    }
+  }
   else if (!preserve) previous.current = null;
   return <>
     {(previous.current != null || !compact) && <div key="full" className="node-body" hidden={compact}>
-      <SessionOnCanvas.Provider value={!compact}>{previous.current}</SessionOnCanvas.Provider>
+      <SessionOnCanvas.Provider value={!compact}>{previous.current?.body}</SessionOnCanvas.Provider>
     </div>}
     {(compact || preserve) && <div key="compact" className="node-body" hidden={!compact}>{summary()}</div>}
   </>;
 }
 
-const ViewportCard = memo(function ViewportCard({ node, visible, compact, render, snapshot }: {
-  node: FlowNode; visible: boolean; compact: boolean; render: CardRenderer; snapshot: FlowspaceSnapshot | null; incoming?: FlowEdge[];
+const ViewportCard = memo(function ViewportCard({ node, visible, prepare, semantic, box, dx, dy, render, snapshot, branchOffset, onBranchScroll }: {
+  node: FlowNode; visible: boolean; prepare: boolean; semantic: boolean; box: Box; dx: number; dy: number;
+  branchOffset?: number; onBranchScroll: (id: string, top: number) => void;
+  render: CardRenderer; snapshot: FlowspaceSnapshot | null; incoming?: FlowEdge[];
 }) {
   const slot = useRef<HTMLDivElement>(null);
   const scroll = useRef(new Map<string, number>());
+  const visited = useRef(false);
   const keepMounted = node.expanded && (Boolean(node.sessionId) || ["git", "changes", "terminal"].includes(node.kind));
+  const mounted = visible || (keepMounted ? visited.current : prepare);
+  const prewarmFull = prepare && visible && !keepMounted && node.expanded;
+  const contentVersion = useMemo(() => ({}), [node, snapshot, render]);
+  const content = useMemo(() => mounted
+    ? render(node, "canvas", snapshot, box, semantic, prewarmFull, contentVersion, branchOffset)
+    : null, [mounted, render, node, snapshot, box, semantic, prewarmFull, contentVersion, branchOffset]);
   useLayoutEffect(() => {
+    const card = slot.current?.firstElementChild;
+    if (!card) return;
+    if (dx || dy) paintLayer(card, { transform: `translate(${dx}px, ${dy}px)` });
+    else settleLayer(card);
+  }, [mounted, dx, dy]);
+  useLayoutEffect(() => {
+    if (visible) visited.current = true;
     if (!visible || !scroll.current.size || !slot.current) return;
     for (const element of Array.from(slot.current.querySelectorAll<HTMLElement>(".node-scroll,textarea"))) {
       const value = scroll.current.get(element.className);
       if (value) element.scrollTop = value;
     }
-  }, [visible, compact]);
-  if (!visible && !keepMounted) return null;
+  }, [visible, box.compact]);
+  if (!mounted) return null;
   return <div className="fs-card-slot" ref={slot} hidden={!visible} onScrollCapture={event => {
     const element = event.target as HTMLElement;
+    if (element.matches(".fs-branch-list")) onBranchScroll(node.id, element.scrollTop);
     if (element.matches(".node-scroll,textarea")) scroll.current.set(element.className, element.scrollTop);
-  }}>{render(node, "canvas", snapshot)}</div>;
+  }}>{content}</div>;
 }, (before, after) => {
-  if (before.node !== after.node || before.visible !== after.visible || before.compact !== after.compact ||
+  if (before.branchOffset !== after.branchOffset || before.node !== after.node || before.visible !== after.visible || before.prepare !== after.prepare ||
+    before.semantic !== after.semantic || before.box !== after.box || before.dx !== after.dx || before.dy !== after.dy ||
     before.render !== after.render || before.incoming !== after.incoming) return false;
   if (before.snapshot === after.snapshot) return true;
   const node = after.node;
+  if (node.flowType === "flowspace/variable") return before.snapshot?.variables === after.snapshot?.variables;
+  if (node.flowType === "flowspace/trigger") return before.snapshot?.triggers === after.snapshot?.triggers;
   if (node.kind === "changes") return before.snapshot?.live === after.snapshot?.live;
-  if (node.teamRef) {
-    const teamId = node.teamRef.teamId;
-    if (before.snapshot?.teamBlueprints?.find((team) => team.id === teamId) !== after.snapshot?.teamBlueprints?.find((team) => team.id === teamId) ||
-        (node.sessionId && before.snapshot?.teams?.[node.sessionId] !== after.snapshot?.teams?.[node.sessionId])) return false;
+  // Any agent may take role nodes; only leads and library teams follow team runtime traffic.
+  const lead = node.kind === "agent" && (!!node.teamRef || !node.sessionId ||
+    !!before.snapshot?.teams?.[node.sessionId] || !!after.snapshot?.teams?.[node.sessionId]);
+  if (node.kind === "agent" && before.snapshot?.roles !== after.snapshot?.roles) return false;
+  if (lead || node.kind === "role") {
+    const teamId = node.teamRef?.teamId;
+    if (before.snapshot?.roles !== after.snapshot?.roles ||
+        (teamId && before.snapshot?.teamBlueprints?.find((team) => team.id === teamId) !== after.snapshot?.teamBlueprints?.find((team) => team.id === teamId)) ||
+        (node.sessionId && before.snapshot?.teams?.[node.sessionId] !== after.snapshot?.teams?.[node.sessionId]) ||
+        (node.sessionId && before.snapshot?.nativeMessages !== after.snapshot?.nativeMessages) ||
+        (node.kind === "role" && before.snapshot?.teams !== after.snapshot?.teams)) return false;
   }
   const old = runtimeIndex(before.snapshot), current = runtimeIndex(after.snapshot);
+  if (node.generatedBy && hasUnusedResult(before.snapshot?.runs, node) !== hasUnusedResult(after.snapshot?.runs, node)) return false;
   const sameNode = (id: string) => {
     if (old.live.get(id) !== current.live.get(id) || old.statuses.get(id) !== current.statuses.get(id)) return false;
+    if (old.missingEmissions.get(id)?.step !== current.missingEmissions.get(id)?.step) return false;
     if (before.snapshot?.runs === after.snapshot?.runs) return true;
     const steps = old.steps.get(id), next = current.steps.get(id);
     return steps?.length === next?.length && (!steps || steps.every((step, index) => step === next?.[index])) &&
@@ -470,25 +621,17 @@ const ViewportCard = memo(function ViewportCard({ node, visible, compact, render
       before.snapshot?.subagents === after.snapshot?.subagents));
 });
 
-const MiniMapNodes = memo(function MiniMapNodes({ boxes, snapshot, x, y, scale, offsetX, offsetY }: {
-  boxes: { n: FlowNode; b: Box }[]; snapshot: FlowspaceSnapshot | null; x: number; y: number; scale: number; offsetX: number; offsetY: number;
-}) {
-  return <>{boxes.map(({ n, b }) =>
-    <rect key={n.id} className={`mini-node mini-${n.kind === "agent" ? nodeStatusOf(snapshot, n.id) : n.kind}`}
-      x={(b.x - x) * scale + offsetX} y={(b.y - y) * scale + offsetY}
-      width={Math.max(2, b.w * scale)} height={Math.max(2, b.h * scale)} rx={1.8} />,
-  )}</>;
-});
-
 export function CanvasApp({
   bridge,
   renderConversation,
+  renderNotice,
 }: {
   bridge: CanvasBridge;
   renderConversation: (
     node: FlowNode | undefined,
     reference: SessionReference,
   ) => ReactNode;
+  renderNotice?: (notice: FlowNotice, onDone: () => void) => ReactNode;
 }) {
   const snapshot = bridge.useSnapshot();
   const [languageRevision, setLangTick] = useState(0);
@@ -497,18 +640,40 @@ export function CanvasApp({
   useEffect(() => installHostStyleGuard(), []);
 
   const [baseDoc, setDoc] = useState<FlowspaceDocument>(emptyDocument);
+  const [zoomPreparation, setZoomPreparation] = useState<{ area: Box; compact: boolean } | null>(null);
+  const preparedCrossing = useRef<boolean | undefined>(undefined);
   const [gesture, setGesture] = useState<GeometryEdit | null>(null);
   const gestureRef = useRef<GeometryEdit | null>(null);
   const doc = useMemo(() => applyGeometry(baseDoc, gesture), [baseDoc, gesture]);
-  const { nodesById, collapsed, membersOf, referenceSources } = useMemo(() => indexNodes(doc.nodes), [doc.nodes]);
+  const rasterScene = baseDoc.nodes.length >= RASTER_SCENE_NODES;
+  const contentIndex = useMemo(() => indexNodes(baseDoc.nodes), [baseDoc.nodes]);
+  const groupPorts = useMemo(() => new Map(baseDoc.nodes.filter(node => node.kind === "group").map(group =>
+    [group.id, inferGroupPorts(baseDoc, group).filter(port => !port.hidden)])),
+  [baseDoc.nodes, baseDoc.edges]);
+  const { nodesById, collapsed, membersOf } = useMemo(
+    () => doc.nodes === baseDoc.nodes ? contentIndex : indexNodes(doc.nodes),
+    [doc.nodes, baseDoc.nodes, contentIndex],
+  );
+  const staffed = useMemo(() => staffedIds(baseDoc.nodes), [baseDoc.nodes]);
   const edgeIndex = useMemo(() => indexEdges(doc.edges), [doc.edges]);
-  const endpointIndex = useMemo(() => ({ nodes: nodesById, ancestors: collapsed, ports: new Map<string, GroupPort[]>() }), [nodesById, collapsed, doc.edges]);
+  const [branchScroll, setBranchScroll] = useState(() => new Map<string, number>());
+  const onBranchScroll = useCallback((id: string, top: number) => setBranchScroll(previous => {
+    if ((previous.get(id) ?? 0) === top) return previous;
+    const next = new Map(previous);
+    if (top) next.set(id, top);
+    else next.delete(id);
+    return next;
+  }), []);
   const runtime = runtimeIndex(snapshot);
+  const writeByEdge = useMemo(() => new Map(snapshot?.containerChanges?.flatMap(change =>
+    change.edgeId && change.sessionId && !change.revertedBy ? [[change.edgeId, change] as const] : [])),
+  [snapshot?.containerChanges]);
   const docRef = useRef(baseDoc);
   const graphDocument = useMemo(() => doc, [doc.nodes, doc.edges]);
   const dirty = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>();
   const savingPromise = useRef<Promise<unknown>>(Promise.resolve());
+  const applyingConfig = useRef(false);
   const revision = useRef(0);
   const sentRevision = useRef(-1);
   const initialized = useRef(false);
@@ -522,9 +687,23 @@ export function CanvasApp({
   const toastTimer = useRef<ReturnType<typeof setTimeout>>();
 
   const [routeName, setRouteName] = useState<RouteId>("canvas");
+  const [variablePanel, setVariablePanel] = useState(false);
+  const [replayRun, setReplayRun] = useState<FlowspaceRun>();
+  const replayLocked = useRef(false);
+  replayLocked.current = !!replayRun;
+  const [replayTime, setReplayTime] = useState(0);
+  const [reportRun, setReportRun] = useState<FlowspaceRun>();
+  const [arenaOpen, setArenaOpen] = useState(false);
+  const [batchHumanId, setBatchHumanId] = useState<string>();
+  const batchHumanRun = snapshot?.runs.find(run => run.id === batchHumanId);
+  const seenNotices = useRef(new Set<string>());
+  const noticeSince = useRef(Date.now());
+  const [notice, setNotice] = useState<FlowNotice>();
   const [teamNodeId, setTeamNodeId] = useState<string>();
-  const openTeam = useCallback((nodeId: string) => {
+  const [teamFocus, setTeamFocus] = useState<string>();
+  const openTeam = useCallback((nodeId: string, rowId?: string) => {
     setTeamNodeId(nodeId);
+    setTeamFocus(rowId);
     setRouteName("team");
   }, []);
   const [libraryTab, setLibraryTab] = useState<
@@ -579,13 +758,16 @@ export function CanvasApp({
 
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [connecting, setConnecting] = useState<{
-    kind: "reference" | "continuation";
+    kind: FlowEdge["kind"];
     fromIds: string[];
+    anchor: WireAnchor;
+    reason?: string;
     fromPoint: { x: number; y: number; box?: Box };
     current: { x: number; y: number };
     reconnectingEdge?: FlowEdge;
     snappedTarget?: {
       nodeIds: string[];
+      portId?: string;
       point: { x: number; y: number; box?: Box };
       label: string;
       isOriginalTarget?: boolean;
@@ -594,11 +776,11 @@ export function CanvasApp({
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
   const [hubTarget, setHubTarget] = useState<{
     nodeId: string;
-    kind: "reference" | "continuation";
+    kind: FlowEdge["kind"];
   } | null>(null);
   const [hubState, setHubState] = useState<{
     nodeId: string;
-    kind: "reference" | "continuation";
+    kind: FlowEdge["kind"];
     progress: number;
     closing: boolean;
   } | null>(null);
@@ -634,6 +816,10 @@ export function CanvasApp({
     onSubmit: (val: string, secondary?: string) => void;
   } | null>(null);
   const [sessionModal, setSessionModal] = useState<SessionBrief[] | null>(null);
+  const sessionWireDrop = useRef<QuickCreateState | null>(null);
+  useEffect(() => {
+    if (!sessionModal) sessionWireDrop.current = null;
+  }, [sessionModal]);
   const [fileModal, setFileModal] = useState<WorkspaceFilePreview | null>(null);
   const [templatePreviewModal, setTemplatePreviewModal] =
     useState<WorkflowTemplate | null>(null);
@@ -669,6 +855,8 @@ export function CanvasApp({
   /* Live viewport engine: pan / zoom frames write straight to the DOM (compositor-only
      transforms) and React state is committed once the gesture settles. */
   const worldRef = useRef<HTMLDivElement>(null);
+  const cameraRef = useRef<HTMLDivElement>(null);
+  const rasterView = useRef<FlowspaceDocument["viewport"]>();
   const gridRef = useRef<HTMLDivElement>(null);
   const zoomLabelRef = useRef<HTMLButtonElement>(null);
   const miniViewportRef = useRef<SVGRectElement>(null);
@@ -676,12 +864,12 @@ export function CanvasApp({
   /* Cursor light: a soft halo plus a lens that lifts the grid dots near the pointer. */
   const cursorFxRef = useRef<HTMLDivElement>(null);
   const lensGridRef = useRef<HTMLDivElement>(null);
-  const gridTransformRef = useRef("");
+  const gridFrameRef = useRef<ReturnType<typeof applyGridFrame>>();
   const viewCommitTimer = useRef<ReturnType<typeof setTimeout>>();
   const movingTimer = useRef<ReturnType<typeof setTimeout>>();
   const committedLodRef = useRef(false);
   const typeScaleRef = useRef(1);
-  const typeElements = useRef<HTMLElement[]>([]);
+  const typeElements = useRef(new Set<HTMLElement>());
   const wheelTargetRef = useRef<{
     view: { x: number; y: number; zoom: number };
     anchor: { x: number; y: number };
@@ -790,6 +978,27 @@ export function CanvasApp({
     refreshProjectStructures();
   }, [bridge, reportError, refreshProjectStructures]);
 
+  useEffect(() => {
+    for (const notice of snapshot?.notices ?? []) {
+      if (notice.at < noticeSince.current || seenNotices.current.has(notice.id)) continue;
+      seenNotices.current.add(notice.id);
+      if (renderNotice) setNotice(notice);
+      else showToast(`${notice.title} · ${notice.text}`);
+      if (notice.system && typeof Notification !== "undefined" && Notification.permission === "granted")
+        new Notification(notice.title, { body: notice.text });
+      if (notice.sound && typeof AudioContext !== "undefined") {
+        const audio = new AudioContext();
+        const tone = audio.createOscillator();
+        const volume = audio.createGain();
+        volume.gain.value = .06;
+        tone.connect(volume).connect(audio.destination);
+        tone.start();
+        tone.stop(audio.currentTime + .15);
+        tone.onended = () => { void audio.close(); };
+      }
+    }
+  }, [snapshot?.notices, showToast, renderNotice]);
+
   const activeWorkspaceCwd = useMemo(
     () => workspaces.find((w) => w.id === activeWorkspaceId)?.path,
     [workspaces, activeWorkspaceId],
@@ -803,13 +1012,22 @@ export function CanvasApp({
   }, [bridge, activeWorkspaceCwd]);
 
   /* Flush & Edit document */
+  const acceptGeneration = useCallback((local: FlowspaceDocument, host: FlowspaceDocument) => {
+    if (!initialized.current) return local;
+    const received = receiveGeneration(local, host);
+    if (received.history.length) {
+      setHistory(history => [...history, ...received.history].slice(-40));
+      setFuture([]);
+    }
+    return received.document;
+  }, []);
+
   const flush = useCallback(async () => {
     clearTimeout(saveTimer.current);
     if (!dirty.current) {
       await savingPromise.current;
       return;
     }
-    const current = docRef.current;
     const rev = revision.current;
     if (sentRevision.current === rev) {
       await savingPromise.current;
@@ -817,9 +1035,21 @@ export function CanvasApp({
     }
     sentRevision.current = rev;
     const task = savingPromise.current.then(async () => {
+      if (!dirty.current) return;
+      // A config accepted by the Host while this save was queued is part of this document.
+      const currentRevision = revision.current;
+      const submitted = docRef.current;
       try {
-        await bridge.save(current);
-        if (revision.current === rev) {
+        const accepted = await bridge.save(submitted);
+        const current = acceptGeneration(docRef.current, accepted);
+        if ((accepted.generationRevision ?? 0) >= (current.generationRevision ?? 0)) {
+          const reconciled = reconcileLaneChanges(submitted, current, accepted);
+          if (reconciled !== docRef.current) {
+            docRef.current = reconciled;
+            setDoc(reconciled);
+          }
+        }
+        if (revision.current === currentRevision) {
           dirty.current = false;
           setSaved(true);
         }
@@ -832,7 +1062,11 @@ export function CanvasApp({
     });
     savingPromise.current = task.catch(reportError);
     await task;
-  }, [bridge, reportError]);
+  }, [bridge, reportError, acceptGeneration]);
+  const dataPreviews = useCanvasPreviews(baseDoc, snapshot, bridge, flush);
+  const previewHeights = dataPreviews.heights;
+  const endpointIndex = useMemo(() => ({ nodes: nodesById, ancestors: collapsed, ports: groupPorts, branchScroll, previewHeights }),
+    [nodesById, collapsed, groupPorts, branchScroll, previewHeights]);
 
   useEffect(
     () => () => {
@@ -863,6 +1097,7 @@ export function CanvasApp({
       mutator: (d: FlowspaceDocument) => void,
       options: { remember?: boolean; delay?: number } = {},
     ) => {
+      if (replayLocked.current) return;
       const { remember = true, delay = 450 } = options;
       const prev = docRef.current;
       const next = structuredClone(prev);
@@ -876,19 +1111,66 @@ export function CanvasApp({
     [commitEdit],
   );
 
+  const applyConfig = useCallback((id: string, config: NonNullable<FlowNode["config"]>, configVersion: number) => {
+    const task = savingPromise.current.then(async () => {
+      const before = docRef.current;
+      const submittedRevision = revision.current;
+      const withConfig = (document: FlowspaceDocument, changes: Pick<FlowNode, "config" | "configVersion">) => ({
+        ...document, nodes: document.nodes.map(node => node.id === id ? { ...node, ...changes } : node),
+      });
+      if (!before.nodes.some(node => node.id === id)) return;
+      applyingConfig.current = true;
+      try {
+        const savedDocument = await bridge.save(withConfig(before, { config, configVersion }));
+        const local = acceptGeneration(docRef.current, savedDocument);
+        const latest = (savedDocument.generationRevision ?? 0) >= (local.generationRevision ?? 0)
+          ? reconcileLaneChanges(before, local, savedDocument) : local;
+        if (!latest.nodes.some(node => node.id === id)) return;
+        setHistory(history => [...history.slice(-39), local]);
+        setFuture([]);
+        if (revision.current !== submittedRevision) {
+          const accepted = savedDocument.nodes.find(node => node.id === id)!;
+          commitEdit(withConfig(latest, { config: accepted.config, configVersion: accepted.configVersion }), 0);
+        } else {
+          revision.current++;
+          sentRevision.current = revision.current;
+          dirty.current = false;
+          setSaved(true);
+          const accepted = savedDocument.nodes.find(node => node.id === id)!;
+          const next = (latest.generationRevision ?? 0) > (savedDocument.generationRevision ?? 0)
+            ? withConfig(latest, { config: accepted.config, configVersion: accepted.configVersion }) : savedDocument;
+          docRef.current = next;
+          setDoc(next);
+        }
+      } finally {
+        applyingConfig.current = false;
+      }
+    });
+    savingPromise.current = task.catch(() => {}); // ConfigForm displays this request's Host error.
+    return task;
+  }, [bridge, commitEdit, acceptGeneration]);
+
   /* Sync incoming Host snapshots */
   const lastHostDoc = useRef<FlowspaceDocument>();
   useEffect(() => {
     if (!snapshot) return;
-    if (lastHostDoc.current !== snapshot.document && !dirty.current) {
+    const previousNodes = lastHostDoc.current && lastHostDoc.current !== snapshot.document
+      ? byId(docRef.current.nodes)
+      : undefined;
+    const incoming = lastHostDoc.current !== snapshot.document &&
+      (snapshot.document.generationRevision ?? 0) >= (docRef.current.generationRevision ?? 0);
+    const rebased = rebaseContainerChanges(docRef.current, snapshot.containerChanges ?? []);
+    const generated = incoming ? acceptGeneration(rebased, snapshot.document) : rebased;
+    if (incoming && !dirty.current && !applyingConfig.current) {
       docRef.current = snapshot.document;
       setDoc(snapshot.document);
-    } else if (lastHostDoc.current !== snapshot.document) {
+    } else if (incoming || rebased !== docRef.current) {
+      const local = lastHostDoc.current ? reconcileLaneChanges(lastHostDoc.current, generated, snapshot.document) : generated;
       const hostNodes = byId(snapshot.document.nodes);
       const hostEdges = byId(snapshot.document.edges);
       const merged: FlowspaceDocument = {
-        ...docRef.current,
-        nodes: docRef.current.nodes.map((n) => {
+        ...local,
+        nodes: local.nodes.map((n) => {
           const host = hostNodes.get(n.id);
           if (!host) return n;
           return shareSnapshotValue(n, {
@@ -904,7 +1186,7 @@ export function CanvasApp({
               : {}),
           });
         }),
-        edges: docRef.current.edges.map((e) => {
+        edges: local.edges.map((e) => {
           const hostEdge = hostEdges.get(e.id);
           if (!hostEdge) return e;
           if (e.sentVersion === hostEdge.sentVersion && e.originMode === (hostEdge.originMode ?? e.originMode)) return e;
@@ -919,7 +1201,7 @@ export function CanvasApp({
       docRef.current = next;
       setDoc(next);
     }
-    lastHostDoc.current = snapshot.document;
+    if (incoming) lastHostDoc.current = snapshot.document;
     if (!initialized.current) {
       initialized.current = true;
       const d = snapshot.document;
@@ -948,8 +1230,7 @@ export function CanvasApp({
       }
     }
 
-    /* Auto-switch newly started Agent steps to Conversation tab so live stream is visible
-       (the wider live-chat card then makes room via the intrinsic-size reflow below) */
+    const switchToConversation = new Set<string>();
     for (const run of snapshot.runs) {
       if (run.state !== "running") continue;
       for (const step of run.steps) {
@@ -959,59 +1240,31 @@ export function CanvasApp({
         ) {
           autoSwitchedSteps.current.add(step.id);
           const target = docRef.current.nodes.find((n) => n.id === step.nodeId);
-          if (target && target.tab !== "conversation") {
-            edit(
-              (d) => {
-                const n = d.nodes.find((x) => x.id === step.nodeId);
-                if (n) n.tab = "conversation";
-              },
-              { remember: false },
-            );
-          }
+          if (target && target.tab !== "conversation") switchToConversation.add(target.id);
         }
       }
     }
-  }, [snapshot, edit]);
-
-  /* Intrinsic-size reflow: when an expanded card grows on its own (live chat tab, a
-     session binding, …) it pushes the neighbours it would cover; when it shrinks back
-     they return. Manual resizes and first sightings (page load) never move anything. */
-  const intrinsicSizes = useRef(
-    new Map<string, { w: number; h: number; mw: number; mh: number }>(),
-  );
-  useEffect(() => {
-    const seen = new Set<string>();
-    const grown: string[] = [];
-    const shrunk: string[] = [];
-    for (const n of doc.nodes) {
-      if (n.kind === "group" || n.window || !n.expanded) continue;
-      seen.add(n.id);
-      const b = nodeBox(n, false, true);
-      const next = { w: b.w, h: b.h, mw: n.width || 0, mh: n.height || 0 };
-      const prev = intrinsicSizes.current.get(n.id);
-      intrinsicSizes.current.set(n.id, next);
-      if (!prev || prev.mw !== next.mw || prev.mh !== next.mh) continue;
-      if (next.w > prev.w + 1 || next.h > prev.h + 1) grown.push(n.id);
-      else if (next.w < prev.w - 1 || next.h < prev.h - 1) shrunk.push(n.id);
-    }
-    for (const id of intrinsicSizes.current.keys()) {
-      if (!seen.has(id)) intrinsicSizes.current.delete(id);
-    }
-    if (!grown.length && !shrunk.length) return;
+    const justBound = new Set(docRef.current.nodes.flatMap((node) => {
+      const before = previousNodes?.get(node.id);
+      return node.sessionId && node.expanded && node.tab === "conversation" && before && !before.sessionId
+        ? [node.id]
+        : [];
+    }));
+    if (!switchToConversation.size && !justBound.size) return;
     edit(
       (d) => {
-        for (const id of shrunk) {
-          const n = d.nodes.find((x) => x.id === id);
-          if (n) giveRoomBack(d, n);
-        }
-        for (const id of grown) {
-          const n = d.nodes.find((x) => x.id === id);
-          if (n) makeRoom(d, n);
+        for (const node of d.nodes) {
+          const switching = switchToConversation.has(node.id);
+          const bound = justBound.has(node.id);
+          if (!switching && !bound) continue;
+          const previous = nodeBox(bound ? { ...node, sessionId: undefined } : node);
+          if (switching) node.tab = "conversation";
+          reflowCanvasItem(d, node, previous);
         }
       },
       { remember: false },
     );
-  }, [doc.nodes, edit]);
+  }, [snapshot, edit, acceptGeneration]);
 
   const prefs = useMemo(
     () => ({
@@ -1037,9 +1290,17 @@ export function CanvasApp({
   const paintArea = useMemo(() => {
     const viewport = viewportBox(view, vpSize);
     const old = paintAreaRef.current;
-    return encloses(old, viewport) && old.w < viewport.w * 1.45 && old.h < viewport.h * 1.65
-      ? old : padded(viewport, 96 / view.zoom);
-  }, [view, vpSize]);
+    if (encloses(old, viewport) && old.w < viewport.w * 1.45 && old.h < viewport.h * 1.65) return old;
+    const target = wheelTargetRef.current?.view;
+    // Cover the approaching part of a glide in one scene update. Bound prefetch
+    // on large wheel jumps and still update card detail on the actual threshold.
+    if (rasterScene && target && target.zoom < view.zoom) {
+      const end = lod || target.zoom >= LOD_ZOOM ? target : viewAtDetailBoundary(view, target);
+      const ahead = bounds([viewport, viewportBox(end, vpSize)]);
+      if (ahead.w <= viewport.w * 2 && ahead.h <= viewport.h * 2) return padded(ahead, 96 / end.zoom);
+    }
+    return padded(viewport, 96 / view.zoom);
+  }, [view, vpSize, lod, rasterScene]);
   useLayoutEffect(() => { paintAreaRef.current = paintArea; }, [paintArea]);
 
   /* ---------- Cursor light ----------
@@ -1056,9 +1317,12 @@ export function CanvasApp({
      the real ones: lens offset cancels out, leaving the live grid transform. */
   const paintCursorLensGrid = useCallback(() => {
     const lensGrid = lensGridRef.current;
-    if (!lensGrid) return;
+    const frame = gridFrameRef.current;
+    if (!lensGrid || !frame) return;
     const s = cursorFx.current;
-    lensGrid.style.transform = `translate3d(${CURSOR_LENS_R - s.lx}px, ${CURSOR_LENS_R - s.ly}px, 0) ${gridTransformRef.current}`;
+    const x = tileOffset(frame.x + CURSOR_LENS_R - s.lx, frame.period);
+    const y = tileOffset(frame.y + CURSOR_LENS_R - s.ly, frame.period);
+    paintLayer(lensGrid, { transform: `translate3d(${x}px, ${y}px, 0) scale(${frame.scale})` });
   }, []);
 
   const stepCursorFx = useCallback(
@@ -1079,8 +1343,8 @@ export function CanvasApp({
       s.ly += (s.ty - s.ly) * kl;
       s.hx += (s.tx - s.hx) * kh;
       s.hy += (s.ty - s.hy) * kh;
-      halo.style.transform = `translate3d(${s.hx - CURSOR_HALO_R}px, ${s.hy - CURSOR_HALO_R}px, 0)`;
-      lens.style.transform = `translate3d(${s.lx - CURSOR_LENS_R}px, ${s.ly - CURSOR_LENS_R}px, 0)`;
+      paintLayer(halo, { transform: `translate3d(${s.hx - CURSOR_HALO_R}px, ${s.hy - CURSOR_HALO_R}px, 0)` });
+      paintLayer(lens, { transform: `translate3d(${s.lx - CURSOR_LENS_R}px, ${s.ly - CURSOR_LENS_R}px, 0)` });
       paintCursorLensGrid();
       const settled =
         Math.abs(s.tx - s.hx) + Math.abs(s.ty - s.hy) < 0.3 &&
@@ -1099,6 +1363,7 @@ export function CanvasApp({
     const vp = viewportRef.current;
     const root = cursorFxRef.current;
     if (!vp || !root) return;
+    const layers = [cursorHaloRef.current, cursorLensRef.current, lensGridRef.current];
     const CHROME =
       ".fs-canvas-controls, .fs-minimap, .fs-canvas-toolbar, .offscreen-indicator, .fs-welcome-card";
     const BUSY =
@@ -1159,6 +1424,7 @@ export function CanvasApp({
       vp.removeEventListener("pointerdown", onDown);
       cancelAnimationFrame(cursorFx.current.raf);
       cursorFx.current.raf = 0;
+      for (const layer of layers) if (layer) settleLayer(layer);
     };
   }, [stepCursorFx]);
 
@@ -1197,21 +1463,41 @@ export function CanvasApp({
   const applyViewToDom = useCallback(
     (v: { x: number; y: number; zoom: number }, settle = false) => {
       const world = worldRef.current;
-      if (world) {
-        const transform = worldTransform(v);
-        if (settle) {
-          world.style.transform = transform;
+      const camera = cameraRef.current;
+      if (world && camera) {
+        const base = rasterView.current;
+        if (!rasterScene) {
+          if (base) {
+            settleLayer(camera);
+            rasterView.current = undefined;
+          }
+          const transform = worldTransform(v);
+          if (settle) {
+            world.style.transform = transform;
+            settleLayer(world);
+          } else paintLayer(world, { transform });
+        } else if (settle || !base || (base.zoom < LOD_ZOOM) !== (v.zoom < LOD_ZOOM)) {
+          // Crossing replaces the card layout anyway. Rasterise the new layout at
+          // the crossing scale instead of repainting it at the old settled scale.
+          world.style.transform = worldTransform(v);
           settleLayer(world);
-        } else paintLayer(world, { transform });
+          settleLayer(camera);
+          rasterView.current = v;
+        } else {
+          // Composite the raster at the last settled zoom. Baking the final scale
+          // into the inner world on release keeps stationary text at device resolution.
+          const zoom = v.zoom / base.zoom;
+          paintLayer(camera, { transform: worldTransform({ x: v.x - base.x * zoom, y: v.y - base.y * zoom, zoom }) });
+        }
         const ts = typeScaleFor(v.zoom);
         if (ts !== typeScaleRef.current) {
           typeScaleRef.current = ts;
-          for (const element of typeElements.current) element.style.setProperty("--type-scale", String(ts));
+          for (const element of typeElements.current) element.style.setProperty("--fs-type-scale", String(ts));
         }
       }
       const grid = gridRef.current;
       if (grid) {
-        gridTransformRef.current = applyGridFrame(grid, v, settle, [lensGridRef.current]);
+        gridFrameRef.current = applyGridFrame(grid, v, settle, lensGridRef.current);
         if (cursorFx.current.primed) paintCursorLensGrid();
       }
       const label = zoomLabelRef.current;
@@ -1231,11 +1517,10 @@ export function CanvasApp({
         } else paintLayer(miniRect, { x: `${r.x}px`, y: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
       }
     },
-    [paintCursorLensGrid],
+    [paintCursorLensGrid, rasterScene],
   );
 
-  /* While the view moves, promote the world to its own layer so every frame is a pure
-     compositor transform; dropping the hint afterwards re-rasterises text crisply. */
+  /* Suppress hover churn during motion and settle the raster at its final scale. */
   const markViewMoving = useCallback(() => {
     const world = worldRef.current;
     if (!world) return;
@@ -1243,8 +1528,29 @@ export function CanvasApp({
     clearTimeout(movingTimer.current);
     movingTimer.current = setTimeout(() => {
       delete world.dataset.moving;
+      applyViewToDom(docRef.current.viewport, true);
+      if (preparedCrossing.current !== undefined) {
+        preparedCrossing.current = undefined;
+        setZoomPreparation(null);
+      }
     }, 200);
-  }, []);
+  }, [applyViewToDom]);
+
+  const prepareZoom = useCallback((target: FlowspaceDocument["viewport"]) => {
+    const origin = docRef.current.viewport;
+    const compact = target.zoom < LOD_ZOOM;
+    if (compact === (origin.zoom < LOD_ZOOM)) {
+      if (preparedCrossing.current !== undefined) {
+        preparedCrossing.current = undefined;
+        startTransition(() => setZoomPreparation(null));
+      }
+      return;
+    }
+    if (preparedCrossing.current === compact) return;
+    preparedCrossing.current = compact;
+    const area = padded(viewportBox(viewAtDetailBoundary(origin, target), vpSize), 48);
+    startTransition(() => setZoomPreparation({ area, compact }));
+  }, [vpSize]);
 
   const setViewportDirect = useCallback(
     (nextView: { x: number; y: number; zoom: number }, persistDelay = 500) => {
@@ -1280,6 +1586,7 @@ export function CanvasApp({
 
   useEffect(
     () => () => {
+      viewAnimToken.current++;
       clearTimeout(viewCommitTimer.current);
       clearTimeout(movingTimer.current);
       cancelAnimationFrame(wheelRafRef.current);
@@ -1290,21 +1597,19 @@ export function CanvasApp({
   /* Keep the DOM-driven layers (grid, HUD readouts) in step with committed views too,
      e.g. Host snapshots, undo, or the grid element mounting after a route switch. */
   useLayoutEffect(() => {
-    applyViewToDom(docRef.current.viewport, !wheelTargetRef.current);
+    applyViewToDom(docRef.current.viewport, !worldRef.current?.dataset.moving);
   }, [applyViewToDom, view, routeName, minimapOpen]);
   useLayoutEffect(() => {
-    if (!lod || !worldRef.current) {
-      typeElements.current = [];
-      return;
-    }
-    const elements = worldRef.current.querySelectorAll<HTMLElement>(
-      ".fs-card-slot:not([hidden]) :is(.port,.compact .node-heading strong,.compact-status .status,.compact-status .fs-team-node-summary,.compact .node-avatar),.group-header > strong",
+    if (!lod && !typeElements.current.size) return;
+    const matches = lod && worldRef.current?.querySelectorAll<HTMLElement>(
+      ".fs-card-slot:not([hidden]) :is(.port,.compact .node-heading strong,.compact-status .status,.compact-status .fs-team-node-summary,.compact-kind,.compact-overview-detail,.compact .node-actions,.compact .fs-lane-badges,.compact-release),.group-header > :is(strong,.fs-lane-metrics)",
     );
-    typeElements.current = Array.from(elements);
+    const elements = new Set(matches ? Array.from(matches) : []);
     const scale = String(typeScaleFor(docRef.current.viewport.zoom));
-    for (const element of typeElements.current) {
-      if (element.style.getPropertyValue("--type-scale") !== scale) element.style.setProperty("--type-scale", scale);
+    for (const element of elements) {
+      if (!typeElements.current.has(element)) element.style.setProperty("--fs-type-scale", scale);
     }
+    typeElements.current = elements;
   });
 
   const animateView = useCallback(
@@ -1319,6 +1624,7 @@ export function CanvasApp({
         setViewportDirect(target, 300);
         return;
       }
+      prepareZoom(target);
       const started = performance.now();
       // Interpolate zoom geometrically so zooming in and out feel equally paced.
       const logFrom = Math.log(from.zoom);
@@ -1337,7 +1643,7 @@ export function CanvasApp({
       };
       requestAnimationFrame(step);
     },
-    [reducedMotion, setViewportDirect],
+    [reducedMotion, setViewportDirect, prepareZoom],
   );
 
   /* Eased wheel zoom / pan: wheel notches set a target that the view glides toward,
@@ -1353,6 +1659,7 @@ export function CanvasApp({
         return;
       }
       wheelTargetRef.current = { view: target, anchor };
+      prepareZoom(target);
       if (wheelRafRef.current) return;
       let last = performance.now();
       const tick = (now: number) => {
@@ -1393,7 +1700,7 @@ export function CanvasApp({
       };
       wheelRafRef.current = requestAnimationFrame(tick);
     },
-    [reducedMotion, setViewportDirect],
+    [reducedMotion, setViewportDirect, prepareZoom],
   );
 
   const fitBoxes = useCallback(
@@ -1425,12 +1732,11 @@ export function CanvasApp({
 
   /* Visibility & Waiting Helpers */
   const filterSnapshot = ["all", "auto"].includes(prefs.filter) ? null : snapshot;
-  const isNodeVisible = useCallback(
-    (node: FlowNode | undefined, ignoreCollapse = false): boolean => {
+  const passesNodeFilter = useCallback(
+    (node: FlowNode | undefined): boolean => {
       if (!node || node.kind === "group") return false;
       const wsKey = node.workspaceId || "__default__";
       if (prefs.hiddenWorkspaces.includes(wsKey)) return false;
-      if (!ignoreCollapse && collapsed.get(node.id)) return false;
       if (node.kind === "agent" && prefs.filter !== "all") {
         const runtime = runtimeIndex(filterSnapshot);
         const st = nodeStatusOf(filterSnapshot, node.id);
@@ -1458,7 +1764,12 @@ export function CanvasApp({
       }
       return true;
     },
-    [collapsed, prefs.hiddenWorkspaces, prefs.filter, filterSnapshot],
+    [prefs.hiddenWorkspaces, prefs.filter, filterSnapshot],
+  );
+  const isNodeVisible = useCallback(
+    (node: FlowNode | undefined, ignoreCollapse = false) =>
+      !!node && passesNodeFilter(node) && (ignoreCollapse || !collapsed.get(node.id)),
+    [passesNodeFilter, collapsed],
   );
 
   const visibleGroups = useMemo(
@@ -1488,15 +1799,29 @@ export function CanvasApp({
     previousExpanded.current = ids;
     return ids;
   }, [selection.nodes, editingNodeId, doc.nodes, snapshot]);
-  const sceneNodes = useMemo(() => doc.nodes.filter(n => isNodeVisible(n)).map(n => ({
-    n, b: nodeBox(n, lod, Boolean(n.window) || keepExpandedIds.has(n.id)),
-  })), [doc.nodes, isNodeVisible, lod, keepExpandedIds]);
+  const cardBoxes = useMemo(() => {
+    const cache = new WeakMap<FlowNode, [Box, Box]>();
+    return (node: FlowNode) => {
+      const stored = cache.get(node);
+      if (stored) return stored;
+      const expanded = Boolean(node.window) || keepExpandedIds.has(node.id);
+      const previewHeight = previewHeights.get(node.id);
+      const full = nodeBox(node, false, expanded, previewHeight);
+      const compact = nodeBox(node, true, expanded, previewHeight);
+      const boxes: [Box, Box] = [full, full.compact === compact.compact ? full : compact];
+      cache.set(node, boxes);
+      return boxes;
+    };
+  }, [keepExpandedIds, previewHeights]);
+  const visibleNodes = useMemo(() => doc.nodes.filter(n => isNodeVisible(n)), [doc.nodes, isNodeVisible]);
+  const sceneNodes = useMemo(() => visibleNodes.map(n => ({ n, b: cardBoxes(n)[Number(lod)] })), [visibleNodes, cardBoxes, lod]);
+  const preparing = zoomPreparation?.compact !== lod ? zoomPreparation : null;
   const focusedCard = document.activeElement?.closest("[data-node-card]")?.getAttribute("data-node-card");
 
   const waitingAgentNodes = useMemo(
     () =>
       doc.nodes.filter((n) => {
-        if (n.kind !== "agent") return false;
+        if (n.kind !== "agent" && n.kind !== "flow") return false;
         const st = nodeStatusOf(snapshot, n.id);
         return st === "waiting" || st === "input";
       }),
@@ -1504,7 +1829,6 @@ export function CanvasApp({
   );
 
   const derivedStructure = useMemo(() => {
-    const visibleNodes = doc.nodes.filter((n) => isNodeVisible(n));
     const runningIds = new Set(
       doc.nodes
         .filter((n) => n.kind === "agent" && ["running", "settling"].includes(nodeStatusOf(snapshot, n.id)))
@@ -1517,15 +1841,16 @@ export function CanvasApp({
       showBranches: prefs.showBranches,
       showWorktrees: prefs.showWorktrees,
       visibleNodes,
+      visibleGroupBoxes: visibleGroups.map((group) => canvasItemBox(graphDocument, group)),
       lod,
       keepExpandedIds,
-      subagents: (snapshot?.subagents ?? []).filter((member) => !snapshot?.teams?.[member.parentSessionId]),
       runningNodeIds: runningIds,
       waitingNodeIds: waitingIds,
     });
   }, [
-    doc.nodes,
-    isNodeVisible,
+    graphDocument,
+    visibleNodes,
+    visibleGroups,
     snapshot,
     waitingAgentNodes,
     projectStructures,
@@ -1535,6 +1860,19 @@ export function CanvasApp({
     lod,
     keepExpandedIds,
   ]);
+
+  /* Native children: subagents hang from an agent's bottom port; role members from their role node. */
+  const childTree = useMemo(() => buildChildTree({
+    nodes: doc.nodes.filter((n) => isNodeVisible(n)),
+    allNodes: doc.nodes,
+    box: (n) => nodeBox(n, lod, keepExpandedIds.has(n.id)),
+    obstacles: [
+      ...visibleGroups.filter((group) => group.collapsed).map((group) => canvasItemBox(graphDocument, group)),
+      ...derivedStructure.cards.map((card) => card.box),
+    ],
+    subagents: snapshot?.subagents ?? [],
+    teams: snapshot?.teams,
+  }), [graphDocument, isNodeVisible, visibleGroups, derivedStructure.cards, lod, keepExpandedIds, snapshot?.subagents, snapshot?.teams]);
 
   /* Selection & Reveal Helpers */
   const selectNode = useCallback(
@@ -1581,10 +1919,16 @@ export function CanvasApp({
             );
           }
           let cur = d.nodes.find((n) => n.id === nodeId);
+          const ancestors: FlowNode[] = [];
           while (cur?.parentId) {
-            const p = d.nodes.find((x) => x.id === cur!.parentId);
-            if (p?.collapsed) p.collapsed = false;
-            cur = p;
+            const parentId = cur.parentId;
+            cur = d.nodes.find((n) => n.id === parentId);
+            if (cur?.collapsed) ancestors.unshift(cur);
+          }
+          for (const group of ancestors) {
+            const previous = canvasItemBox(d, group);
+            group.collapsed = false;
+            reflowCanvasItem(d, group, previous);
           }
           if (d.prefs?.filter === "running") d.prefs.filter = "all";
         },
@@ -1593,7 +1937,7 @@ export function CanvasApp({
       if (routeName !== "conversation") setRouteName("canvas");
       selectNode(nodeId);
       if (routeName !== "conversation") {
-        const box = nodeBox(target, false, true);
+        const box = nodeBox(docRef.current.nodes.find((n) => n.id === nodeId) ?? target);
         const zoom = Math.max(docRef.current.viewport.zoom, 0.88);
         animateView({
           x: vpSize.width / 2 - (box.x + box.w / 2) * zoom,
@@ -1732,13 +2076,36 @@ export function CanvasApp({
   }, [edit, activeWorkspaceCwd, activeWorkspaceId, focusCreatedGroup]);
 
   /* Node & Edge Mutations */
+  const editBoard = useCallback((id: string, change: BoardEdit) => {
+    const current = docRef.current;
+    const index = current.nodes.findIndex((node) => node.id === id && node.kind === "board");
+    if (index < 0) return;
+    const node = current.nodes[index];
+    const patch = change(node);
+    if (!Object.keys(patch).length) return;
+    const next = { ...node, ...patch };
+    if (patch.columns) next.text = boardSummaryText(patch.columns);
+    const edges = pruneBoardReferences(next, current.edges);
+    edit((doc) => {
+      doc.nodes[index] = next;
+      if (edges !== current.edges) doc.edges = edges;
+    });
+    if (edges !== current.edges) {
+      const remains = new Set(edges.map((edge) => edge.id));
+      setPayloadPeek((peek) => peek && !remains.has(peek.edgeId) ? null : peek);
+      setSelection((selection) => selection.edge && !remains.has(selection.edge)
+        ? { ...selection, edge: null } : selection);
+    }
+  }, [edit]);
+
   const editNode = useCallback(
     (id: string, changes: Partial<FlowNode>) => {
       const textOnly =
         Object.keys(changes).every((k) =>
           ["draft", "task", "text"].includes(k),
         );
-      if (changes.expanded === undefined) {
+      if (changes.expanded === undefined && changes.collapsed === undefined &&
+          changes.tab === undefined && changes.sessionId === undefined) {
         const prev = docRef.current;
         const index = prev.nodes.findIndex(node => node.id === id);
         if (index === -1) return;
@@ -1755,13 +2122,9 @@ export function CanvasApp({
         (d) => {
           const n = d.nodes.find((x) => x.id === id);
           if (!n) return;
-          const togglingExpand =
-            changes.expanded !== undefined && changes.expanded !== n.expanded;
+          const previous = canvasItemBox(d, n);
           Object.assign(n, changes);
-          if (togglingExpand && n.kind !== "group") {
-            if (n.expanded) makeRoom(d, n);
-            else giveRoomBack(d, n);
-          }
+          reflowCanvasItem(d, n, previous);
         },
         { remember: !textOnly },
       );
@@ -1795,7 +2158,8 @@ export function CanvasApp({
   const openWindow = useCallback(
     (nodeId: string) => {
       const area = areaRef.current;
-      const w = Math.min(540, (area?.clientWidth ?? 900) - 48);
+      const board = docRef.current.nodes.find((node) => node.id === nodeId)?.kind === "board";
+      const w = Math.min(board ? 760 : 540, (area?.clientWidth ?? 900) - 48);
       const h = Math.min(540, (area?.clientHeight ?? 620) - 48);
       const maxZ = Math.max(
         10,
@@ -1806,6 +2170,7 @@ export function CanvasApp({
       edit((d) => {
         const n = d.nodes.find((x) => x.id === nodeId);
         if (!n || n.kind === "group") return;
+        const previous = nodeBox(n);
         n.expanded = true;
         n.window = {
           x: Math.max(20, ((area?.clientWidth ?? 900) - w) / 2),
@@ -1814,6 +2179,7 @@ export function CanvasApp({
           h,
           z: maxZ + 1,
         };
+        reflowCanvasItem(d, n, previous);
       });
     },
     [edit],
@@ -1880,6 +2246,7 @@ export function CanvasApp({
         /** Exact top-left placement (e.g. wire-drop port alignment) instead of centring on the point. */
         place?: (node: FlowNode) => { x: number; y: number };
         patch?: Partial<FlowNode>;
+        flowType?: string;
         /** Extra edits (edges) applied in the same undo step as the node creation. */
         link?: (d: FlowspaceDocument, created: FlowNode) => void;
       },
@@ -1931,12 +2298,10 @@ export function CanvasApp({
       const boundAgent = docRef.current.nodes.find(
         (n) => n.kind === "agent" && Boolean(n.sessionId),
       );
+      const x = Math.round((pt.x - 140) / 12) * 12;
+      const y = Math.round((pt.y - 70) / 12) * 12;
       const created: FlowNode = {
-        ...newNode(
-          kind,
-          Math.round((pt.x - 140) / 12) * 12,
-          Math.round((pt.y - 70) / 12) * 12,
-        ),
+        ...(extra?.flowType ? newFlowNode(extra.flowType, x, y, getLanguage()) : newNode(kind, x, y, undefined, getLanguage())),
         ...(kind === "agent"
           ? {
               workspaceId: aff.workspaceId,
@@ -2017,94 +2382,70 @@ export function CanvasApp({
     ],
   );
 
-  const connectNodes = useCallback(
-    (
-      fromIds: string[],
-      toIds: string[],
-      kind: "reference" | "continuation",
-    ) => {
-      edit((d) => {
-        for (const fromId of fromIds) {
-          const source = d.nodes.find((n) => n.id === fromId);
-          if (!source) continue;
-          if (kind === "continuation") {
-            if (source.kind !== "agent") continue;
-            for (const toId of toIds) {
-              const target = d.nodes.find((n) => n.id === toId);
-              if (!target || target.kind !== "agent" || fromId === toId)
-                continue;
-              if (
-                !d.edges.some(
-                  (e) =>
-                    e.source === fromId &&
-                    e.target === toId &&
-                    e.kind === "continuation",
-                )
-              ) {
-                d.edges.push(newEdge(fromId, toId, "continuation"));
-              }
-            }
-          } else {
-            let refSourceId = fromId;
-            /* Agent reference output port creates a live-following Display node just like omp-studio prototype! */
-            if (source.kind === "agent") {
-              const latestText =
-                snapshot?.live.find((l) => l.nodeId === fromId)?.output ||
-                snapshot?.runs
-                  .flatMap((r) => r.steps)
-                  .filter((s) => s.nodeId === fromId)
-                  .at(-1)?.output ||
-                "";
-              const sb = nodeBox(source);
-              const disp: FlowNode = {
-                ...newNode(
-                  "display",
-                  sb.x + sb.w + 32,
-                  sb.y + sb.h + 36,
-                  `${source.title} · ${t("newDisplay")}`,
-                ),
-                sourceNodeId: fromId,
-                text: latestText,
-                fixed: false,
-                expanded: true,
-              };
-              d.nodes.push(disp);
-              refSourceId = disp.id;
-            }
-            for (const toId of toIds) {
-              const target = d.nodes.find((n) => n.id === toId);
-              if (!target || target.kind !== "agent" || refSourceId === toId)
-                continue;
-              if (
-                !d.edges.some(
-                  (e) =>
-                    e.source === refSourceId &&
-                    e.target === toId &&
-                    e.kind === "reference",
-                )
-              ) {
-                const refSrcNode = d.nodes.find((n) => n.id === refSourceId);
-                const snapOnWire =
-                  refSrcNode &&
-                  ["git", "changes", "terminal"].includes(refSrcNode.kind) &&
-                  refSrcNode.text.trim();
-                d.edges.push({
-                  ...newEdge(refSourceId, toId, "reference"),
-                  ...(snapOnWire
-                    ? {
-                        snapshotTitle: refSrcNode.title,
-                        snapshotText: refSrcNode.text,
-                      }
-                    : {}),
-                });
-              }
-            }
-          }
+  const connectNodes = useCallback((
+    fromIds: string[], toIds: string[], kind: FlowEdge["kind"], ends: WireEnds = {},
+  ) => {
+    edit(d => {
+      for (const fromId of fromIds) {
+        const source = d.nodes.find(n => n.id === fromId);
+        if (!source) continue;
+        const targets = d.nodes.filter(target => toIds.includes(target.id) && target.id !== source.id &&
+          canConnect({ source, target, kind, ...ends, edges: d.edges }).ok);
+        if (!targets.length) continue;
+        let origin = source;
+        if (kind === "reference" && source.kind === "agent") {
+          const box = nodeBox(source);
+          origin = {
+            ...newNode("display", box.x + box.w + 32, box.y + box.h + 36, `${source.title} · ${t("newDisplay")}`),
+            sourceNodeId: source.id, expanded: true, fixed: false,
+            text: snapshot?.live.find(l => l.nodeId === fromId)?.output ||
+              snapshot?.runs.flatMap(r => r.steps).filter(s => s.nodeId === fromId).at(-1)?.output || "",
+          };
+          d.nodes.push(origin);
         }
-      });
-    },
-    [edit, snapshot],
-  );
+        const capture = kind === "reference" && ["git", "changes", "terminal"].includes(origin.kind) && origin.text.trim()
+          ? { snapshotTitle: origin.title, snapshotText: origin.text } : {};
+        for (const target of targets) addWire(d, origin, target, kind, { ...ends, ...capture });
+      }
+    });
+  }, [edit, snapshot]);
+
+  const createBoardCompanion = useCallback((boardId: string, cardId: string, kind: "agent" | "note") => {
+    const doc = docRef.current;
+    const board = doc.nodes.find((node) => node.id === boardId && node.kind === "board");
+    const card = board && findBoardCard(board.columns ?? [], cardId)?.card;
+    if (!board || !card) return;
+    const box = nodeBox(board, lod, keepExpandedIds.has(board.id));
+    const start = { x: box.x + box.w + 56, y: box.y };
+    const byId = new Map(doc.nodes.map((node) => [node.id, node]));
+    const ancestors = new Set<string>([board.id]);
+    for (let parent = board.parentId ? byId.get(board.parentId) : undefined;
+      parent; parent = parent.parentId ? byId.get(parent.parentId) : undefined) {
+      ancestors.add(parent.id);
+    }
+    const obstacles = doc.nodes.filter((node) => !ancestors.has(node.id)).map((node) => canvasItemBox(doc, node));
+    const title = deriveDraftTitle(card.text, t("boardTitle"));
+    const draft = t("boardDraft", { title });
+    const created = createCanvasNode(kind, start, undefined, false, {
+      place: (item) => {
+        const position = { ...start };
+        const hit = () => obstacles.filter((obstacle) => intersects(padded(obstacle, 16), {
+          ...position, w: item.width, h: item.height,
+        }));
+        for (let collisions = hit(); collisions.length; collisions = hit()) {
+          position.x = Math.max(...collisions.map((obstacle) => obstacle.x + obstacle.w)) + 56;
+        }
+        return position;
+      },
+      patch: kind === "agent"
+        ? { title, customTitle: true, draft, participation: "manual" }
+        : { title, customTitle: true, text: resolveBoardReference(board, cardId).text },
+      link: kind === "agent" ? (current, target) => {
+        addWire(current, board, target, "reference", { sourceItemKey: cardId });
+      } : undefined,
+    });
+    revealNode(created.id);
+  }, [createCanvasNode, keepExpandedIds, lod, revealNode]);
 
   const deleteSelection = useCallback(() => {
     edit((d) => {
@@ -2112,26 +2453,23 @@ export function CanvasApp({
         d.edges = d.edges.filter((e) => e.id !== selection.edge);
         return;
       }
-      const removeIds = new Set([...selection.nodes, ...selection.groups]);
-      if (!removeIds.size) return;
-      d.nodes = d.nodes.filter((n) => !removeIds.has(n.id));
-      for (const n of d.nodes) {
-        if (n.parentId && removeIds.has(n.parentId)) delete n.parentId;
-      }
-      d.edges = d.edges.filter(
-        (e) => !removeIds.has(e.source) && !removeIds.has(e.target),
-      );
+      removeCanvasNodes(d, [...selection.nodes, ...selection.groups]);
     });
     setSelection({ nodes: [], groups: [], edge: null });
   }, [edit, selection]);
 
   const groupSelected = useCallback(() => {
-    const chosenNodes = selection.nodes.filter((id) =>
-      docRef.current.nodes.some((n) => n.id === id && n.kind !== "group"),
-    );
-    const chosenGroups = selection.groups.filter((id) =>
-      docRef.current.nodes.some((n) => n.id === id && n.kind === "group"),
-    );
+    const chosenIds = new Set([...selection.groups, ...selection.nodes]);
+    for (const owner of docRef.current.nodes.filter(node => node.fanout)) {
+      const structure = docRef.current.nodes.filter(node => node.parentId === owner.id && (
+        node.masterOf || node.generatedBy || node.id === owner.fanout!.fanId || node.id === owner.fanout!.mergeId));
+      if (structure.some(node => chosenIds.has(node.id))) {
+        chosenIds.add(owner.id);
+        for (const member of structure) chosenIds.delete(member.id);
+      }
+    }
+    const chosenNodes = docRef.current.nodes.filter(node => chosenIds.has(node.id) && node.kind !== "group").map(node => node.id);
+    const chosenGroups = docRef.current.nodes.filter(node => chosenIds.has(node.id) && node.kind === "group").map(node => node.id);
     if (chosenNodes.length + chosenGroups.length < 2) {
       showToast(t("groupNeedSelection"));
       return;
@@ -2179,6 +2517,7 @@ export function CanvasApp({
 
   const ungroup = useCallback(
     (groupId: string) => {
+      if (docRef.current.nodes.find(node => node.id === groupId)?.fanout) return;
       edit((d) => {
         const grp = d.nodes.find((n) => n.id === groupId);
         if (!grp) return;
@@ -2195,58 +2534,15 @@ export function CanvasApp({
     [edit],
   );
 
-  const arrangeTopology = useCallback(() => {
-    edit((d) => {
-      const targetGroup = selection.groups.length
-        ? d.nodes.find((n) => n.id === selection.groups[0] && n.kind === "group")
-        : d.nodes.find((n) => n.kind === "group" && !n.parentId);
-      const scopeIds = targetGroup ? new Set(members(d, targetGroup.id)) : null;
-      const agents = d.nodes.filter(
-        (n) => n.kind === "agent" && (!scopeIds || scopeIds.has(n.id)),
-      );
-      if (!agents.length) return;
-      const inside = new Set(agents.map((n) => n.id));
-      const ranks = new Map<string, number>();
-      const visiting = new Set<string>();
-      const rankOf = (id: string): number => {
-        if (ranks.has(id)) return ranks.get(id)!;
-        if (visiting.has(id)) return 0;
-        visiting.add(id);
-        const up = d.edges.filter(
-          (e) =>
-            e.kind === "continuation" &&
-            e.trigger !== "off" &&
-            e.target === id &&
-            inside.has(e.source),
-        );
-        const val = up.length
-          ? Math.max(...up.map((e) => rankOf(e.source))) + 1
-          : 0;
-        visiting.delete(id);
-        ranks.set(id, val);
-        return val;
-      };
-      const colCounts = new Map<number, number>();
-      const startX = (targetGroup?.x ?? 40) + 24;
-      const startY = (targetGroup?.y ?? 126) + 54;
-      for (const ag of agents) {
-        const col = rankOf(ag.id);
-        const row = colCounts.get(col) ?? 0;
-        colCounts.set(col, row + 1);
-        if (!ag.pinned) {
-          ag.x = startX + col * 396;
-          ag.y = startY + row * 444;
-        }
-      }
-      if (targetGroup) {
-        const b = bounds(agents.map((a) => nodeBox(a)));
-        targetGroup.x = b.x - 24;
-        targetGroup.y = b.y - 54;
-        targetGroup.width = b.w + 48;
-        targetGroup.height = b.h + 82;
-      }
-    });
-  }, [edit, selection.groups]);
+  const arrangeTopology = useCallback((targetIds = [...selection.nodes, ...selection.groups]) => {
+    const previous = docRef.current;
+    const next = structuredClone(previous);
+    if (!arrangeCanvas(next, targetIds)) return;
+    setHistory((items) => [...items.slice(-39), previous]);
+    setFuture([]);
+    commitEdit(shareSnapshotValue(previous, next));
+  }, [commitEdit, selection.nodes, selection.groups]);
+  const tidyLabel = selection.nodes.length || selection.groups.length ? "tidySelection" : "tidy";
 
   /* ComfyUI subgraph clipboard, participation & layout ops (pure document edits, undoable) */
   const selectionIds = useCallback(
@@ -2415,7 +2711,8 @@ export function CanvasApp({
       edit(
         (d) => {
           const liveNodes = d.nodes;
-          const restored = structuredClone(target);
+          const restored = rebaseContainerChanges(structuredClone(target), snapshot?.containerChanges ?? [], true);
+          restored.generationRevision = d.generationRevision;
           if (restored.prefs?.wireRouting !== d.prefs?.wireRouting) {
             restored.prefs = { ...restored.prefs, wireRouting: d.prefs?.wireRouting };
           }
@@ -2436,12 +2733,13 @@ export function CanvasApp({
         { remember: false },
       );
     },
-    [future, history, edit],
+    [future, history, edit, snapshot?.containerChanges],
   );
 
   /* Execution & Session Binding (with safe worktree creation for unchecked-out branches, M05) */
   const launchScope = useCallback(
     (req: StartRequest) => {
+      if (replayLocked.current) return;
       void (async () => {
         await flush();
         if (req.kind === "single" && req.nodeIds.length === 1) {
@@ -2654,11 +2952,7 @@ export function CanvasApp({
       };
       edit((d) => {
         d.nodes.push(forked);
-        d.edges.push({
-          ...newEdge(sourceId, forked.id, "continuation"),
-          mode: "fork",
-          trigger: "off",
-        });
+        addWire(d, source, forked, "continuation", { mode: "fork", trigger: "off" });
       });
       pendingFocusRef.current = forked.id;
       selectNode(forked.id);
@@ -2714,6 +3008,36 @@ export function CanvasApp({
     },
     [activeWorkspaceId, activeWorkspaceCwd, edit, focusCreatedGroup, showToast, snapshot?.teamBlueprints],
   );
+
+  const insertFanout = useCallback((point?: { x: number; y: number }, wire?: WireDropContext | null, edgeId?: string) => {
+    const current = docRef.current;
+    const edge = edgeId && current.edges.find(candidate => candidate.id === edgeId);
+    if (edgeId && (!edge || !canInsertFanout(current, edge))) return;
+    const from = edge ? current.nodes.find(node => node.id === edge.source) : wire?.sourceNode;
+    const to = edge ? current.nodes.find(node => node.id === edge.target) : wire?.targetNode;
+    const at = point ?? (from ? { x: from.x + nodeBox(from).w + 48, y: from.y } :
+      to ? { x: to.x - 1176, y: to.y } : { x: 48, y: 80 });
+    const parent = current.nodes.find(node => node.kind === "group" && !node.fanout && !node.parentId && !node.collapsed &&
+      at.x > node.x && at.y > node.y + 48 && at.x < node.x + node.width && at.y < node.y + node.height);
+    const position = clearBoxAlong({ x: at.x - (wire?.direction === "in" ? 1128 : 24), y: at.y - 56, w: 1128, h: 472 },
+      current.nodes.filter(node => node.parentId === parent?.id).map(node => canvasItemBox(current, node)), "y", 1, 24);
+    let groupId = "";
+    edit(d => {
+      const pair = createFanoutPair(d, Math.round(position.x / 12) * 12, Math.round(position.y / 12) * 12, {
+        locale: getLanguage(), parentId: parent?.id, edgeId,
+        workspaceId: from?.workspaceId ?? to?.workspaceId ?? (activeWorkspaceId || undefined),
+        cwd: from?.cwd ?? to?.cwd ?? activeWorkspaceCwd,
+      });
+      groupId = pair.group.id;
+      if (wire) {
+        const destination = wire.direction === "out" ? pair.fan : pair.merge;
+        linkWireDrop(d, wire, destination, wire.direction === "out"
+          ? { targetPort: "in", ...(wire.portKind === "reference" ? { always: true } : {}) }
+          : { sourcePort: "out" });
+      }
+    });
+    focusCreatedGroup(groupId);
+  }, [activeWorkspaceCwd, activeWorkspaceId, edit, focusCreatedGroup]);
 
   const handleSaveTemplateDialog = useCallback(
     (groupId: string) => {
@@ -2883,7 +3207,7 @@ export function CanvasApp({
 
   /* Menus */
   const openAnchoredMenu = useCallback(
-    (anchor: HTMLElement | { x: number; y: number }, items: MenuItem[]) => {
+    (anchor: HTMLElement | { x: number; y: number }, items: MenuItem[], focusFirst = false) => {
       const pos =
         anchor instanceof HTMLElement
           ? {
@@ -2895,10 +3219,32 @@ export function CanvasApp({
         x: clamp(pos.x, 8, window.innerWidth - 250),
         y: clamp(pos.y, 8, window.innerHeight - Math.min(420, items.length * 36 + 24)),
         items,
+        returnFocus: focusFirst && anchor instanceof HTMLElement ? anchor : undefined,
       });
     },
     [],
   );
+
+  const openBoardMenu = useCallback((anchor: HTMLElement, items: MenuItem[]) => {
+    openAnchoredMenu(anchor, items, true);
+  }, [openAnchoredMenu]);
+
+  const openBoardAgentMenu = useCallback((boardId: string, cardId: string, anchor: HTMLElement) => {
+    const agents = docRef.current.nodes.filter((node) => node.kind === "agent");
+    openBoardMenu(anchor, [
+      { heading: t("boardLinkAgent") },
+      ...agents.map((agent) => ({
+        label: agent.title, icon: "agent",
+        fn: () => {
+          connectNodes([boardId], [agent.id], "reference", { sourceItemKey: cardId });
+          showToast(t("boardAgentLinked", { name: agent.title }));
+        },
+      })),
+      ...(agents.length ? [] : [{ label: t("boardNoAgents"), disabled: true }]),
+      { divider: true },
+      { label: t("boardDispatch"), icon: "sendTask", fn: () => createBoardCompanion(boardId, cardId, "agent") },
+    ]);
+  }, [openBoardMenu, connectNodes, createBoardCompanion, showToast]);
 
   const openAddMenu = useCallback(
     (
@@ -2907,6 +3253,7 @@ export function CanvasApp({
     ) => {
       openAnchoredMenu(anchor, [
         { heading: t("create") },
+        { label: t("flow_fanout_group"), icon: "fanout", fn: () => insertFanout(worldPt) },
         {
           label: t("newAgent"),
           icon: "agent",
@@ -2970,6 +3317,7 @@ export function CanvasApp({
       bridge,
       reportError,
       handleInstantiateTemplate,
+      insertFanout,
     ],
   );
 
@@ -2994,6 +3342,10 @@ export function CanvasApp({
       setQuickCreate(null);
       if (!qc) return;
       const { world, wire } = qc;
+      if (sel.action === "create-fanout") {
+        insertFanout(world, wire);
+        return;
+      }
       /* The node the wire was dragged from (out port) or into (in port) */
       const anchorNode = wire
         ? docRef.current.nodes.find(
@@ -3012,12 +3364,16 @@ export function CanvasApp({
               alignedWireDropPosition(anchorBox, portKind, world, n.kind, {
                 direction: wire!.direction,
                 sourceKind: anchorNode.kind,
+                sourcePortOffset: portY(anchorNode, portKind, !!anchorBox.compact, wire?.portId, branchScroll.get(anchorNode.id), anchorBox.h, wire?.direction),
                 targetCompact: isCompactNode(n, false, true),
               })
           : undefined;
 
       if (sel.action === "existing-session") {
-        void bridge.sessions().then(setSessionModal).catch(reportError);
+        void bridge.sessions().then(sessions => {
+          sessionWireDrop.current = qc;
+          setSessionModal(sessions);
+        }).catch(reportError);
         return;
       }
       if (sel.action === "create-team") {
@@ -3035,16 +3391,10 @@ export function CanvasApp({
                   const entry =
                     inferGroupPorts(d, grp).find(
                       (p) => p.direction === "in" && p.kind === kind && !p.hidden,
-                    )?.nodes ?? [];
-                  for (const targetId of entry) {
+                    );
+                  for (const targetId of entry?.nodes ?? []) {
                     const target = d.nodes.find((n) => n.id === targetId);
-                    if (target?.kind !== "agent") continue;
-                    if (kind === "continuation" && anchorNode.kind !== "agent") continue;
-                    d.edges.push({
-                      ...newEdge(anchorNode.id, targetId, kind),
-                      ...sel.edgePatch,
-                      kind,
-                    });
+                    if (target) linkWireDrop(d, wire, target, { ...sel.edgePatch, kind, targetPort: entry?.portId });
                   }
                 }
               : undefined,
@@ -3081,21 +3431,11 @@ export function CanvasApp({
       const edgeKind = sel.edgePatch?.kind ?? portKind;
       const created = createCanvasNode(sel.nodeKind, world, undefined, false, {
         place: placeAligned,
+        flowType: sel.flowType,
         patch: sel.nodePatch,
         link:
           anchorNode && edgeKind && wire
-            ? (d, c) => {
-                const [from, to] =
-                  wire.direction === "out" ? [anchorNode, c] : [c, anchorNode];
-                /* Host validation: targets are Agents; continuations join Agents only */
-                if (to.kind !== "agent") return;
-                if (edgeKind === "continuation" && from.kind !== "agent") return;
-                d.edges.push({
-                  ...newEdge(from.id, to.id, edgeKind),
-                  ...sel.edgePatch,
-                  kind: edgeKind,
-                });
-              }
+            ? (d, c) => linkWireDrop(d, wire, c, sel.edgePatch)
             : undefined,
       });
       if (created.kind === "agent" || created.kind === "note") {
@@ -3103,7 +3443,8 @@ export function CanvasApp({
       }
     },
     [
-      quickCreate,
+      quickCreate, branchScroll,
+      insertFanout,
       lod,
       keepExpandedIds,
       bridge,
@@ -3129,8 +3470,20 @@ export function CanvasApp({
             }),
         },
       ];
+      if (node.generatedBy && node.itemKey && node.overridden && !node.removed &&
+          docRef.current.nodes.find(n => n.id === node.generatedBy)?.config?.followMaster !== false) {
+        items.push({ label: t("flow_resume_master_sync"), icon: "undo", fn: () => edit(d => {
+          const used = new Set(snapshot?.runs.flatMap(run => run.steps.map(step => step.nodeId)) ?? []);
+          resumeMasterSync(d, node.generatedBy!, node.itemKey!, used);
+        }) });
+      }
+      if (node.kind === "role" && node.staffOf) items.push({
+        label: t("teamRoleDisconnect"),
+        icon: "unplug",
+        fn: () => editNode(node.id, { staffOf: undefined }),
+      });
       if (node.kind === "agent") {
-        if (node.teamRef) items.push({
+        if (isTeamNode(node, staffedIds(docRef.current.nodes))) items.push({
           label: t("teamEnter"),
           icon: "team",
           fn: () => openTeam(node.id),
@@ -3276,10 +3629,7 @@ export function CanvasApp({
           danger: true,
           fn: () => {
             edit((d) => {
-              d.nodes = d.nodes.filter((x) => x.id !== node.id);
-              d.edges = d.edges.filter(
-                (e) => e.source !== node.id && e.target !== node.id,
-              );
+              removeCanvasNodes(d, [node.id]);
             });
             setSelection({ nodes: [], groups: [], edge: null });
           },
@@ -3336,6 +3686,11 @@ export function CanvasApp({
           fn: () => editNode(group.id, { collapsed: !group.collapsed }),
         },
         {
+          label: t("tidyGroup"),
+          icon: "tidy",
+          fn: () => arrangeTopology([group.id]),
+        },
+        {
           label: t("ports"),
           icon: "side",
           fn: () => setInspectorOpen(true),
@@ -3370,7 +3725,26 @@ export function CanvasApp({
           },
         );
       }
-      items.push(
+      if (group.fanout) {
+        const fanId = group.fanout.fanId;
+        items.push({ label: t("flow_append_master_step"), icon: "plus", fn: () => {
+          let id: string | undefined;
+          edit(d => {
+            const previous = canvasItemBox(d, d.nodes.find(node => node.id === group.id)!);
+            id = appendMasterStep(d, fanId, getLanguage())?.id;
+            const frame = d.nodes.find(node => node.id === group.id)!;
+            reflowCanvasItem(d, frame, previous);
+          });
+          if (id) revealNode(id);
+        } });
+        if (docRef.current.nodes.some(node => node.generatedBy === fanId && node.removed)) {
+          items.push({ label: t("flow_cleanup_lanes"), icon: "trash", fn: () => edit(d => cleanRetiredLanes(d, fanId)) });
+        }
+        items.push({ label: t("deleteNode"), icon: "trash", danger: true, fn: () => {
+          edit(d => removeCanvasNodes(d, [group.id]));
+          setSelection({ nodes: [], groups: [], edge: null });
+        } });
+      } else items.push(
         { divider: true },
         {
           label: t("ungroup"),
@@ -3384,9 +3758,11 @@ export function CanvasApp({
     [
       editNode,
       launchScope,
+      arrangeTopology,
       handleSaveTemplateDialog,
       handleOpenSyncTemplate,
       handleSaveNewTemplateVersion,
+      edit, revealNode,
       ungroup,
       openAnchoredMenu,
     ],
@@ -3713,7 +4089,13 @@ export function CanvasApp({
                     cy > g.y + 42 &&
                     cy < g.y + g.height,
                 );
-                target.parentId = hitGroup?.id;
+                const frame = candidateGroups.find(group => group.id === target.parentId && group.fanout);
+                if (frame && (target.masterOf || target.generatedBy || frame.fanout!.fanId === target.id || frame.fanout!.mergeId === target.id)) {
+                  target.x = Math.max(frame.x + 24, target.x);
+                  target.y = Math.max(frame.y + 54, target.y);
+                  frame.width = Math.max(frame.width, target.x + box.w - frame.x + 24);
+                  frame.height = Math.max(frame.height, target.y + box.h - frame.y + 24);
+                } else target.parentId = hitGroup?.id;
               }
             },
           );
@@ -3774,7 +4156,11 @@ export function CanvasApp({
         (_, canceled) => {
           setIsDragging(false);
           if (!moved) return;
-          finishGeometry(canceled);
+          finishGeometry(canceled, (d) => {
+            for (const item of d.nodes) {
+              if (movingIds.includes(item.id)) delete item.nudge;
+            }
+          });
         },
       );
     },
@@ -3799,16 +4185,17 @@ export function CanvasApp({
       const sx = ev.clientX,
         sy = ev.clientY;
       const scale = mode === "window" ? 1 : docRef.current.viewport.zoom;
+      const [minW, minH] = mode === "group" ? [260, 180] : target.kind === "board" ? BOARD_MIN_SIZE : [288, 220];
       setIsDragging(true);
       trackPointer(
         ev,
         (next) => {
           const nw = Math.max(
-            mode === "group" ? 260 : 288,
+            minW,
             initialBox.w + (next.clientX - sx) / scale,
           );
           const nh = Math.max(
-            mode === "group" ? 180 : 220,
+            minH,
             initialBox.h + (next.clientY - sy) / scale,
           );
           const change = mode === "window" && target.window
@@ -3818,7 +4205,10 @@ export function CanvasApp({
         },
         (_, canceled) => {
           setIsDragging(false);
-          finishGeometry(canceled);
+          finishGeometry(canceled, (d) => {
+            const resized = d.nodes.find((n) => n.id === nodeId);
+            if (mode === "group" && resized) delete resized.nudge;
+          });
         },
       );
     },
@@ -3826,7 +4216,7 @@ export function CanvasApp({
   );
 
   const openInputHub = useCallback(
-    (nodeId: string, kind: "reference" | "continuation") => {
+    (nodeId: string, kind: FlowEdge["kind"]) => {
       clearTimeout(hubCloseTimerRef.current);
       setHubTarget((prev) =>
         prev?.nodeId === nodeId && prev.kind === kind ? prev : { nodeId, kind },
@@ -3955,194 +4345,134 @@ export function CanvasApp({
     return cleanup;
   }, [hubTarget, reducedMotion, hubState?.nodeId, hubState?.kind]);
 
-  const resolveSnapTarget = useCallback(
-    (
-      clientX: number,
-      clientY: number,
-      vpRect: DOMRect,
-      kind: "reference" | "continuation",
-      excludeSourceIds: string[],
-      originalTargetId?: string,
-    ) => {
-      const curDoc = docRef.current;
-      const rawWorld = toWorld(curDoc.viewport, vpRect, clientX, clientY);
-      const snapRadius = clamp(28 / curDoc.viewport.zoom, 18, 42);
-      let best: {
-        dist: number;
-        nodeIds: string[];
-        point: { x: number; y: number; box?: Box };
-        label: string;
-      } | null = null;
+  const resolveSnapTarget = useCallback((
+    clientX: number, clientY: number, vpRect: DOMRect, kind: FlowEdge["kind"],
+    fixedIds: string[], anchor: WireAnchor, original?: FlowEdge,
+  ) => {
+    const doc = docRef.current;
+    const current = toWorld(doc.viewport, vpRect, clientX, clientY);
+    const radius = clamp(28 / doc.viewport.zoom, 18, 42);
+    const direction = anchor.direction === "in" ? "out" : "in";
+    const origin = fixedIds.flatMap(id => nodesById.get(id) ?? []);
+    type Match = { nodeIds: string[]; portId?: string; point: ReturnType<typeof endpoint>; label: string; isOriginalTarget: boolean };
+    let reason: string | undefined;
+    const match = (ids: string[], portId: string | undefined, label: string): Match | undefined => {
+      const nodeIds = ids.filter(id => {
+        const target = nodesById.get(id);
+        if (!target || fixedIds.includes(id)) return false;
+        return origin.some(source => {
+          const result = checkDraggedWire(source, target, kind, anchor, portId, doc.edges);
+          if (!result.ok) reason = result.reason;
+          return result.ok;
+        });
+      });
+      if (!nodeIds.length) return;
+      const point = endpoint(doc, nodeIds[0], kind, direction, lod, keepExpandedIds, endpointIndex, portId);
+      return { nodeIds, portId, point, label, isOriginalTarget: !!original && nodeIds.length === 1 &&
+        nodeIds[0] === original.target && (portId ?? "in") === (original.targetPort ?? "in") };
+    };
 
-      for (const n of curDoc.nodes) {
-        if (n.kind === "agent" && isNodeVisible(n)) {
-          if (excludeSourceIds.includes(n.id)) continue;
-          const pt = endpoint(curDoc, n.id, kind, "in", lod, keepExpandedIds);
-          const d = Math.hypot(rawWorld.x - pt.x, rawWorld.y - pt.y);
-          if (d <= snapRadius && (!best || d < best.dist)) {
-            best = { dist: d, nodeIds: [n.id], point: pt, label: n.title };
-          }
-        } else if (n.kind === "group" && n.collapsed && visibleGroups.some((group) => group.id === n.id)) {
-          const gPorts = inferGroupPorts(curDoc, n).filter(
-            (p) => !p.hidden && p.direction === "in" && p.kind === kind,
-          );
-          for (const gp of gPorts) {
-            const targetIds = gp.nodes.filter(
-              (id) => !excludeSourceIds.includes(id),
-            );
-            if (!targetIds.length) continue;
-            const pt = endpoint(
-              curDoc,
-              targetIds[0],
-              kind,
-              "in",
-              lod,
-              keepExpandedIds,
-            );
-            const d = Math.hypot(rawWorld.x - pt.x, rawWorld.y - pt.y);
-            if (d <= snapRadius && (!best || d < best.dist)) {
-              best = { dist: d, nodeIds: targetIds, point: pt, label: gp.name };
-            }
-          }
-        }
+    const hit = document.elementFromPoint(clientX, clientY);
+    const socket = hit?.closest<HTMLElement>("[data-port-direction]");
+    if (socket && socket.dataset.portDirection === direction &&
+        (socket.dataset.portKind === kind || kind === "event" && direction === "in" && socket.dataset.portKind === "continuation")) {
+      const ids = socket.dataset.proxyNodes?.split(",") ?? (socket.dataset.nodeId ? [socket.dataset.nodeId] : []);
+      const snappedTarget = match(ids, socket.dataset.portId, socket.title || nodesById.get(ids[0])?.title || "");
+      return { current: snappedTarget?.point ?? current, snappedTarget, reason: snappedTarget ? undefined : reason };
+    }
+    // Snap to visible compatible sockets in world space, including folded group proxies.
+    let nearest: Match | undefined;
+    let distance = radius;
+    for (const node of doc.nodes) {
+      if (fixedIds.includes(node.id)) continue;
+      const candidates = node.kind === "group" && node.collapsed && visibleGroups.some(group => group.id === node.id)
+        ? (groupPorts.get(node.id) ?? []).filter(p => !p.hidden && p.direction === direction && p.kind === kind)
+            .map(p => ({ ids: p.nodes, portId: p.portId, label: p.name }))
+        : isNodeVisible(node) ? wirePortIds(node, kind, direction)
+            .map(portId => ({ ids: [node.id], portId, label: node.title })) : [];
+      for (const port of candidates) {
+        if (!port.ids.length) continue;
+        const point = endpoint(doc, port.ids[0], kind, direction, lod, keepExpandedIds, endpointIndex, port.portId);
+        if (node.kind === "flow" && !point.box.compact && port.portId &&
+            point.y !== point.box.y + portY(node, kind, false, port.portId, endpointIndex.branchScroll.get(node.id), undefined, direction)) continue;
+        const d = Math.hypot(current.x - point.x, current.y - point.y);
+        if (d > distance) continue;
+        const found = match(port.ids, port.portId, port.label);
+        if (found) { nearest = found; distance = d; }
       }
+    }
+    if (nearest) return { current: nearest.point, snappedTarget: nearest, reason: undefined };
 
-      if (best) {
-        return {
-          current: { x: best.point.x, y: best.point.y },
-          snappedTarget: {
-            nodeIds: best.nodeIds,
-            point: best.point,
-            label: best.label,
-            isOriginalTarget:
-              Boolean(originalTargetId) &&
-              best.nodeIds.length === 1 &&
-              best.nodeIds[0] === originalTargetId,
-          },
-        };
+    const cardId = hit?.closest<HTMLElement>("[data-node-card]")?.dataset.nodeCard;
+    const card = cardId ? nodesById.get(cardId) : undefined;
+    reason = undefined;
+    if (card) {
+      const ports = wirePortIds(card, kind, direction);
+      for (const id of ports.length ? ports : [direction]) {
+        const snappedTarget = match([card.id], id, card.title);
+        if (snappedTarget) return { current, snappedTarget, reason: undefined };
       }
-
-      const hitEl = document.elementFromPoint(
-        clientX,
-        clientY,
-      ) as HTMLElement | null;
-      const inPort = hitEl?.closest<HTMLElement>('[data-port-direction="in"]');
-      if (inPort && inPort.dataset.portKind === kind) {
-        const proxyIds = inPort.dataset.proxyNodes
-          ?.split(",")
-          .filter((id) => Boolean(id) && !excludeSourceIds.includes(id));
-        const targetIds = proxyIds?.length
-          ? proxyIds
-          : inPort.dataset.nodeId &&
-              !excludeSourceIds.includes(inPort.dataset.nodeId)
-            ? [inPort.dataset.nodeId]
-            : [];
-        if (targetIds.length) {
-          const pt = endpoint(
-            curDoc,
-            targetIds[0],
-            kind,
-            "in",
-            lod,
-            keepExpandedIds,
-          );
-          const tNode = curDoc.nodes.find((n) => n.id === targetIds[0]);
-          return {
-            current: { x: pt.x, y: pt.y },
-            snappedTarget: {
-              nodeIds: targetIds,
-              point: pt,
-              label: tNode?.title ?? "",
-              isOriginalTarget:
-                Boolean(originalTargetId) &&
-                targetIds.length === 1 &&
-                targetIds[0] === originalTargetId,
-            },
-          };
-        }
-      }
-
-      const hitCard = hitEl?.closest<HTMLElement>("[data-node-card]");
-      if (hitCard?.dataset.nodeCard) {
-        const targetNode = curDoc.nodes.find(
-          (n) => n.id === hitCard.dataset.nodeCard,
-        );
-        if (
-          targetNode?.kind === "agent" &&
-          !excludeSourceIds.includes(targetNode.id)
-        ) {
-          const pt = endpoint(
-            curDoc,
-            targetNode.id,
-            kind,
-            "in",
-            lod,
-            keepExpandedIds,
-          );
-          return {
-            current: rawWorld,
-            snappedTarget: {
-              nodeIds: [targetNode.id],
-              point: pt,
-              label: targetNode.title,
-              isOriginalTarget: targetNode.id === originalTargetId,
-            },
-          };
-        }
-      }
-
-      return { current: rawWorld, snappedTarget: null };
-    },
-    [isNodeVisible, visibleGroups, lod, keepExpandedIds],
-  );
+    }
+    return { current, snappedTarget: undefined, reason };
+  }, [nodesById, endpointIndex, groupPorts, isNodeVisible, visibleGroups, lod, keepExpandedIds]);
 
   const startPortDrag = useCallback(
     (
       ev: React.PointerEvent,
       fromIds: string[],
-      kind: "reference" | "continuation",
+      kind: FlowEdge["kind"],
+      sourceItemKey?: string,
+      onDragStart?: () => void,
+      portId?: string,
+      direction: "out" | "in" = "out",
     ) => {
       ev.stopPropagation();
+      if (ev.button !== 0) return;
       const vpRect = viewportRef.current?.getBoundingClientRect();
       if (!vpRect || !fromIds.length) return;
-      closeInputHubImmediate();
-      const fromPt = endpoint(
-        docRef.current,
-        fromIds[0],
-        kind,
-        "out",
-        lod,
-        keepExpandedIds,
-      );
-      setConnecting({
-        kind,
-        fromIds,
-        fromPoint: fromPt,
-        current: { x: fromPt.x, y: fromPt.y },
-        snappedTarget: null,
-      });
-      setIsDragging(true);
+      const start = { x: ev.clientX, y: ev.clientY };
+      const anchor: WireAnchor = direction === "out"
+        ? { sourceItemKey, sourcePort: portId, direction } : { targetPort: portId, direction };
+      const fromPt = sourceItemKey !== undefined
+        ? toWorld(docRef.current.viewport, vpRect, start.x, start.y)
+        : endpoint(docRef.current, fromIds[0], kind, direction, lod, keepExpandedIds, endpointIndex, portId);
+      let started = false;
+      const begin = () => {
+        started = true;
+        onDragStart?.();
+        closeInputHubImmediate();
+        setConnecting({
+          kind, fromIds, anchor, fromPoint: fromPt,
+          current: { x: fromPt.x, y: fromPt.y }, snappedTarget: null,
+        });
+        setIsDragging(true);
+      };
+      if (sourceItemKey === undefined) begin();
       trackPointer(
         ev,
         (next) => {
+          if (!started) {
+            if (Math.hypot(next.clientX - start.x, next.clientY - start.y) <= 5) return;
+            begin();
+          }
           const snap = resolveSnapTarget(
             next.clientX,
             next.clientY,
             vpRect,
             kind,
-            fromIds,
+            fromIds, anchor,
           );
           setConnecting((prev) =>
             prev
               ? {
                   ...prev,
-                  current: snap.current,
-                  snappedTarget: snap.snappedTarget,
+                  ...snap,
                 }
               : null,
           );
         },
         (endEv, canceled) => {
+          if (!started) return;
           setIsDragging(false);
           setConnecting(null);
           if (canceled || !("clientX" in endEv)) return;
@@ -4151,10 +4481,15 @@ export function CanvasApp({
             endEv.clientY,
             vpRect,
             kind,
-            fromIds,
+            fromIds, anchor,
           );
           if (snap.snappedTarget?.nodeIds.length) {
-            connectNodes(fromIds, snap.snappedTarget.nodeIds, kind);
+            const target = snap.snappedTarget;
+            if (direction === "out") {
+              connectNodes(fromIds, target.nodeIds, kind, { sourceItemKey, sourcePort: portId, targetPort: target.portId });
+            } else {
+              connectNodes(target.nodeIds, fromIds, kind, { sourcePort: target.portId, targetPort: portId });
+            }
             return;
           }
           const hitEl = document.elementFromPoint(
@@ -4172,6 +4507,17 @@ export function CanvasApp({
             hitEl?.closest(".fs-viewport") &&
             !hitEl.closest(".node,.workflow-group,.fs-minimap,.fs-canvas-controls")
           ) {
+            if (sourceItemKey !== undefined) {
+              const sourceNode = docRef.current.nodes.find(node => node.id === fromIds[0]);
+              openAnchoredMenu({ x: endEv.clientX, y: endEv.clientY }, [
+                { label: t("boardDispatch"), icon: "sendTask",
+                  fn: () => createBoardCompanion(fromIds[0], sourceItemKey, "agent") },
+                { label: t("flow_fanout_group"), icon: "fanout", fn: () => insertFanout(dropWorld, {
+                  portKind: kind, direction, portId, sourceNode, sourceItemKey, nodeIds: fromIds,
+                }) },
+              ]);
+              return;
+            }
             const source = docRef.current.nodes.find(
               (n) => n.id === fromIds[0],
             );
@@ -4179,12 +4525,8 @@ export function CanvasApp({
             openQuickCreate(
               { x: endEv.clientX, y: endEv.clientY },
               {
-                portKind:
-                  kind === "continuation" && source.kind !== "agent"
-                    ? "reference"
-                    : kind,
-                direction: "out",
-                sourceNode: source,
+                portKind: kind, portId, direction, nodeIds: fromIds,
+                ...(direction === "out" ? { sourceNode: source } : { targetNode: source }),
                 worldPoint: dropWorld,
               },
             );
@@ -4200,8 +4542,119 @@ export function CanvasApp({
       trackPointer,
       connectNodes,
       openQuickCreate,
+      openAnchoredMenu,
+      createBoardCompanion,
+      insertFanout,
     ],
   );
+
+  /* ---------- Staffing wires: a role node's top socket ⇄ a team's bottom port ---------- */
+  const [staffDrag, setStaffDrag] = useState<{ roleId?: string; teamId?: string; anchor: { x: number; y: number } } | null>(null);
+  const [staffTip, setStaffTip] = useState<{ x: number; y: number } | null>(null);
+  const [staffTarget, setStaffTarget] = useState<string>();
+  const wantsRoutes = useMemo(() => doc.nodes.some((n) => n.kind === "role" || !!n.teamConfig), [doc.nodes]);
+  const modelRoutes = useModelRoutes(bridge, wantsRoutes);
+  const staffSocketPoint = useCallback((role: FlowNode) => {
+    const box = nodeBox(role, lod, keepExpandedIds.has(role.id));
+    return { x: box.x + box.w / 2, y: box.y };
+  }, [lod, keepExpandedIds]);
+  const staffPortPoint = useCallback((team: FlowNode) => {
+    const box = nodeBox(team, lod, keepExpandedIds.has(team.id));
+    return { x: box.x + box.w / 2, y: box.y + box.h };
+  }, [lod, keepExpandedIds]);
+
+  /** Wires `roleId` into `teamId`, giving it a slot name free in that team. */
+  const staffInto = useCallback((d: FlowspaceDocument, roleId: string, teamId: string): boolean => {
+    const role = d.nodes.find((n) => n.id === roleId && n.kind === "role");
+    const team = d.nodes.find((n) => n.id === teamId);
+    if (!role || team?.kind !== "agent") return false;
+    const others = staffNodes(d.nodes, teamId).filter((n) => n.id !== roleId);
+    const blueprint = team?.teamRef ? snapshot?.teamBlueprints?.find((b) => b.id === team.teamRef?.teamId) : undefined;
+    if (others.length + (blueprint?.slots.length ?? 0) >= 8) {
+      showToast(t("teamSlotsFull"), true);
+      return false;
+    }
+    const taken = new Set([...(blueprint?.slots.map((slot) => slot.slotId) ?? []),
+      ...others.flatMap((n) => n.slotId ? [n.slotId] : [])]);
+    role.staffOf = teamId;
+    if (!role.slotId || taken.has(role.slotId)) role.slotId = slotIdFor(role.title, taken);
+    // The first role turns a plain agent into a team; make room for its crew tab.
+    if (!team.teamRef && !others.length) {
+      const previous = nodeBox(team);
+      team.width = Math.max(team.width, 440);
+      team.height = Math.max(team.height, 540);
+      reflowCanvasItem(d, team, previous);
+    }
+    return true;
+  }, [snapshot?.teamBlueprints, showToast]);
+
+  const startStaffDrag = useCallback((ev: React.PointerEvent, from: { roleId?: string; teamId?: string }) => {
+    ev.stopPropagation();
+    const vpRect = viewportRef.current?.getBoundingClientRect();
+    const origin = docRef.current.nodes.find((n) => n.id === (from.roleId ?? from.teamId));
+    if (!vpRect || !origin) return;
+    const anchor = from.roleId ? staffSocketPoint(origin) : staffPortPoint(origin);
+    const wasStaffed = from.roleId ? origin.staffOf : undefined;
+    const hit = (clientX: number, clientY: number) => {
+      const card = (document.elementFromPoint(clientX, clientY) as HTMLElement | null)?.closest<HTMLElement>("[data-node-card]");
+      const node = card ? docRef.current.nodes.find((n) => n.id === card.dataset.nodeCard) : undefined;
+      if (!node || node.id === origin.id) return undefined;
+      return node.kind === (from.roleId ? "agent" : "role") ? node : undefined;
+    };
+    setStaffDrag({ ...from, anchor });
+    setStaffTip(anchor);
+    setIsDragging(true);
+    trackPointer(ev, (move) => {
+      const node = hit(move.clientX, move.clientY);
+      setStaffTarget((prev) => prev === node?.id ? prev : node?.id);
+      setStaffTip(node
+        ? (from.roleId ? staffPortPoint(node) : staffSocketPoint(node))
+        : toWorld(docRef.current.viewport, vpRect, move.clientX, move.clientY));
+    }, (end, canceled) => {
+      setStaffDrag(null);
+      setStaffTip(null);
+      setStaffTarget(undefined);
+      setIsDragging(false);
+      if (canceled || !("clientX" in end)) return;
+      const node = hit(end.clientX, end.clientY);
+      if (from.roleId) {
+        if (node) edit((d) => { staffInto(d, from.roleId!, node.id); });
+        else if (wasStaffed && Math.hypot(end.clientX - ev.clientX, end.clientY - ev.clientY) > 6)
+          edit((d) => { const role = d.nodes.find((n) => n.id === from.roleId); if (role) delete role.staffOf; });
+        return;
+      }
+      if (node) {
+        edit((d) => { staffInto(d, node.id, from.teamId!); });
+        return;
+      }
+      // Dropped on empty canvas: a new role, already wired in.
+      const hitEl = document.elementFromPoint(end.clientX, end.clientY) as HTMLElement | null;
+      if (!hitEl?.closest(".fs-viewport") || hitEl.closest(".node,.workflow-group,.fs-minimap,.fs-canvas-controls")) return;
+      const at = toWorld(docRef.current.viewport, vpRect, end.clientX, end.clientY);
+      const created = createCanvasNode("role", at, undefined, false, {
+        place: (n) => ({ x: Math.round((at.x - n.width / 2) / 12) * 12, y: Math.round(at.y / 12) * 12 }),
+        patch: { title: t("teamRoleUntitled") },
+        link: (d, role) => { staffInto(d, role.id, from.teamId!); },
+      });
+      pendingFocusRef.current = created.id;
+    });
+  }, [staffSocketPoint, staffPortPoint, trackPointer, edit, staffInto, createCanvasNode]);
+
+  const staffWires = useMemo<StaffWire[]>(() => {
+    const wires: StaffWire[] = [];
+    for (const role of doc.nodes) {
+      if (role.kind !== "role" || !role.staffOf || role.id === staffDrag?.roleId) continue;
+      const team = nodesById.get(role.staffOf);
+      if (team?.kind !== "agent" || !isNodeVisible(role) || !isNodeVisible(team)) continue;
+      const runtime = team!.sessionId ? snapshot?.teams?.[team!.sessionId] : undefined;
+      const slot = runtime?.slots.find((s) => s.nodeId === role.id)?.slotId;
+      wires.push({
+        id: role.id, from: staffPortPoint(team!), to: staffSocketPoint(role),
+        active: !!slot && !!runtime?.members.some((m) => m.slotId === slot && m.activity === "running"),
+      });
+    }
+    return wires;
+  }, [doc.nodes, nodesById, isNodeVisible, snapshot?.teams, staffPortPoint, staffSocketPoint, staffDrag?.roleId]);
 
   /**
    * ComfyUI-style Input Wire Unplug / Reroute / Disconnect:
@@ -4227,13 +4680,14 @@ export function CanvasApp({
           ) {
             return;
           }
+          const anchor: WireAnchor = { sourcePort: edge.sourcePort, sourceItemKey: edge.sourceItemKey, mode: edge.mode, edgeId: edge.id };
           const fromPt = endpoint(
             docRef.current,
             edge.source,
             edge.kind,
             "out",
             lod,
-            keepExpandedIds,
+            keepExpandedIds, endpointIndex, edge.sourcePort,
           );
           if (!unplugged) {
             unplugged = true;
@@ -4245,12 +4699,11 @@ export function CanvasApp({
             next.clientY,
             vpRect,
             edge.kind,
-            [edge.source],
-            edge.target,
+            [edge.source], anchor, edge,
           );
           setConnecting({
             kind: edge.kind,
-            fromIds: [edge.source],
+            fromIds: [edge.source], anchor, reason: snap.reason,
             fromPoint: fromPt,
             current: snap.current,
             reconnectingEdge: edge,
@@ -4272,54 +4725,43 @@ export function CanvasApp({
             endEv.clientY,
             vpRect,
             edge.kind,
-            [edge.source],
-            edge.target,
+            [edge.source], { sourcePort: edge.sourcePort, sourceItemKey: edge.sourceItemKey, mode: edge.mode, edgeId: edge.id }, edge,
           );
 
-          if (snap.snappedTarget?.isOriginalTarget) {
+          if (snap.reason || snap.snappedTarget?.isOriginalTarget) {
             return;
           }
 
           if (snap.snappedTarget?.nodeIds.length) {
             const targetLabel = snap.snappedTarget.label;
             const targetIds = snap.snappedTarget.nodeIds;
+            const targetPort = snap.snappedTarget.portId;
             let primaryEdgeId = edge.id;
             edit((d) => {
               const existing = d.edges.find((x) => x.id === edge.id);
               if (!existing) return;
               const validTargets = targetIds.filter((tid) => {
                 const tn = d.nodes.find((n) => n.id === tid);
-                return tn?.kind === "agent" && tid !== existing.source;
+                return tid !== existing.source && canConnect({ ...existing, source: d.nodes.find(n => n.id === existing.source),
+                  target: tn, targetPort, edges: d.edges, edgeId: existing.id }).ok;
               });
               if (!validTargets.length) return;
               const [firstTarget, ...restTargets] = validTargets;
-              const dup = d.edges.find(
-                (x) =>
-                  x.id !== existing.id &&
-                  x.source === existing.source &&
-                  x.target === firstTarget &&
-                  x.kind === existing.kind,
-              );
+              const dup = d.edges.find(x => x.id !== existing.id && matchesWire(x, { ...existing, target: firstTarget, targetPort }));
               if (dup) {
                 primaryEdgeId = dup.id;
                 d.edges = d.edges.filter((x) => x.id !== existing.id);
               } else {
                 existing.target = firstTarget;
+                existing.targetPort = targetPort;
                 existing.waypoints = [];
               }
               for (const extraId of restTargets) {
-                if (
-                  !d.edges.some(
-                    (x) =>
-                      x.source === existing.source &&
-                      x.target === extraId &&
-                      x.kind === existing.kind,
-                  )
-                ) {
+                if (!d.edges.some(x => matchesWire(x, { ...existing, target: extraId, targetPort }))) {
                   d.edges.push({
                     ...structuredClone(existing),
                     id: uid(),
-                    target: extraId,
+                    target: extraId, targetPort,
                     waypoints: [],
                   });
                 }
@@ -4330,6 +4772,8 @@ export function CanvasApp({
             return;
           }
 
+          const hit = document.elementFromPoint(endEv.clientX, endEv.clientY);
+          if (!hit?.closest(".fs-viewport") || hit.closest(".node,.workflow-group,.fs-minimap,.fs-canvas-controls")) return;
           /* Dropped onto empty canvas: disconnect (delete) the wire cleanly with Undo support */
           edit((d) => {
             d.edges = d.edges.filter((x) => x.id !== edge.id);
@@ -4445,6 +4889,7 @@ export function CanvasApp({
   /* Global Keyboard Shortcuts & Dialog Focus Trap */
   useEffect(() => {
     const onKeyDown = (ev: KeyboardEvent) => {
+      if (replayLocked.current) return;
       const target = ev.target instanceof HTMLElement ? ev.target : null;
       const inOurRoot =
         Boolean(target && rootRef.current?.contains(target)) ||
@@ -4506,6 +4951,7 @@ export function CanvasApp({
 
       if (menu && ev.key === "Escape") {
         ev.preventDefault();
+        menu.returnFocus?.focus({ preventScroll: true });
         setMenu(null);
         return;
       }
@@ -4528,9 +4974,9 @@ export function CanvasApp({
         setSpacePressed(true);
         return;
       }
-      if (mod && ev.key.toLowerCase() === "z") {
+      if (mod && ["z", "y"].includes(ev.key.toLowerCase())) {
         ev.preventDefault();
-        performUndo(ev.shiftKey);
+        performUndo(ev.shiftKey || ev.key.toLowerCase() === "y");
         return;
       }
 
@@ -4759,13 +5205,16 @@ export function CanvasApp({
   /* Close menu on outside click */
   useEffect(() => {
     if (!menu) return;
+    if (menu.returnFocus) {
+      rootRef.current?.querySelector<HTMLElement>('.fs-menu[role="menu"] > button:not(:disabled)')?.focus();
+    }
     const onDown = (ev: PointerEvent) => {
       if (!(ev.target as HTMLElement | null)?.closest(".fs-menu")) {
         setMenu(null);
       }
     };
-    document.addEventListener("pointerdown", onDown);
-    return () => document.removeEventListener("pointerdown", onDown);
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
   }, [menu]);
 
   /* Wheel Zoom / Pan on Canvas Viewport */
@@ -4881,14 +5330,16 @@ export function CanvasApp({
 
   /* Computed SVG Wire Geometry */
   const svgBounds = paintArea;
+  const wireViewport = useMemo(() => viewportBox(view, vpSize), [view, vpSize]);
 
   const edgeVisualState = useCallback(
     (edge: FlowEdge): string => {
       if (edge.kind === "reference") {
         return capsuleStateOf(edge, snapshot?.sourceVersions);
       }
+      if (runtime.latestToken.get(edge.id)?.skip) return "skipped";
       if (
-        nodesById.get(edge.target)?.participation ===
+        contentIndex.nodesById.get(edge.target)?.participation ===
         "bypassed"
       ) {
         return "bypassed";
@@ -4919,26 +5370,28 @@ export function CanvasApp({
         return "done";
       return "idle";
     },
-    [snapshot, nodesById, runtime],
+    [snapshot, contentIndex, runtime],
   );
 
   const wireCaches = useMemo(() => [new SceneWires(), new SceneWires()], []);
+  const pathIds = useMemo(() => {
+    const ids = new Set(derivedStructure.links.map(link => link.id));
+    for (const node of baseDoc.nodes) {
+      if (node.kind === "detail" || node.kind === "display") ids.add(`source:${node.id}`);
+    }
+    return ids;
+  }, [derivedStructure.links, baseDoc.nodes]);
   const wireScene = useMemo(() => {
     const cache = wireCaches[Number(lod)];
-    const pathIds = new Set(derivedStructure.links.map(link => link.id));
-    for (const node of doc.nodes) {
-      if (node.kind === "detail" || node.kind === "display") pathIds.add(`source:${node.id}`);
-    }
-    cache.update(routingBoxes, doc.edges, pathIds);
-    return { cache };
-  }, [wireCaches, lod, routingBoxes, doc.edges, doc.nodes, derivedStructure.links]);
-  const baseWireLayouts = useMemo(() => {
-    return graphDocument.edges.flatMap((edge) => {
-      if (
-        !isNodeVisible(nodesById.get(edge.source), true) ||
-        !isNodeVisible(nodesById.get(edge.target), true)
-      ) return [];
-
+    const invalid = cache.update(routingBoxes, doc.edges, pathIds);
+    return { cache, invalid };
+  }, [wireCaches, lod, routingBoxes, doc.edges, pathIds]);
+  const wirePlan = useMemo(() => {
+    const attached = new Map<string, Set<string>>();
+    const edges = new Map<string, { edge: FlowEdge; evState: string }>();
+    const { nodesById, collapsed } = contentIndex;
+    for (const edge of doc.edges) {
+      if (!passesNodeFilter(nodesById.get(edge.source)) || !passesNodeFilter(nodesById.get(edge.target))) continue;
       const evState = edgeVisualState(edge);
       if (
         lod &&
@@ -4946,19 +5399,62 @@ export function CanvasApp({
         selection.edge !== edge.id &&
         !selection.nodes.includes(edge.source) &&
         !selection.nodes.includes(edge.target) &&
-        !["active", "queued", "waiting", "boundary"].includes(evState)
-      ) return [];
-
-      const from = endpoint(graphDocument, edge.source, edge.kind, "out", lod, keepExpandedIds, endpointIndex);
-      const to = endpoint(graphDocument, edge.target, edge.kind, "in", lod, keepExpandedIds, endpointIndex);
-      if (from.groupId && from.groupId === to.groupId) return [];
+        !["active", "queued", "waiting", "boundary", "skipped"].includes(evState)
+      ) continue;
+      const sourceGroup = collapsed.get(edge.source)?.id;
+      const targetGroup = collapsed.get(edge.target)?.id;
+      if (sourceGroup && sourceGroup === targetGroup) continue;
+      for (const id of [sourceGroup ?? edge.source, targetGroup ?? edge.target]) {
+        let ids = attached.get(id);
+        if (!ids) {
+          ids = new Set();
+          attached.set(id, ids);
+        }
+        ids.add(edge.id);
+      }
+      edges.set(edge.id, { edge, evState });
+    }
+    return { edges, attached };
+  }, [doc.edges, contentIndex, passesNodeFilter, edgeVisualState, lod, selection.edge, selection.nodes]);
+  const edgeLayouts = useRef<{
+    plan: typeof wirePlan; scroll: typeof branchScroll; expanded: Set<string>; mode: typeof prefs.wireRouting;
+    moves?: GeometryEdit["nodes"]; byId: Map<string, WireLayout>; layouts: WireLayout[];
+  }[]>([]);
+  const baseWireLayouts = useMemo(() => {
+    const key = Number(lod);
+    const previous = edgeLayouts.current[key];
+    const reused = previous?.plan === wirePlan && previous.expanded === keepExpandedIds && previous.mode === prefs.wireRouting;
+    const changed = new Set(wireScene.invalid);
+    if (reused) {
+      if (previous.scroll !== branchScroll) {
+        for (const id of new Set([...previous.scroll.keys(), ...branchScroll.keys()])) {
+          if (previous.scroll.get(id) !== branchScroll.get(id))
+            for (const edge of wirePlan.attached.get(id) ?? []) changed.add(edge);
+        }
+      }
+      for (const moves of [previous.moves, gesture?.nodes]) {
+        for (const id of moves?.keys() ?? []) {
+          if (previous.moves?.get(id) === gesture?.nodes?.get(id)) continue;
+          for (const edge of wirePlan.attached.get(id) ?? []) changed.add(edge);
+        }
+      }
+      if (!changed.size) return previous.layouts;
+    }
+    const layoutsById = reused ? new Map(previous.byId) : new Map<string, WireLayout>();
+    for (const id of reused ? changed : wirePlan.edges.keys()) {
+      const item = wirePlan.edges.get(id);
+      if (!item) continue;
+      const { edge, evState } = item;
+      const from = endpoint(graphDocument, edge.source, edge.kind, "out", lod, keepExpandedIds, endpointIndex, edge.sourcePort);
+      const to = endpoint(graphDocument, edge.target, edge.kind, "in", lod, keepExpandedIds, endpointIndex, edge.targetPort);
       const { geom, extent } = wireScene.cache.get(edge, from, to, prefs.wireRouting);
-      return [{ edge, from, geom, extent, evState }];
-    });
-  }, [
-    graphDocument, edgeVisualState, isNodeVisible, keepExpandedIds, lod, routingBoxes,
-    selection.edge, selection.nodes, prefs.wireRouting, nodesById, wireScene, endpointIndex,
-  ]);
+      layoutsById.set(id, { edge, from, geom, extent, evState });
+    }
+    const layouts = Array.from(wirePlan.edges.keys(), id => layoutsById.get(id)!);
+    edgeLayouts.current[key] = { plan: wirePlan, scroll: branchScroll, expanded: keepExpandedIds, mode: prefs.wireRouting,
+      moves: gesture?.nodes, byId: layoutsById, layouts };
+    return layouts;
+  }, [wirePlan, wireScene, graphDocument, endpointIndex, lod, keepExpandedIds, prefs.wireRouting, gesture?.nodes]);
 
   const wireLayouts = useMemo(() => {
     const wires = !hubSatByEdgeId.size ? baseWireLayouts : baseWireLayouts.map((wire) => {
@@ -4992,26 +5488,6 @@ export function CanvasApp({
     });
   }, [doc.nodes, graphDocument, isNodeVisible, keepExpandedIds, lod, prefs.wireRouting, wireScene, endpointIndex]);
 
-  const structureWirePaths = useMemo(() => derivedStructure.links.map((link) => {
-    if (link.path && link.kind !== "structure") return { path: link.path, extent: padded(pathExtent(link.path), 24) };
-    const { fromBox, toBox } = link;
-    return wireScene.cache.getPath(link.id,
-      { x: fromBox.x + fromBox.w, y: fromBox.y + fromBox.h / 2, box: fromBox },
-      { x: toBox.x, y: toBox.y + toBox.h / 2, box: toBox },
-      prefs.wireRouting,
-    );
-  }), [derivedStructure.links, prefs.wireRouting, wireScene]);
-  const structureBatches = useMemo(() => {
-    const batches: { first: number; guides: typeof structureWirePaths }[] = [];
-    for (const [index, link] of derivedStructure.links.entries()) {
-      const last = batches.at(-1);
-      if (link.active || link.path) batches.push({ first: index, guides: [] });
-      else if (last?.guides.length) last.guides.push(structureWirePaths[index]);
-      else batches.push({ first: index, guides: [structureWirePaths[index]] });
-    }
-    return batches;
-  }, [derivedStructure.links, structureWirePaths]);
-
   /* Command / @ Mention Palette Items */
   const paletteEntries = useMemo<PaletteEntry[]>(() => {
     if (!paletteDialog) return [];
@@ -5040,7 +5516,7 @@ export function CanvasApp({
           () => launchScope({ kind: "global", nodeIds: [] }),
         ],
         ["groupSelection", "group", groupSelected],
-        ["tidy", "tidy", arrangeTopology],
+        [tidyLabel, "tidy", () => arrangeTopology()],
         ["fitView", "fit", () => fitView(false)],
         ["saveSnapshot", "clock", handleCaptureSnapshot],
         ["workflowLibrary", "box", () => setRouteName("workflows")],
@@ -5073,7 +5549,7 @@ export function CanvasApp({
         label: node.title,
         detail: node.kind.toUpperCase(),
         section: t("canvas"),
-        icon: kindIconName(node.kind),
+        icon: kindIconName(node.kind, node.flowType),
         fn: () => {
           if (!targetId) {
             revealNode(node.id);
@@ -5081,17 +5557,9 @@ export function CanvasApp({
           }
           if (node.kind === "agent") {
             edit((d) => {
-              if (
-                !d.edges.some(
-                  (e) => e.source === node.id && e.target === targetId,
-                )
-              ) {
-                d.edges.push({
-                  ...newEdge(node.id, targetId, "continuation"),
-                  trigger: "off",
-                });
-              }
               const tgt = d.nodes.find((x) => x.id === targetId);
+              if (tgt && !d.edges.some(e => e.source === node.id && e.target === targetId))
+                addWire(d, node, tgt, "continuation", { trigger: "off" });
               if (tgt) {
                 tgt.draft = `${tgt.draft ? tgt.draft + " " : ""}@${node.title} `;
                 tgt.task = tgt.draft;
@@ -5127,17 +5595,7 @@ export function CanvasApp({
                   n.kind === "file" &&
                   (n.text === filePath || n.selectedItems?.includes(filePath)),
               );
-              if (
-                existingFileNode &&
-                !d.edges.some(
-                  (e) =>
-                    e.source === existingFileNode.id &&
-                    e.target === targetId &&
-                    e.kind === "reference",
-                )
-              ) {
-                d.edges.push(newEdge(existingFileNode.id, targetId, "reference"));
-              }
+              if (existingFileNode) addWire(d, existingFileNode, targetNode, "reference");
               const tgt = d.nodes.find((x) => x.id === targetId);
               if (tgt) {
                 tgt.draft = `${tgt.draft ? tgt.draft + " " : ""}@${filePath} `;
@@ -5168,6 +5626,7 @@ export function CanvasApp({
     launchScope,
     groupSelected,
     arrangeTopology,
+    tidyLabel,
     fitView,
     handleCaptureSnapshot,
     handleInstantiateTemplate,
@@ -5196,13 +5655,15 @@ export function CanvasApp({
   const handleExportJson = () => {
     const copy = structuredClone(docRef.current);
     const nodes = workflowNodes(copy);
+    const staffedNodes = staffedIds(nodes);
     for (const node of nodes) {
-      if (!node.teamRef) continue;
+      if (!isTeamNode(node, staffedNodes)) continue;
       delete node.sessionId;
       delete node.lastSubmittedTask;
     }
     const dependencies = teamDependenciesFor(nodes, snapshot);
-    downloadWorkflow(copy.title || "flowspace", { ...copy, ...(dependencies.teams.length ? { dependencies } : {}) });
+    downloadWorkflow(copy.title || "flowspace", { ...copy,
+      ...(dependencies.teams.length || dependencies.roles.length ? { dependencies } : {}) });
   };
   const handleExportTemplate = (template: WorkflowTemplate) => {
     const dependencies = teamDependenciesFor(template.nodes, snapshot);
@@ -5227,7 +5688,8 @@ export function CanvasApp({
           ? { template: parsed.template, dependencies: parsed.dependencies }
           : { document: { ...parsed, version: 1, id: "main" }, dependencies: parsed.dependencies };
         await flush();
-        if (request.dependencies) {
+        if (request.dependencies || containsCodeNode(request) ||
+            (request.template?.nodes ?? request.document?.nodes ?? []).some(node => node.flowType === "flowspace/trigger")) {
           setWorkflowImport({ request });
         } else {
           const result = await bridge.importWorkflow(request);
@@ -5279,7 +5741,7 @@ export function CanvasApp({
     );
     return explicit ?? doc.nodes.find((n) => n.kind === "agent");
   }, [doc.nodes, lastAgentId]);
-  const openTeamNode = teamNodeId ? doc.nodes.find((node) => node.id === teamNodeId && node.teamRef) : undefined;
+  const openTeamNode = teamNodeId ? doc.nodes.find((node) => node.id === teamNodeId && isTeamNode(node, staffed)) : undefined;
 
   const leftSnapped = doc.nodes.some((n) => n.window?.snap === "left");
   const rightSnapped = doc.nodes.some((n) => n.window?.snap === "right");
@@ -5287,29 +5749,46 @@ export function CanvasApp({
   const cardActions = useCardActions({ editNode, editEdge, edit, selectNode, showToast, openNodeContextMenu,
     startNodeMove, startResize, startPortDrag, startInputEdgeDrag, revealNode, openDetailCard, bindAgentSession,
     refreshProjectStructures, openAnchoredMenu, extractDisplayFrom, launchScope, toggleNodeForm, stopNode,
-    returnWindow, openWindow, openInputHub, scheduleCloseInputHub });
-  const cardDocument = useMemo(() => ({ ...graphDocument, settings: doc.settings }), [graphDocument, doc.settings]);
+    returnWindow, openWindow, openInputHub, scheduleCloseInputHub, startStaffDrag,
+    editBoard, createBoardCompanion, openBoardAgentMenu, openBoardMenu });
+  // Seat ordering follows the positions of staffed roles. Other geometry previews only
+  // change the moved card's own props and can reuse every unrelated card body.
+  const movingStaff = gesture?.nodes && [...gesture.nodes.keys()].some(id => contentIndex.nodesById.get(id)?.staffOf);
+  const crewNodes = movingStaff ? doc.nodes : baseDoc.nodes;
   /* Render a Single Node Card (used on Canvas, Floating Window, and Focused Conversation Surface) */
   const renderNodeCard = useCallback((
     node: FlowNode,
     placement: "canvas" | "window" | "conversation",
     snapshot: FlowspaceSnapshot | null,
+    box: Box,
+    semantic?: boolean,
+    prewarmFull?: boolean,
+    contentVersion?: object,
+    branchOffset = 0,
   ) => {
-    const doc = cardDocument;
+    const nodesById = contentIndex.nodesById;
     const runtime = runtimeIndex(snapshot);
     const { editNode, editEdge, edit, selectNode, showToast, openNodeContextMenu, startNodeMove, startResize,
       startPortDrag, startInputEdgeDrag, revealNode, openDetailCard, bindAgentSession, refreshProjectStructures,
       openAnchoredMenu, extractDisplayFrom, launchScope, toggleNodeForm, stopNode, returnWindow, openWindow,
-      openInputHub, scheduleCloseInputHub } = cardActions;
-    const state = node.kind === "agent" ? nodeStatusOf(snapshot, node.id) : "";
+      openInputHub, scheduleCloseInputHub, startStaffDrag, editBoard, createBoardCompanion, openBoardAgentMenu, openBoardMenu } = cardActions;
+    const flowRun = node.kind === "flow" ? snapshot?.runs.findLast(run => run.steps.some(step => step.nodeId === node.id && step.state === "awaiting"))
+      ?? snapshot?.runs.findLast(run => run.steps.some(step => step.nodeId === node.id)) : undefined;
+    const debugRun = snapshot?.runs.findLast(run => run.steps.some(step => step.nodeId === node.id && step.debug && step.state === "awaiting"));
+    const debugStep = debugRun?.steps.find(step => step.nodeId === node.id && step.debug && step.state === "awaiting");
+    const waitingHuman = flowRun?.steps.find(step => step.nodeId === node.id && step.state === "awaiting")?.human;
+    const state = waitingHuman || debugStep ? "waiting" : node.kind === "agent" || node.kind === "flow" ? nodeStatusOf(snapshot, node.id) : "";
     const waitingGates =
       node.kind === "agent" ? runtime.waiting.get(node.id) ?? [] : [];
     const live = runtime.live.get(node.id);
     const isSelected = selection.nodes.includes(node.id);
-    const box = nodeBox(node, lod, keepExpandedIds.has(node.id));
-    const compact =
-      placement === "canvas" &&
-      isCompactNode(node, lod, keepExpandedIds.has(node.id));
+    const compact = placement === "canvas" && Boolean(box.compact);
+    const masterHead = !!node.masterOf && !!edgeIndex.incoming.get(node.id)?.some(edge =>
+      !edge.generatedBy && edge.kind === "continuation" && edge.source === node.masterOf);
+    const laneItem = node.generatedBy && node.laneIndex !== undefined && node.itemTitle
+      ? t("flow_lane_item_name", { n: node.laneIndex + 1, item: node.itemTitle }) : undefined;
+    const heading = node.kind === "board" && !node.customTitle && (node.title === "任务看板" || node.title === "Task board")
+      ? t("newBoard") : node.title;
 
     let style: React.CSSProperties | undefined;
     if (placement === "window" && node.window) {
@@ -5339,27 +5818,45 @@ export function CanvasApp({
         height: box.h,
       };
     }
+    if (node.kind === "role") {
+      style = { ...style, ...hueStyle(node.teamModel ?? snapshot?.roles?.find((role) => role.id === node.roleRef)?.model) };
+    }
 
-    const renderPort = (kind: FlowEdge["kind"], direction: "in" | "out") => {
+    const dragDirection = connecting?.anchor.direction === "in" ? "out" : "in";
+    const available = (kind: FlowEdge["kind"], portId: string) => connecting?.kind === kind &&
+      !connecting.fromIds.includes(node.id) && connecting.fromIds.some(id => {
+        const fixed = nodesById.get(id);
+        return fixed && checkDraggedWire(fixed, node, kind, connecting.anchor, portId, docRef.current.edges).ok;
+      });
+    const renderPort = (kind: FlowEdge["kind"], direction: "in" | "out", portId: string = direction, label?: string) => {
       const input = direction === "in";
+      const center = portY(node, kind, compact, portId, branchOffset, undefined, direction);
+      const socketY = portY(node, kind, compact, portId, branchOffset, box.h, direction);
+      if (socketY !== center) return null;
       const edges = (input ? edgeIndex.incoming : edgeIndex.outgoing).get(node.id) ?? [];
-      const incoming = input && node.kind === "agent"
-        ? edges.filter(edge => edge.kind === kind && isNodeVisible(nodesById.get(edge.source), true))
+      const atPort = edges.filter(edge => edge.kind === kind && ((input ? edge.targetPort : edge.sourcePort) ?? direction) === portId);
+      const incoming = input
+        ? atPort.filter(edge => passesNodeFilter(nodesById.get(edge.source)))
         : [];
       const lastEdge = incoming.at(-1);
       const multi = incoming.length > 1;
-      const linked = edges.some(edge => edge.kind === kind) || (kind === "reference" &&
-        (input ? node.kind === "display" && !!node.sourceNodeId : referenceSources.has(node.id)));
+      const linked = atPort.length > 0 || (kind === "reference" &&
+        (input ? node.kind === "display" && !!node.sourceNodeId : contentIndex.referenceSources.has(node.id)));
       const fromHere = connecting?.fromIds.includes(node.id);
-      const target = connecting?.kind === kind && input && node.kind === "agent" && !fromHere;
-      const name = kind === "reference"
+      const target = connecting && direction === dragDirection &&
+        (available(kind, portId) || input && kind === "continuation" && available("event", portId));
+      const name = label ?? (kind === "reference"
         ? t(input ? "refInput" : "refOutput")
-        : t(input ? "contInput" : "contOutput");
-      const title = lastEdge ? `${name} (${incoming.length}) · ${t("dragInputTip")}` : name;
+        : t(input ? "contInput" : "contOutput"));
+      const type = connectionPort(node, kind, direction, portId)?.dataType;
+      const portName = type ? `${name} · ${t("flow_data_" + type)}` : name;
+      const title = lastEdge ? `${portName} (${incoming.length}) · ${t("dragInputTip")}` : portName;
       return (
         <button
           type="button"
+          key={`${kind}-${direction}-${portId}`}
           data-node-id={node.id}
+          data-port-id={portId}
           data-port-kind={kind}
           data-port-direction={direction}
           className={[
@@ -5368,11 +5865,13 @@ export function CanvasApp({
             lastEdge && !connecting && "is-draggable-in",
             multi && "is-multi",
             multi && activeHubLayout?.nodeId === node.id && activeHubLayout.kind === kind && "is-hub-open",
-            !input && fromHere && connecting?.kind === kind && "is-dragging-origin",
+            fromHere && connecting?.kind === kind && direction === (connecting.anchor.direction ?? "out") &&
+              portId === ((input ? connecting.anchor.targetPort : connecting.anchor.sourcePort) ?? direction) && "is-dragging-origin",
             target && "port-target",
-            target && connecting.snappedTarget?.nodeIds.includes(node.id) && "is-snap-locked",
+            target && connecting.snappedTarget?.nodeIds.includes(node.id) &&
+              (connecting.snappedTarget.portId ?? direction) === portId && "is-snap-locked",
           ].filter(Boolean).join(" ")}
-          style={{ "--port-y": `${portY(node, kind, compact)}px` } as React.CSSProperties}
+          style={{ "--port-y": `${socketY}px` } as React.CSSProperties}
           title={title}
           aria-label={title}
           onPointerEnter={() => {
@@ -5385,8 +5884,8 @@ export function CanvasApp({
             else if (lastEdge) setHoveredEdgeId(prev => prev === lastEdge.id ? null : prev);
           }}
           onPointerDown={ev => {
-            if (!input) startPortDrag(ev, [node.id], kind);
-            else if (lastEdge) startInputEdgeDrag(ev, lastEdge);
+            if (input && lastEdge) startInputEdgeDrag(ev, lastEdge);
+            else if (connectionPort(node, kind, direction, portId)) startPortDrag(ev, [node.id], kind, undefined, undefined, portId, direction);
           }}
         >
           {multi
@@ -5398,6 +5897,14 @@ export function CanvasApp({
 
     const activeTab: AgentTab = node.tab ?? "task";
     const nodeSteps = runtime.steps.get(node.id) ?? [];
+    const missingEmission = runtime.missingEmissions.get(node.id);
+    const emissionReminder = (compactView: boolean) => missingEmission && <button type="button"
+      className={compactView ? "text-button compact-overview-detail" : "button button-quiet"}
+      title={t("flow_emit_missing")}
+      onClick={event => {
+        event.stopPropagation();
+        void bridge.remindEmission(missingEmission.runId, missingEmission.step.id).catch(reportError);
+      }}>{t("flow_emit_remind")}</button>;
     const latestOutput =
       live?.output || nodeSteps.filter((s) => s.output).at(-1)?.output || "";
     const incomingRefs = (edgeIndex.incoming.get(node.id) ?? []).filter(
@@ -5408,6 +5915,51 @@ export function CanvasApp({
     );
 
     const renderCompactBody = () => {
+      if (node.kind === "flow") {
+        const { Compact } = viewOf(node.flowType);
+        const kindTitle = t(descriptorOf(node.flowType)?.titleKey ?? "flow_view_missing");
+        const detail = <Compact node={node} run={flowRun} doc={docRef.current} snapshot={snapshot} bridge={bridge} />;
+        // Same frames as the built-in tool cards: a kind label at semantic zoom, an inset summary line otherwise.
+        return semantic
+          ? <div className="compact-overview"><span className="compact-kind">{kindTitle}</span>{detail}</div>
+          : <div className="compact-tool fs-flow-compact">{detail}{node.customTitle && <span>{kindTitle}</span>}</div>;
+      }
+      if (node.kind === "board") {
+        return <BoardCompactSummary columns={normalizeBoardColumns(node.columns)} semantic={semantic} />;
+      }
+      if (semantic && node.kind !== "agent") {
+        let detail = "";
+        let detailStatus = "";
+        switch (node.kind) {
+          case "note":
+            detail = node.text.trim().split("\n")[0];
+            break;
+          case "display":
+            detail = t(node.fixed ? "fixed" : "follow");
+            break;
+          case "file":
+            detail = t("selectedCount", { count: node.selectedItems?.length || (node.text ? 1 : 0) });
+            break;
+          case "git":
+            detail = node.branch ?? "";
+            break;
+          case "changes":
+            detail = node.changesTurn ? `#${node.changesTurn}` : "";
+            break;
+          case "detail":
+            detailStatus = node.sourceNodeId ? nodeStatusOf(snapshot, node.sourceNodeId) : "draft";
+            detail = t(detailStatus);
+            break;
+          case "role":
+            detail = staffTeam?.title ?? node.teamModel?.model ?? "";
+            break;
+        }
+        return <div className="compact-overview">
+          <span className="compact-kind">{t(`nodeKind_${node.kind}`)}</span>
+          {detail && <span className={`compact-overview-detail ${detailStatus ? `status status-${detailStatus}` : "user-content"}`}
+            title={detail}>{detailStatus && <i />}{detail}</span>}
+        </div>;
+      }
       if (node.kind === "agent") {
         const wsName =
           workspaces.find((w) => w.id === node.workspaceId)?.name ||
@@ -5422,19 +5974,21 @@ export function CanvasApp({
         return (
           <>
             <div className="compact-status">
+              <span className="compact-kind">{t(isTeam ? "teamLibrary" : "nodeKind_agent")}</span>
               <span className={`status status-${state}`}>
                 <i />
                 {t(state)}
               </span>
-              {team ? <small className="fs-team-node-summary">
+              {emissionReminder(true) || (team ? <small className="fs-team-node-summary">
                 <span title={t("teamCapacity", team.capacity)} aria-label={t("teamCapacity", team.capacity)}>
-                  <Icon name="person" />{team.capacity.active}/{team.capacity.max}
+                  {team.capacity.active > 0 ? <i className="fs-team-node-dot" aria-hidden="true" /> : <Icon name="person" />}
+                  {team.capacity.active}/{team.capacity.max}
                 </span>
                 <span title={t("teamTaskProgress", { done: completedTasks, total: team.tasks.length })}
                   aria-label={t("teamTaskProgress", { done: completedTasks, total: team.tasks.length })}>
                   <Icon name="board" />{completedTasks}/{team.tasks.length}
                 </span>
-              </small> : <span>{wsName}</span>}
+              </small> : <span>{wsName}</span>)}
             </div>
             <p className="compact-summary user-content">{summary}</p>
             {waitingGates.length > 0 && (
@@ -5464,6 +6018,8 @@ export function CanvasApp({
           </>
         );
       }
+      if (node.kind === "role") return <RoleNodeSummary node={node} team={staffTeam} snapshot={snapshot}
+        members={roleMembers} onOpenMember={openRoleMember} />;
       if (node.kind === "note" || node.kind === "display") {
         return (
           <>
@@ -5477,19 +6033,6 @@ export function CanvasApp({
               </span>
             )}
           </>
-        );
-      }
-      if (node.kind === "board") {
-        const cols = node.columns ?? [];
-        return (
-          <div className="compact-tool">
-            {cols.map((col, idx) => (
-              <span key={col.id}>
-                {t(["todo", "inProgress", "completedColumn"][idx] ?? col.name)}{" "}
-                <b>{col.cards.length}</b>
-              </span>
-            ))}
-          </div>
         );
       }
       if (node.kind === "detail") {
@@ -5550,6 +6093,11 @@ export function CanvasApp({
     };
 
     const renderFullBody = () => {
+      if (node.kind === "flow") {
+        const { Full } = viewOf(node.flowType);
+        return <Full node={node} run={flowRun} doc={docRef.current} snapshot={snapshot} bridge={bridge} />;
+      }
+      const bodyBox = placement === "canvas" ? nodeBox(node, false, true) : box;
       if (node.kind === "git") {
         return (
           <GitNodeBody
@@ -5560,7 +6108,7 @@ export function CanvasApp({
             onExtractDisplay={(title, text) => {
               const box = nodeBox(node);
               const disp: FlowNode = {
-                ...newNode("display", box.x + box.w + 36, box.y, title),
+                ...newNode("display", bodyBox.x + bodyBox.w + 36, bodyBox.y, title),
                 sourceNodeId: node.id,
                 text,
                 fixed: true,
@@ -5586,7 +6134,7 @@ export function CanvasApp({
             onExtractDisplay={(title, text) => {
               const box = nodeBox(node);
               const disp: FlowNode = {
-                ...newNode("display", box.x + box.w + 36, box.y, title),
+                ...newNode("display", bodyBox.x + bodyBox.w + 36, bodyBox.y, title),
                 sourceNodeId: node.id,
                 text,
                 fixed: true,
@@ -5610,7 +6158,7 @@ export function CanvasApp({
             onExtractDisplay={(title, text) => {
               const box = nodeBox(node);
               const disp: FlowNode = {
-                ...newNode("display", box.x + box.w + 36, box.y, title),
+                ...newNode("display", bodyBox.x + bodyBox.w + 36, bodyBox.y, title),
                 sourceNodeId: node.id,
                 text,
                 fixed: true,
@@ -5623,6 +6171,12 @@ export function CanvasApp({
             onError={reportError}
           />
         );
+      }
+
+      if (node.kind === "role") {
+        return <RoleNodeBody node={node} team={staffTeam} snapshot={snapshot} routes={modelRoutes}
+          running={roleRunning} members={roleMembers} onOpenMember={openRoleMember}
+          onEdit={(patch) => editNode(node.id, patch)} />;
       }
 
       if (node.kind === "agent") {
@@ -5647,9 +6201,6 @@ export function CanvasApp({
             e.kind === "continuation" &&
             e.target === node.id &&
             e.trigger !== "off",
-        );
-        const childSubs = (snapshot?.subagents ?? []).filter(
-          (s) => s.parentSessionId === node.sessionId,
         );
 
         const renderCapsuleTray = () => (
@@ -5679,8 +6230,7 @@ export function CanvasApp({
                     refEdge,
                     snapshot?.sourceVersions,
                   );
-                  const capLabel =
-                    refEdge.snapshotTitle || src?.title || refEdge.source;
+                  const capLabel = referenceTitle(src, refEdge);
                   return (
                     <button
                       key={refEdge.id}
@@ -5737,7 +6287,7 @@ export function CanvasApp({
                         ]);
                       }}
                     >
-                      <Icon name={kindIconName(src?.kind ?? "file")} />
+                      <Icon name={kindIconName(src?.kind ?? "file", src?.flowType)} />
                       <span>{capLabel}</span>
                       {capState === "updated" && (
                         <i className="fs-capsule-update-dot" />
@@ -5771,7 +6321,10 @@ export function CanvasApp({
             ? "conversation"
             : !node.sessionId && activeTab === "conversation"
               ? "task"
-              : activeTab;
+              : activeTab === "crew" && !isTeam
+                ? "task"
+                : activeTab;
+        const tabs: AgentTab[] = isTeam ? ["task", "conversation", "execution", "crew"] : ["task", "conversation", "execution"];
         const usesContinuationPreset =
           Boolean(node.sessionId) && hasActiveInboundContinuation;
 
@@ -5790,6 +6343,7 @@ export function CanvasApp({
                   {queuedCount}
                 </span>
               )}
+              {emissionReminder(false)}
               {!node.sessionId && (
                 <button
                   type="button"
@@ -5801,26 +6355,26 @@ export function CanvasApp({
                   {t("planMode")}
                 </button>
               )}
-              {node.teamRef && (
+              {isTeamNode(node, staffed) && (
                 <button type="button" className="fs-plan-chip fs-team-enter" onClick={() => openTeam(node.id)}>
                   <Icon name="team" /><span>{t("teamEnter")}</span><Icon name="chev" />
                 </button>
               )}
               {node.sessionId && (
                 <>
-                  {!node.teamRef && childSubs.length > 0 && (
+                  {rowChildren > 0 && (
                     <button
                       type="button"
-                      className={`fs-plan-chip ${node.subAgentsExpanded ? "active" : ""}`}
+                      className={`fs-plan-chip ${node.subAgentsExpanded !== false ? "active" : ""}`}
                       onClick={() =>
                         editNode(node.id, {
-                          subAgentsExpanded: !node.subAgentsExpanded,
+                          subAgentsExpanded: node.subAgentsExpanded === false,
                         })
                       }
                       title={t("subagents")}
                     >
                       <Icon name="agent" />
-                      <span>{childSubs.length}</span>
+                      <span>{rowChildren}</span>
                     </button>
                   )}
                   {nodeSteps.length > 0 && (
@@ -5869,7 +6423,7 @@ export function CanvasApp({
                 role="tablist"
                 aria-label={node.title}
               >
-                {(["task", "conversation", "execution"] as AgentTab[]).map(
+                {tabs.map(
                   (tb) => (
                     <button
                       key={tb}
@@ -5885,12 +6439,15 @@ export function CanvasApp({
                       }}
                     >
                       {t(
-                        tb === "task"
+                        tb === "crew"
+                          ? "teamCrewTab"
+                          : tb === "task"
                           ? "overviewTab"
                           : tb === "conversation"
                             ? "conversationTab"
                             : "execution",
                       )}
+                      {tb === "crew" && teamSlots.length > 0 && <span>{teamSlots.length}</span>}
                       {tb === "execution" && nodeSteps.length > 0 && (
                         <span>{nodeSteps.length}</span>
                       )}
@@ -5944,7 +6501,12 @@ export function CanvasApp({
               </div>
             ))}
 
-            {effectiveTab === "conversation" && node.sessionId ? (
+            {effectiveTab === "crew" ? (
+              <CrewFrame node={node} nodes={crewNodes} snapshot={snapshot} status={state} routes={modelRoutes}
+                onEditTeam={(teamConfig) => editNode(node.id, { teamConfig })}
+                onLayout={(teamLayout) => editNode(node.id, { teamLayout })}
+                onOpen={(rowId) => openTeam(node.id, rowId)} />
+            ) : effectiveTab === "conversation" && node.sessionId ? (
               <>
                 {hasActiveInboundContinuation && (
                   <div className="fs-continuation-bar">
@@ -6558,180 +7120,105 @@ export function CanvasApp({
         );
       }
 
-      /* Kanban Board */
-      const columns: BoardColumn[] = node.columns ?? [
-        { id: "todo", name: "待办", cards: [] },
-        { id: "doing", name: "进行中", cards: [] },
-        { id: "done", name: "完成", cards: [] },
-      ];
-      const updateBoard = (nextCols: BoardColumn[], nextSel?: string[]) => {
-        const sel = nextSel ?? node.selectedItems ?? [];
-        editNode(node.id, {
-          columns: nextCols,
-          selectedItems: sel,
-          text: boardSummaryText(nextCols, sel),
-        });
-      };
-      return (
-        <div className="board-columns">
-          {columns.map((col, colIdx) => (
-            <section key={col.id} className="board-column">
-              <header>
-                <i className={`column-dot column-${colIdx}`} />
-                <b className="user-content">
-                  {t(
-                    ["todo", "inProgress", "completedColumn"][colIdx] ??
-                      col.name,
-                  )}
-                </b>
-                <span>{col.cards.length}</span>
-                <button
-                  type="button"
-                  className="icon-button"
-                  title={t("addCard")}
-                  onClick={() =>
-                    setFormModal({
-                      title: t("addCard"),
-                      initialValue: "",
-                      onSubmit: (cardText) => {
-                        const next = structuredClone(columns);
-                        next[colIdx].cards.push({ id: uid(), text: cardText });
-                        updateBoard(next);
-                      },
-                    })
-                  }
-                >
-                  <Icon name="plus" />
-                </button>
-              </header>
-              {col.cards.map((card) => {
-                const cardSelected = !!node.selectedItems?.includes(card.id);
-                return (
-                  <div
-                    key={card.id}
-                    className={`board-card ${cardSelected ? "selected" : ""}`}
-                  >
-                    <button
-                      type="button"
-                      className="board-card-text user-content"
-                      onClick={() => {
-                        const cur = new Set(node.selectedItems ?? []);
-                        if (cur.has(card.id)) cur.delete(card.id);
-                        else cur.add(card.id);
-                        updateBoard(columns, [...cur]);
-                      }}
-                    >
-                      {card.text}
-                    </button>
-                    <div>
-                      <button
-                        type="button"
-                        className="icon-button"
-                        title={t("editCard")}
-                        onClick={(ev) =>
-                          openAnchoredMenu(ev.currentTarget, [
-                            {
-                              label: t("editCard"),
-                              icon: "note",
-                              fn: () =>
-                                setFormModal({
-                                  title: t("editCard"),
-                                  initialValue: card.text,
-                                  onSubmit: (val) => {
-                                    const next = structuredClone(columns);
-                                    const found = next[colIdx].cards.find(
-                                      (c) => c.id === card.id,
-                                    );
-                                    if (found) found.text = val;
-                                    updateBoard(next);
-                                  },
-                                }),
-                            },
-                            {
-                              label: t("deleteCard"),
-                              icon: "trash",
-                              danger: true,
-                              fn: () => {
-                                const next = structuredClone(columns);
-                                next[colIdx].cards = next[colIdx].cards.filter(
-                                  (c) => c.id !== card.id,
-                                );
-                                updateBoard(
-                                  next,
-                                  (node.selectedItems ?? []).filter(
-                                    (id) => id !== card.id,
-                                  ),
-                                );
-                              },
-                            },
-                          ])
-                        }
-                      >
-                        <Icon name="more" />
-                      </button>
-                      {colIdx < columns.length - 1 && (
-                        <button
-                          type="button"
-                          className="icon-button"
-                          title={t("nextColumn")}
-                          onClick={() => {
-                            const next = structuredClone(columns);
-                            next[colIdx].cards = next[colIdx].cards.filter(
-                              (c) => c.id !== card.id,
-                            );
-                            next[colIdx + 1].cards.push(card);
-                            updateBoard(next);
-                          }}
-                        >
-                          <Icon name="chev" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </section>
-          ))}
-        </div>
-      );
+      if (node.kind === "board") {
+        const linkedCards = new Set((edgeIndex.outgoing.get(node.id) ?? []).flatMap((edge) =>
+          edge.kind === "reference" && edge.sourceItemKey !== undefined ? [edge.sourceItemKey] : [],
+        ));
+        return <BoardNodeView node={node} linkedCards={linkedCards}
+          onEdit={(change) => editBoard(node.id, change)}
+          onMenu={openBoardMenu}
+          onDispatch={(cardId) => createBoardCompanion(node.id, cardId, "agent")}
+          onConvertNote={(cardId) => createBoardCompanion(node.id, cardId, "note")}
+          onLinkAgent={(cardId, anchor) => openBoardAgentMenu(node.id, cardId, anchor)}
+          onDragReference={placement === "canvas"
+            ? (event, cardId, onStart) => startPortDrag(event, [node.id], "reference", cardId, onStart)
+            : undefined}
+          onCopy={(text) => void navigator.clipboard.writeText(text).then(() => showToast(t("copied"))).catch(reportError)} />;
+      }
+      return null;
     };
 
     const roleText = node.roleLabel
       ? dictRoleLabel(node.roleLabel)
       : undefined;
+    const isTeam = isTeamNode(node, staffed);
     const team = node.sessionId ? snapshot?.teams?.[node.sessionId] : undefined;
     const blueprint = node.teamRef
       ? snapshot?.teamBlueprints?.find((team) => team.id === node.teamRef?.teamId)
       : undefined;
-    const teamModel = team?.leadModel ?? blueprint?.lead.model;
+    const teamModel = team?.leadModel ?? blueprint?.lead.model ?? node.teamConfig?.model;
     const completedTasks = team?.tasks.filter((task) => task.status === "completed").length ?? 0;
-    const teamSlotCount = t("teamSlotCount", { count: team?.slots.length ?? blueprint?.slots.length ?? 0 });
+    const teamSlots = isTeam ? team?.slots ?? draftSlots(node, crewNodes, snapshot) : [];
+    const teamSlotCount = t("teamSlotCount", { count: teamSlots.length });
+    const teamStack = teamSlots.map((slot) => ({ key: slot.slotId, label: slot.label, model: slot.model.model ? slot.model : undefined }));
+    const staffOwner = node.kind === "role" && node.staffOf ? nodesById.get(node.staffOf) : undefined;
+    const staffTeam = isTeamNode(staffOwner, staffed) ? staffOwner : undefined;
+    const staffRuntime = staffTeam?.sessionId ? snapshot?.teams?.[staffTeam.sessionId] : undefined;
+    const staffSlot = staffRuntime?.slots.find((slot) => slot.nodeId === node.id)?.slotId;
+    const roleRunning = !!staffSlot && !!staffRuntime?.members.some((member) => member.slotId === staffSlot && member.activity === "running");
+    const roleMembers = staffRuntime?.members.filter((member) => member.nodeId === node.id) ?? [];
+    const openRoleMember = (sessionId: string) => { if (node.staffOf) openTeam(node.staffOf, sessionId); };
+    // Native children that hang in this agent's own row: everything but members shown on role nodes.
+    const onRole = new Set(team?.members.flatMap((member) =>
+      member.nodeId && nodesById.get(member.nodeId)?.staffOf === node.id ? [member.sessionId] : []));
+    const rowChildren = node.kind === "agent" && node.sessionId ? new Set([
+      ...(snapshot?.subagents ?? []).filter((sub) => sub.parentSessionId === node.sessionId).map((sub) => sub.sessionId),
+      ...(team?.members.filter((member) => member.depth === 1).map((member) => member.sessionId) ?? []),
+    ].filter((id) => !onRole.has(id))).size : 0;
+    const renderStaffPort = () => (
+      <button type="button" className="fs-staff-port" data-staff-team={node.id}
+        title={t("teamStaffPort")} aria-label={t("teamStaffPort")}
+        onPointerDown={(ev) => startStaffDrag(ev, { teamId: node.id })}>
+        <Icon name="person" />
+        {teamSlots.length > 0 && <small>{teamSlots.length}</small>}
+      </button>
+    );
+    const renderStaffSocket = () => (
+      <button type="button" className="fs-staff-socket" data-staff-role={node.id} data-staffed={staffTeam ? "" : undefined}
+        data-staff-id={node.id} title={t("teamStaffSocket")} aria-label={t("teamStaffSocket")}
+        onPointerDown={(ev) => startStaffDrag(ev, { roleId: node.id })}>
+        <i />
+      </button>
+    );
 
     return (
       <section
         key={`${placement}-${node.id}`}
         data-node-card={node.id}
+        data-fs-semantic={semantic || undefined}
+        data-staff-id={node.kind === "role" ? node.id : undefined}
+        data-staff-target={staffDrag && node.id !== (staffDrag.roleId ?? staffDrag.teamId) &&
+          node.kind === (staffDrag.roleId ? "agent" : "role") ? "" : undefined}
+        data-staff-snap={staffTarget === node.id ? "" : undefined}
+        data-children={rowChildren > 0 && node.subAgentsExpanded !== false ? "" : undefined}
+        {...(node.kind === "role" ? staffHover(node.id) : {})}
         tabIndex={0}
-        aria-label={node.title}
+        aria-label={heading}
         style={style}
         className={[
           "node",
           `node-${node.kind}`,
-          node.teamRef ? "node-team" : "",
+          node.kind === "flow" && "fsx-motion",
+          isTeam ? "node-team" : "",
+          roleRunning ? "is-role-running" : "",
           compact ? "compact" : "full",
           placement === "window" ? "floating-window" : "",
           placement === "conversation" ? "conversation-agent" : "",
           isSelected ? "selected" : "",
-          connecting?.fromIds.includes(node.id) ? "is-dragging-source" : "",
+          connecting?.fromIds.includes(node.id) ? "is-dragging-source" :
+            connecting && !wirePortIds(node, connecting.kind, dragDirection).some(id => available(connecting.kind, id)) ? "is-invalid-target" : "",
           state ? `status-${state}` : "",
+          node.removed ? "fs-lane-removed" : "",
           node.pinned ? "is-pinned" : "",
-          waitingGates.length ? "needs-confirmation" : "",
+          waitingGates.length || waitingHuman ? "needs-confirmation" : "",
           node.kind === "agent" && node.participation !== "global"
             ? `participation-${node.participation}`
             : "",
         ]
           .filter(Boolean)
           .join(" ")}
+        data-flow-family={node.kind === "flow" ? descriptorOf(node.flowType)?.family : undefined}
+        data-flow-operation={node.flowType === "flowspace/exec-terminal" ? "terminal" : node.flowType === "flowspace/exec-git" ? "git" : undefined}
         data-participation={
           node.kind === "agent" ? node.participation : undefined
         }
@@ -6785,23 +7272,44 @@ export function CanvasApp({
         <header
           className="node-header"
           onPointerDown={(ev) => {
-            if ((ev.target as HTMLElement).closest("button")) return;
+            if ((ev.target as HTMLElement).closest("button, input")) return;
+            ev.stopPropagation();
             startNodeMove(ev, node.id);
           }}
-          onDoubleClick={() => node.teamRef ? openTeam(node.id) : toggleNodeForm(node.id)}
+          onDoubleClick={(ev) => {
+            if ((ev.target as HTMLElement).closest("input")) return;
+            if (isTeam) openTeam(node.id);
+            else toggleNodeForm(node.id);
+          }}
         >
-          {node.teamRef ? <button type="button" className="node-avatar fs-team-avatar" title={t("teamEnter")}
-            aria-label={t("teamEnter")} onClick={() => openTeam(node.id)}><Icon name="team" /></button> : <span
+          {isTeam ? <button type="button" className="node-avatar fs-team-avatar" title={t("teamEnter")}
+            aria-label={t("teamEnter")} style={hueStyle(teamModel)} onClick={() => openTeam(node.id)}><Icon name="team" /></button>
+            : node.kind === "role" ? <span className="node-avatar fs-role-avatar">
+              <TeamAvatar label={node.title} seed={staffSlot ?? node.slotId ?? node.title}
+                model={node.teamModel ?? snapshot?.roles?.find((role) => role.id === node.roleRef)?.model}
+                size="sm" tone={roleRunning ? "running" : staffTeam ? "ready" : "idle"} active={roleRunning} />
+            </span>
+            : <span
             className={`node-avatar ${node.kind === "agent" ? "agent-avatar" : ""}`}
           >
-            <Icon name={kindIconName(node.kind)} />
+            <Icon name={kindIconName(node.kind, node.flowType)} />
           </span>}
           <div className="node-heading">
-            <strong>{node.title}</strong>
-            {node.teamRef ? !(team && compact) && <small className="fs-team-node-summary">
-              <span>{teamSlotCount}</span>{teamModel && <span title={teamModel.provider + "/" + teamModel.model}>{teamModel.model}</span>}
+            {node.kind === "role" && !compact ? (
+              <input className="fs-role-title" value={node.title} aria-label={t("teamRoleName")}
+                placeholder={t("teamRoleUntitled")} spellCheck={false}
+                onFocus={() => setEditingNodeId(node.id)} onBlur={() => setEditingNodeId(null)}
+                onChange={(ev) => editNode(node.id, { title: ev.target.value, customTitle: true })} />
+            ) : <strong title={laneItem ? heading + " · " + laneItem : heading}>{compact && laneItem ? laneItem : heading}</strong>}
+            {laneItem && !compact ? <small title={laneItem}>{laneItem}</small> : waitingHuman?.deadline !== undefined ? <FlowCountdown deadline={waitingHuman.deadline} /> : node.kind === "role" ? !compact && <small>{t("role")}</small> : isTeam ? !(team && compact) && <small className="fs-team-node-summary">
+              <span title={teamSlotCount}>{teamStack.length > 0 && <AvatarStack items={teamStack} max={4} />}{teamSlotCount}</span>
+              {teamModel && <span><ModelChip model={teamModel} quiet /></span>}
             </small> : !compact && roleText && <small>{roleText}</small>}
           </div>
+          {(masterHead || node.generatedBy) &&
+            <LaneBadges node={node} master={masterHead} unused={hasUnusedResult(snapshot?.runs, node)} />}
+          {node.kind === "flow" && state === "skipped" &&
+            <span className="status status-skipped"><i />{t("flow_skipped")}</span>}
           {node.kind === "agent" &&
             (node.participation === "bypassed" ||
               node.participation === "paused") && (
@@ -6867,7 +7375,12 @@ export function CanvasApp({
                   type="button"
                   className="icon-button"
                   title={t(compact ? "expand" : "collapse")}
-                  onClick={() => toggleNodeForm(node.id)}
+                  onClick={() => {
+                    if (compact) {
+                      selectNode(node.id);
+                      if (!node.expanded) toggleNodeForm(node.id);
+                    } else toggleNodeForm(node.id);
+                  }}
                 >
                   <Icon name={compact ? "card" : "off"} />
                 </button>
@@ -6894,18 +7407,34 @@ export function CanvasApp({
           </div>
         </header>
 
+        {node.breakpoint && <span title={t("flow_bp_title")} className="fs-bp-marker" />}
+        {debugRun && debugStep && !compact && <Breakpoint run={debugRun} step={debugStep} bridge={bridge} />}
         <CardBody compact={compact}
           preserve={placement === "canvas" && node.expanded && !node.pinned}
+          prewarmFull={prewarmFull}
+          contentVersion={contentVersion}
           full={renderFullBody} summary={renderCompactBody} />
+        {node.flowType === "flowspace/trigger" && node.config?.mode !== "launchpad" && <button
+          className="switch fs-trig-enable" type="button" role="switch" aria-label={t("flow_trig_enabled")}
+          aria-checked={!!node.config?.enabled} onClick={() => editNode(node.id, { config: { ...node.config, enabled: !node.config?.enabled } })} />}
 
-        {placement === "canvas" && node.kind !== "detail" && (
+        {placement === "canvas" && node.kind !== "detail" && node.kind !== "role" && (
           <>
-            {node.kind === "agent" && renderPort("continuation", "in")}
+            {node.kind === "flow" && portsOf(node).map(port => port.role !== "event" &&
+              renderPort(port.role, port.direction, port.id, port.label ?? (port.labelKey ? t(port.labelKey) : port.id)))}
+            {node.kind !== "flow" && connectionPort(node, "continuation", "in") && renderPort("continuation", "in")}
             {node.kind === "agent" && renderPort("continuation", "out")}
             {(node.kind === "agent" || node.kind === "display") && renderPort("reference", "in")}
-            {renderPort("reference", "out")}
+            {node.kind !== "flow" && renderPort("reference", "out")}
+            {hasStatusPort(node.kind, node.flowType, !!node.fanout) && <button type="button"
+              className={`port fs-evt-port ${edgeIndex.outgoing.get(node.id)?.some(edge => edge.kind === "event") ? "is-linked" : ""}`}
+              data-node-id={node.id} data-port-id="out" data-port-kind="event" data-port-direction="out"
+              title={t("flow_evt_port")} aria-label={t("flow_evt_port")}
+              onPointerDown={event => startPortDrag(event, [node.id], "event")} />}
           </>
         )}
+        {placement === "canvas" && node.kind === "agent" && renderStaffPort()}
+        {placement === "canvas" && node.kind === "role" && renderStaffSocket()}
 
         {!compact && placement === "canvas" && (
           <button
@@ -6925,14 +7454,15 @@ export function CanvasApp({
         )}
       </section>
     );
-  }, [cardDocument, cardActions, edgeIndex, nodesById, referenceSources, selection.nodes, lod, keepExpandedIds, vpSize, workspaces,
+  }, [doc.settings, crewNodes, contentIndex, cardActions, edgeIndex, selection.nodes, vpSize, workspaces,
     bridge, reportError, quoteState, renderConversation, onPresenceChange, projectStructures, activeWorkspaceId,
-    workspaceFilesList, fileInputDrafts, activeWorkspaceCwd, isNodeVisible, activeHubLayout, connecting, isDragging, languageRevision, openTeam]);
+    workspaceFilesList, fileInputDrafts, activeWorkspaceCwd, passesNodeFilter, activeHubLayout, connecting, isDragging, languageRevision, openTeam,
+    staffDrag, staffTarget, modelRoutes, staffed]);
 
   /* Workspace groupings for Left Explorer Sidebar */
   const sidebarWorkspaceBuckets = useMemo(() => {
     const list: { key: string; name: string; agents: FlowNode[] }[] = [];
-    const agents = doc.nodes.filter((n) => n.kind === "agent");
+    const agents = baseDoc.nodes.filter((n) => n.kind === "agent");
     for (const ws of workspaces) {
       list.push({
         key: ws.id,
@@ -6951,16 +7481,82 @@ export function CanvasApp({
       });
     }
     return list.filter((b, i) => i === 0 || b.agents.length > 0 || workspaces.length > 0);
-  }, [doc.nodes, workspaces]);
+  }, [baseDoc.nodes, workspaces, languageRevision]);
+
+  const sidebarFocus = routeName === "conversation" ? conversationFocusAgent?.id : undefined;
+  const sidebarAgents = useMemo(() => new Map(sidebarWorkspaceBuckets.map(({ key, agents }) => [key,
+    agents.map((agent) => {
+      const state = nodeStatusOf(snapshot, agent.id);
+      const selected = selection.nodes.includes(agent.id) || sidebarFocus === agent.id;
+      return (
+        <button
+          key={agent.id}
+          type="button"
+          className={`sidebar-agent ${selected ? "selected" : ""} ${!passesNodeFilter(agent) ? "agent-hidden" : ""}`}
+          onClick={() => {
+            setLastAgentId(agent.id);
+            cardActions.revealNode(agent.id);
+          }}
+        >
+          <i className={`status-dot status-${state}`} />
+          <span className="user-content">{agent.title}</span>
+          {(state === "waiting" || state === "input") && <small>{t("confirm")}</small>}
+          {state === "draft" && <small>{t("draft")}</small>}
+        </button>
+      );
+    }),
+  ])), [sidebarWorkspaceBuckets, snapshot, selection.nodes, sidebarFocus, passesNodeFilter, cardActions, languageRevision]);
+
+  if (replayRun) {
+    const frame = replayAt(replayRun, replayTime);
+    const projected: FlowspaceSnapshot = { document: { ...doc, ...frame.graph }, runs: [frame], live: [],
+      variables: snapshot?.variables?.map(variable => {
+        const logs = variable.history.filter(write => write.at <= replayTime);
+        const current = logs.at(-1);
+        return { ...variable, history: logs, version: current?.version ?? 0, value: current?.to ?? variable.history[0]?.from ?? variable.value };
+      }) };
+    const nodes = frame.graph.nodes.filter(node => node.kind !== "group" && !node.removed);
+    const boxes = new Map(nodes.map(node => [node.id, nodeBox(node, true)]));
+    const focus = frame.steps.findLast(step => ["running", "awaiting"].includes(step.state)) ?? frame.steps.at(-1);
+    const focusBox = focus && boxes.get(focus.nodeId);
+    const camera = focusBox ? { x: (vpSize.width || 960) / 2 - (focusBox.x + focusBox.w / 2) * .8,
+      y: (vpSize.height || 640) / 2 - (focusBox.y + focusBox.h / 2) * .8, zoom: .8 }
+      : fit({ width: vpSize.width || 960, height: vpSize.height || 640 }, [...boxes.values()]);
+    return <div className="fs-root fs-replay-mode" data-theme={displayedTheme} data-perf-tier={reducedMotion ? "L1" : "L3"}>
+      <div className="fs-replay-banner"><Icon name="replay" />{t("flow_replay_readonly")} · {replayRun.title}</div>
+      <div className="fs-viewport fs-replay-scene" ref={element => { if (element) element.inert = true; }}>
+        <div className="fs-camera" style={{ transform: `translate(${camera.x}px,${camera.y}px) scale(${camera.zoom})` }}>
+          <div className="fs-world">
+            <svg className="fs-edges-svg fs-replay-wires" aria-hidden="true">
+              {frame.graph.edges.map(edge => {
+                const a = boxes.get(edge.source), b = boxes.get(edge.target);
+                if (!a || !b) return null;
+                const token = frame.tokens.findLast(token => token.edgeId === edge.id);
+                const y1 = a.y + 21, y2 = b.y + 21;
+                const bend = Math.max(40, (b.x - a.x - a.w) / 2);
+                return <path className={`edge-path edge-${edge.kind} ${token?.skip ? "edge-state-skipped" : token ? "edge-state-done" : ""}`}
+                  key={edge.id} d={`M ${a.x + a.w} ${y1} C ${a.x + a.w + bend} ${y1}, ${b.x - bend} ${y2}, ${b.x} ${y2}`} />;
+              })}
+            </svg>
+            {nodes.map(node => <div className="fs-card-slot" key={node.id}>
+              {renderNodeCard(node, "canvas", projected, boxes.get(node.id)!, true)}
+            </div>)}
+          </div>
+        </div>
+      </div>
+      <ReplayDock run={replayRun} time={replayTime} setTime={setReplayTime} exit={() => setReplayRun(undefined)} />
+    </div>;
+  }
 
   return (
-    <div
+    <CanvasPreviewContext.Provider value={dataPreviews}><div
       ref={rootRef}
       className="fs-root"
       data-theme={displayedTheme}
       data-perf-tier={reducedMotion ? "L1" : "L3"}
     >
       {/* ---------- Left Navigation Icon Rail ---------- */}
+      {notice && renderNotice?.(notice, () => setNotice(undefined))}
       <nav className="fs-rail" aria-label="FlowSpace">
         <button
           type="button"
@@ -7027,6 +7623,10 @@ export function CanvasApp({
           >
             <Icon name="gear" />
           </button>
+          {snapshot?.variables?.length ? <button type="button" className="rail-button" onClick={() => setVariablePanel(true)}
+            aria-label={t("flow_variable_panel")} title={t("flow_variable_panel")}>
+            <Icon name="braces" />
+          </button> : null}
           <button
             type="button"
             className="rail-language"
@@ -7088,9 +7688,11 @@ export function CanvasApp({
                       if (bucket.key !== "__default__") {
                         setActiveWorkspaceId(bucket.key);
                       }
-                      const boxes = bucket.agents.map((a) =>
-                        nodeBox(a, false, true),
-                      );
+                      const moves = gestureRef.current?.nodes;
+                      const boxes = bucket.agents.map(agent => {
+                        const move = moves?.get(agent.id);
+                        return nodeBox(move ? { ...agent, ...move } : agent, false, true);
+                      });
                       if (boxes.length) {
                         setRouteName("canvas");
                         fitBoxes(boxes);
@@ -7123,31 +7725,7 @@ export function CanvasApp({
                   </button>
                 </div>
 
-                {bucket.agents.map((ag) => {
-                  const st = nodeStatusOf(snapshot, ag.id);
-                  const activeSel =
-                    selection.nodes.includes(ag.id) ||
-                    (routeName === "conversation" &&
-                      conversationFocusAgent?.id === ag.id);
-                  return (
-                    <button
-                      key={ag.id}
-                      type="button"
-                      className={`sidebar-agent ${activeSel ? "selected" : ""} ${!isNodeVisible(ag, true) ? "agent-hidden" : ""}`}
-                      onClick={() => {
-                        setLastAgentId(ag.id);
-                        revealNode(ag.id);
-                      }}
-                    >
-                      <i className={`status-dot status-${st}`} />
-                      <span className="user-content">{ag.title}</span>
-                      {(st === "waiting" || st === "input") && (
-                        <small>{t("confirm")}</small>
-                      )}
-                      {st === "draft" && <small>{t("draft")}</small>}
-                    </button>
-                  );
-                })}
+                {sidebarAgents.get(bucket.key)}
               </div>
             );
           })}
@@ -7248,6 +7826,13 @@ export function CanvasApp({
           </div>
 
           <div className="header-actions">
+            <BudgetMeter snapshot={snapshot} />
+            {doc.nodes.some(node => node.flowType === "flowspace/trigger") && <button type="button"
+              className={`icon-button fs-trig-gate ${doc.settings.automaticTriggers ? "active" : ""}`} role="switch"
+              aria-checked={!!doc.settings.automaticTriggers} aria-label={t("flow_trig_gate")} title={t("flow_trig_gate")}
+              onClick={() => edit(next => { next.settings.automaticTriggers = !next.settings.automaticTriggers; })}>
+              <Icon name="bolt" />
+            </button>}
             {workspaces.length > 0 && (
               <button
                 type="button"
@@ -7500,8 +8085,9 @@ export function CanvasApp({
                   <button
                     type="button"
                     className="icon-button"
-                    title={t("tidy")}
-                    onClick={arrangeTopology}
+                    title={t(tidyLabel)}
+                    aria-label={t(tidyLabel)}
+                    onClick={() => arrangeTopology()}
                   >
                     <Icon name="tidy" />
                   </button>
@@ -7540,7 +8126,7 @@ export function CanvasApp({
                   routeName !== "canvas" ? "is-hidden" : "",
                   tool === "hand" || spacePressed ? "pan-mode" : "",
                   isDragging ? "is-dragging" : "",
-                  connecting ? `connecting connecting-${connecting.kind}` : "",
+                  connecting ? `connecting ${connecting.anchor.direction === "in" ? "connecting-reverse" : `connecting-${connecting.kind}`}` : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
@@ -7612,38 +8198,32 @@ export function CanvasApp({
                 <div ref={cursorFxRef} className="fs-cursor-fx" aria-hidden="true">
                   <div ref={cursorHaloRef} className="fx-halo" />
                   <div ref={cursorLensRef} className="fx-lens">
-                    <div
-                      ref={lensGridRef}
-                      className="fx-lens-grid"
-                      style={{
-                        width: (vpSize.width + GRID_OVERSCAN * 2) * GRID_REBASE_MAX,
-                        height: (vpSize.height + GRID_OVERSCAN * 2) * GRID_REBASE_MAX,
-                      }}
-                    />
+                    <div ref={lensGridRef} className="fx-lens-grid" />
                   </div>
                 </div>
                 {/* Transformed World */}
+                <div className="fs-camera" data-raster={rasterScene || undefined} ref={cameraRef}>
                 <div
                   ref={worldRef}
                   className={`fs-world ${lod ? "semantic-zoom" : ""}`}
                   data-wire-routing={prefs.wireRouting}
-                  style={{ transform: worldTransform(view) }}
                 >
                   <div className="fs-scene-clip" style={{ left: paintArea.x, top: paintArea.y, width: paintArea.w, height: paintArea.h }}>
                   <div className="fs-scene-origin" data-wire-routing={prefs.wireRouting} style={{ left: -paintArea.x, top: -paintArea.y }}>
                   {/* Groups Layer */}
                   <div className="fs-groups-layer">
                     {visibleGroups.map((grp) => {
-                      const ports = inferGroupPorts(doc, grp).filter(
-                        (p) => !p.hidden,
-                      );
+                      const ports = groupPorts.get(grp.id)!;
                       const rows = Math.max(
                         ports.filter((p) => p.direction === "in").length,
                         ports.filter((p) => p.direction === "out").length,
                       );
                       const rawBox = groupBox(grp, rows);
                       const memberNodes = membersOf(grp.id);
-                      const box =
+                      const fan = grp.fanout && nodesById.get(grp.fanout.fanId);
+                      const laneStats = fan && laneGroupState(doc, memberNodes, fan, snapshot?.runs);
+                      const placeholder = !!laneStats && laneStats.total === undefined && !grp.collapsed;
+                      let box =
                         lod && !grp.collapsed && memberNodes.length > 0
                           ? {
                               ...rawBox,
@@ -7664,6 +8244,11 @@ export function CanvasApp({
                               ),
                             }
                           : rawBox;
+                      if (placeholder) {
+                        const bottom = memberNodes.reduce((y, n) => Math.max(y,
+                          n.y + nodeBox(n, lod, Boolean(n.pinned || keepExpandedIds.has(n.id))).h), grp.y);
+                        box = { ...box, h: Math.max(box.h, bottom - grp.y + 48) };
+                      }
                       if (!intersects(box, paintArea) && !selection.groups.includes(grp.id)) return null;
                       const runningCnt = memberNodes.filter(
                         (n) => ["running", "settling"].includes(nodeStatusOf(snapshot, n.id)),
@@ -7677,10 +8262,12 @@ export function CanvasApp({
                       return (
                         <section
                           key={grp.id}
+                          data-lane-group={fan?.id}
                           className={[
                             "workflow-group",
                             `color-${grp.color ?? "blue"}`,
                             grp.collapsed ? "composite" : "",
+                            laneStats ? "fs-lane-group fsx-motion" : "",
                             selection.groups.includes(grp.id) ? "selected" : "",
                             grp.parentId ? "nested-group" : "",
                           ]
@@ -7701,8 +8288,10 @@ export function CanvasApp({
                             });
                           }}
                         >
+                          {laneStats && grp.collapsed && <span className="fs-lane-stack-face" aria-hidden="true" />}
                           <header
                             className="group-header"
+                            data-fs-semantic={lod || undefined}
                             onPointerDown={(ev) => {
                               if ((ev.target as HTMLElement).closest("button"))
                                 return;
@@ -7713,9 +8302,9 @@ export function CanvasApp({
                             <strong className="user-content">
                               {grp.titleKey ? t(grp.titleKey) : grp.title}
                             </strong>
-                            <span>
+                            {laneStats ? <LaneMetrics state={laneStats} /> : <span>
                               {t("nodesCount", { count: memberNodes.length })}
-                            </span>
+                            </span>}
                             <div>
                               <button
                                 type="button"
@@ -7769,6 +8358,7 @@ export function CanvasApp({
                                                 (e) =>
                                                   e.kind === port.kind &&
                                                   port.nodes.includes(e.target) &&
+                                                  (e.targetPort ?? "in") === (port.portId ?? "in") &&
                                                   !memberNodes.some(
                                                     (m) => m.id === e.source,
                                                   ),
@@ -7778,6 +8368,7 @@ export function CanvasApp({
                                           <button
                                             key={port.id}
                                             type="button"
+                                            data-port-id={port.portId ?? dir}
                                             data-port-kind={port.kind}
                                             data-port-direction={dir}
                                             data-proxy-nodes={port.nodes.join(",")}
@@ -7788,7 +8379,7 @@ export function CanvasApp({
                                                     startPortDrag(
                                                       ev,
                                                       port.nodes,
-                                                      port.kind,
+                                                      port.kind, undefined, undefined, port.portId,
                                                     )
                                                 : proxyIncoming.length
                                                   ? (ev) =>
@@ -7798,7 +8389,7 @@ export function CanvasApp({
                                                           proxyIncoming.length - 1
                                                         ],
                                                       )
-                                                  : undefined
+                                                  : ev => startPortDrag(ev, port.nodes, port.kind, undefined, undefined, port.portId, "in")
                                             }
                                           >
                                             <PortMark kind={port.kind} proxy />
@@ -7823,6 +8414,7 @@ export function CanvasApp({
                             </>
                           )}
 
+                          {placeholder && <span className="fs-lane-placeholder">{t("flow_lane_runtime")}</span>}
                           {grp.templateId && (
                             <button
                               type="button"
@@ -7899,6 +8491,7 @@ export function CanvasApp({
 
                       {/* Reference & Continuation Wires */}
                       {wireLayouts.map(({ edge, geom, evState }) => {
+                        const retired = isRemovedLaneWire(edge, nodesById);
                         const isReconnecting =
                           connecting?.reconnectingEdge?.id === edge.id;
                         const isSpotlight = hoveredEdgeId === edge.id;
@@ -7913,6 +8506,7 @@ export function CanvasApp({
                                 !selection.nodes.includes(edge.target);
                         const cls = [
                           `edge-${edge.kind}`,
+                          edge.kind === "event" && `fs-evt-line fs-evt-${edge.event?.kinds.length === 1 ? edge.event.kinds[0] : "mixed"}`,
                           `edge-state-${evState}`,
                           edge.kind === "continuation"
                             ? `trigger-${edge.trigger}`
@@ -7925,8 +8519,10 @@ export function CanvasApp({
                           .filter(Boolean)
                           .join(" ");
 
+                        const write = edge.kind === "reference" ? writeByEdge.get(edge.id) : undefined;
                         return (
-                          <g key={edge.id}>
+                          <g key={edge.id} className={retired ? "fs-lane-removed" : undefined}
+                            data-flow-wire={!retired && edge.kind === "continuation" && evState === "active" ? edge.id : undefined}>
                             {/* Soft halo under live wires (shown only for active states) */}
                             <path
                               className={`edge-path edge-glow ${cls}`}
@@ -7940,6 +8536,11 @@ export function CanvasApp({
                               className={`edge-path edge-flow ${cls}`}
                               d={geom.path}
                             />
+                            {write && Date.now() - write.at < 1800 && !lod &&
+                              <path key={write.id} className="fs-var-return fsx-motion" d={geom.path} pathLength={200} />}
+                            {edge.kind === "event" && runtime.latestToken.get(edge.id)?.createdAt &&
+                              Date.now() - runtime.latestToken.get(edge.id)!.createdAt! < 1400 &&
+                              <path key={runtime.latestToken.get(edge.id)!.id} className="fs-evt-pulse fsx-motion" d={geom.path} pathLength={200} />}
                             <path
                               className="edge-hit"
                               d={geom.path}
@@ -7988,6 +8589,9 @@ export function CanvasApp({
                                           waypoints: insertWireWaypoint(edge.waypoints ?? [], geom, pt),
                                         }),
                                     },
+                                    ...(canInsertFanout(doc, edge) ? [{
+                                      label: t("flow_insert_fanout"), icon: "fanout", fn: () => insertFanout(pt, null, edge.id),
+                                    }] : []),
                                     {
                                       label: t("deleteConnection"),
                                       icon: "trash",
@@ -8007,6 +8611,24 @@ export function CanvasApp({
                         );
                       })}
 
+                      <WireFlowLayer wires={wireLayouts} area={svgBounds} viewport={wireViewport}
+                        zoom={view.zoom} theme={displayedTheme} enabled={routeName === "canvas" && !reducedMotion}
+                        spotlight={hoveredEdgeId} selected={selection.edge} reconnecting={connecting?.reconnectingEdge?.id} />
+
+                      {!lod && snapshot?.nativeOperations?.flatMap(operation => {
+                        const source = nodesById.get(operation.nodeId);
+                        if (!source) return [];
+                        return doc.nodes.filter(node => (node.kind === operation.kind || node.flowType === `flowspace/exec-${operation.kind}`) &&
+                          (operation.kind === "terminal" ? node.terminalSessionId === source.sessionId
+                            : !!operation.cwd && (node.worktreePath ?? node.cwd ?? node.config?.cwd) === operation.cwd))
+                          .map(node => {
+                            const a = nodeBox(source), b = nodeBox(node);
+                            return <path key={`${operation.nodeId}:${node.id}:${operation.kind}`}
+                              className="fs-exec-observed" d={`M ${a.x + a.w / 2} ${a.y + a.h / 2} L ${b.x + b.w / 2} ${b.y + b.h / 2}`}>
+                              <title>{operation.command}</title>
+                            </path>;
+                          });
+                      })}
                       {/* Continuation Exchange Arcs */}
                       {!lod &&
                         exchanges.map((ex) => {
@@ -8034,8 +8656,13 @@ export function CanvasApp({
                           const hasBack = ex.items.some(
                             (m) => m.fromId === ex.to,
                           );
+                          const clip = `flowspace-message-clip-${ex.id.replace(/[^\w-]/g, "_")}`;
+                          const rect = (box: Box) => `M${box.x},${box.y}h${box.w}v${box.h}h${-box.w}Z`;
                           return (
-                            <g key={ex.id}>
+                            <g key={ex.id} clipPath={`url(#${clip})`}>
+                              <clipPath id={clip}>
+                                <path clipRule="evenodd" d={rect(svgBounds) + rect(boxA) + rect(boxB)} />
+                              </clipPath>
                               {hasOut && (
                                 <path
                                   className="edge-path edge-message message-out"
@@ -8055,42 +8682,33 @@ export function CanvasApp({
                         })}
 
                       {/* 4-Tier Derived Structure Skeleton Links (M06) */}
-                      {structureBatches.map(({ first: index, guides }) => {
-                        const slink = derivedStructure.links[index];
-                        if (guides.length) return <StructureWireLayer key={`guides-${slink.id}`} guides={guides}
-                          area={paintArea} zoom={view.zoom} theme={effectiveTheme} settled={!worldRef.current?.dataset.moving} lod={lod} />;
-                        if (!intersects(structureWirePaths[index].extent, paintArea)) return null;
-                        if (slink.path && slink.kind !== "structure") {
-                          // Sub-agent tree tether: spine + elbow, with a travelling
-                          // light pulse while the child session is running.
-                          return (
-                            <g
-                              key={slink.id}
-                              className={`fs-tether fs-tether-${slink.kind === "subagent-spine" ? "spine" : "branch"} ${slink.active ? "is-active" : ""}`}
-                            >
-                              <path className="edge-path fs-tether-line" d={slink.path} />
-                              {slink.active && (
-                                <path className="edge-path fs-tether-pulse" d={slink.path} />
-                              )}
-                            </g>
-                          );
-                        }
-                        return (
-                          <path
-                            key={slink.id}
-                            className={`edge-path fs-structure-edge ${slink.active ? "is-active" : ""}`}
-                            d={structureWirePaths[index].path}
-                          />
-                        );
-                      })}
+                      <GuideWireLayer links={derivedStructure.links} cache={wireScene.cache}
+                        obstacleRevision={wireScene.cache.obstacleRevision} mode={prefs.wireRouting}
+                        area={paintArea} zoom={view.zoom} theme={effectiveTheme}
+                        settled={!worldRef.current?.dataset.moving} lod={lod} dragging={Boolean(gesture?.nodes)} />
+
+                      {/* Native children: agent port → subagent row, role node → member tree */}
+                      <ChildLinks links={childTree.links} />
+
+                      {/* Staffing wires: team port → role socket */}
+                      <StaffWires wires={staffWires}
+                        drag={staffDrag && staffTip ? {
+                          from: staffDrag.teamId ? staffDrag.anchor : staffTip,
+                          to: staffDrag.teamId ? staffTip : staffDrag.anchor,
+                          snapped: !!staffTarget,
+                        } : null}
+                        onMenu={(roleId, at) => openAnchoredMenu(at, [{
+                          label: t("teamRoleDisconnect"), icon: "unplug", danger: true,
+                          fn: () => edit((d) => { const role = d.nodes.find((n) => n.id === roleId); if (role) delete role.staffOf; }),
+                        }])} />
 
                       {/* Live Temporary Drag Wire & Magnetic ComfyUI Plug Tip */}
                       {connecting && (() => {
                         const target = connecting.snappedTarget?.point;
                         const tip = target ?? connecting.current;
                         const wirePath = route(
-                          connecting.fromPoint,
-                          tip,
+                          connecting.anchor.direction === "in" ? tip : connecting.fromPoint,
+                          connecting.anchor.direction === "in" ? connecting.fromPoint : tip,
                           {
                             kind: connecting.kind,
                             mode: prefs.wireRouting,
@@ -8146,7 +8764,7 @@ export function CanvasApp({
                     {derivedStructure.cards.filter(sc => intersects(sc.box, paintArea)).map((sc) => (
                       <div
                         key={sc.id}
-                        className={`fs-struct-card fs-struct-${sc.kind} ${selectedStructureId === sc.id ? "selected" : ""} ${sc.kind === "subagent" && sc.badge === "running" ? "is-running" : ""}`}
+                        className={`fs-struct-card fs-struct-${sc.kind} ${selectedStructureId === sc.id ? "selected" : ""}`}
                         style={{
                           left: sc.box.x,
                           top: sc.box.y,
@@ -8160,10 +8778,6 @@ export function CanvasApp({
                         }}
                         onDoubleClick={(ev) => {
                           ev.stopPropagation();
-                          if (sc.kind === "subagent" && sc.sessionId) {
-                            bridge.openChat(sc.sessionId);
-                            return;
-                          }
                           if (sc.kind === "branch" || sc.kind === "worktree") {
                             createCanvasNode(
                               "git",
@@ -8184,37 +8798,39 @@ export function CanvasApp({
                           {sc.badge && (
                             <span className="fs-struct-badge">{sc.badge}</span>
                           )}
-                          {sc.kind !== "subagent" && (
-                            <button
-                              type="button"
-                              className="icon-button"
-                              title={t("newAgent")}
-                              onClick={(ev) => {
-                                ev.stopPropagation();
-                                createCanvasNode(
-                                  "agent",
-                                  {
-                                    x: sc.box.x + sc.box.w + 220,
-                                    y: sc.box.y + 80,
-                                  },
-                                  {
-                                    workspaceId: sc.workspaceId,
-                                    cwd: sc.worktreePath || sc.cwd,
-                                    branch: sc.branch,
-                                    worktreePath: sc.worktreePath,
-                                  },
-                                );
-                              }}
-                            >
-                              <Icon name="plus" />
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            className="icon-button"
+                            title={t("newAgent")}
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              createCanvasNode(
+                                "agent",
+                                {
+                                  x: sc.box.x + sc.box.w + 220,
+                                  y: sc.box.y + 80,
+                                },
+                                {
+                                  workspaceId: sc.workspaceId,
+                                  cwd: sc.worktreePath || sc.cwd,
+                                  branch: sc.branch,
+                                  worktreePath: sc.worktreePath,
+                                },
+                              );
+                            }}
+                          >
+                            <Icon name="plus" />
+                          </button>
                         </div>
                         <small className="fs-struct-sub user-content">
                           {sc.subtitle}
                         </small>
                       </div>
                     ))}
+
+                    <ChildCards cards={childTree.cards.filter((card) => intersects(card.box, paintArea))}
+                      onOpen={(card) => card.member ? openTeam(card.agentNodeId, card.sessionId) : bridge.openChat(card.sessionId)} />
+
 
                     {sceneNodes.map(({ n, b }) => {
                         const visible = intersects(b, paintArea) || n.id === focusedCard || n.id === editingNodeId || n.id === pendingFocusRef.current;
@@ -8248,36 +8864,39 @@ export function CanvasApp({
                             </div>
                           );
                         }
-                        return <ViewportCard key={n.id} node={n} visible={visible} compact={!!b.compact}
+                        const patch = gesture?.nodes?.get(n.id);
+                        const translating = patch && Object.keys(patch).every(key => key === "x" || key === "y");
+                        const node = translating ? contentIndex.nodesById.get(n.id)! : n;
+                        const layout = cardBoxes(node);
+                        const preview = Boolean(preparing?.compact && !visible && layout[1].compact &&
+                          intersects(cardBoxes(n)[1], preparing.area));
+                        const warmFull = Boolean(preparing && !preparing.compact && visible && b.compact &&
+                          intersects(cardBoxes(n)[0], preparing.area));
+                        const semantic = lod || preview;
+                        const cardBox = layout[Number(semantic)];
+                        return <ViewportCard key={n.id} node={node} visible={visible} box={cardBox} prepare={preview || warmFull}
+                          dx={n.x - node.x} dy={n.y - node.y} semantic={semantic && (node.kind !== "detail" && node.kind !== "role" || !!cardBox.compact)}
+                          branchOffset={branchScroll.get(node.id)} onBranchScroll={onBranchScroll}
                           render={renderNodeCard} snapshot={snapshot} incoming={edgeIndex.incoming.get(n.id)} />;
                       })}
                   </div>
 
                   {/* Edge Pill Tags & Waypoints Layer */}
-                  <div className="fs-tags-layer fs-wire-labels">
+                  <div className="fs-tags-layer fs-wire-labels" data-fs-semantic={lod || undefined}>
                     {wireLayouts.map(({ edge, geom, evState }) => {
                       if (connecting?.reconnectingEdge?.id === edge.id) {
                         return null;
                       }
-                      const waitingTok =
-                        snapshot?.runs
-                          .filter((r) =>
-                            ["running", "waiting", "paused"].includes(r.state),
-                          )
-                          .flatMap((r) =>
-                            r.tokens
-                              .filter(
-                                (tk) =>
-                                  tk.edgeId === edge.id &&
-                                  !tk.ready &&
-                                  !tk.consumed &&
-                                  !tk.dismissed,
-                              )
-                              .map((token) => ({ run: r, token })),
-                          )[0] ?? null;
+                      const waitingTok = runtime.waitingByEdge.get(edge.id);
                       const isSpotlight = hoveredEdgeId === edge.id;
-                      const modeLabel = edge.kind === "continuation"
-                        ? t(edge.mode)
+                      const edgeSource = nodesById.get(edge.source);
+                      const edgeTarget = nodesById.get(edge.target);
+                      const labels = edgeLabels(edge, edgeSource, edgeTarget, runtime.latestToken.get(edge.id));
+                      const permission = containerPermission(edgeSource, edge);
+                      const modeLabel = edge.kind === "event"
+                        ? `${t(`flow_evt_${edge.event?.mode ?? "end"}`)} · ${edge.event?.kinds.length ?? 1}`
+                        : evState === "skipped" ? t("flow_skipped") : edge.kind === "continuation"
+                        ? t(isContainer(edgeTarget) ? "flow_delivery" : edge.mode)
                         : t(edge.always ? "always" : evState);
                       const tagTitle = edge.kind === "continuation"
                         ? `${modeLabel} · ${t(edge.trigger === "auto" ? "automatic" : edge.trigger)}`
@@ -8291,7 +8910,7 @@ export function CanvasApp({
                             !selection.nodes.includes(edge.target);
 
                       return (
-                        <div key={`tags-${edge.id}`}>
+                        <div key={`tags-${edge.id}`} className={isRemovedLaneWire(edge, nodesById) ? "fs-lane-removed" : undefined}>
                           <div
                             className={[
                               "edge-tag",
@@ -8338,7 +8957,12 @@ export function CanvasApp({
                                     : "at"
                                 }
                               />
-                              <span>{modeLabel}</span>
+                              <span className="fs-branch-edge-type">{labels.list && nodesById.get(edge.source)
+                                ? <WireListLabel edge={edge} source={nodesById.get(edge.source)!} fallback={labels.type} /> : labels.type}</span>
+                              <span className={evState === "skipped" ? "fs-branch-skipped-label" : undefined}>{modeLabel}</span>
+                              {labels.conversion && <span className="fs-branch-edge-convert">{labels.conversion}</span>}
+                              {labels.flags && <span className="fs-branch-edge-logic">· {labels.flags}</span>}
+                              {permission !== "read" && <small>{t(`flow_permission_${permission}`)}{edge.ask ? " ?" : ""}</small>}
                               {edge.kind === "continuation" && (
                                 <i className="trigger-indicator">
                                   <Icon
@@ -8429,7 +9053,7 @@ export function CanvasApp({
                     })}
 
                   </div>
-                  <div className="fs-tags-layer">
+                  <div className="fs-tags-layer" data-fs-semantic={lod || undefined}>
                     {/* Exchange Count Pill Tags */}
                     {!lod &&
                       exchanges.map((ex) => {
@@ -8561,8 +9185,7 @@ export function CanvasApp({
                         {activeHubLayout.satellites.map((sat) => {
                           const evState = edgeVisualState(sat.edge);
                           const isHot = hoveredEdgeId === sat.edge.id;
-                          const label =
-                            sat.edge.snapshotTitle || sat.sourceNode.title;
+                          const label = referenceTitle(sat.sourceNode, sat.edge);
                           const modeGlyph =
                             sat.edge.kind === "continuation"
                               ? sat.edge.mode === "fork"
@@ -8619,7 +9242,7 @@ export function CanvasApp({
                             >
                               <i className="fs-sat-pin fs-sat-pin-in" />
                               <span className="fs-sat-icon">
-                                <Icon name={kindIconName(sat.sourceNode.kind)} />
+                                <Icon name={kindIconName(sat.sourceNode.kind, sat.sourceNode.flowType)} />
                               </span>
                               <span className="fs-sat-title user-content">
                                 {label}
@@ -8635,7 +9258,7 @@ export function CanvasApp({
 
                     {/* Floating ComfyUI Wire Action HUD */}
                     {connecting &&
-                      (connecting.reconnectingEdge ||
+                      (connecting.reason || connecting.reconnectingEdge ||
                         connecting.snappedTarget) && (
                         <div
                           className={[
@@ -8659,7 +9282,7 @@ export function CanvasApp({
                             }
                           />
                           <span>
-                            {connecting.reconnectingEdge
+                            {connecting.reason ? t(connecting.reason) : connecting.reconnectingEdge
                               ? connecting.snappedTarget
                                 ? connecting.snappedTarget.isOriginalTarget
                                   ? t("keepConnected")
@@ -8676,6 +9299,7 @@ export function CanvasApp({
                   </div>
                   </div>
                   </div>
+                </div>
                 </div>
 
                 {/* Marquee Selection Box */}
@@ -8839,7 +9463,8 @@ export function CanvasApp({
                         );
                       }}
                     >
-                      <MiniMapNodes boxes={nodeBoxes} snapshot={snapshot} x={full.x} y={full.y} scale={sc} offsetX={ox} offsetY={oy} />
+                      <MiniMapNodes boxes={nodeBoxes} snapshot={snapshot} x={full.x} y={full.y} scale={sc}
+                        offsetX={ox} offsetY={oy} width={mw} height={mh} theme={displayedTheme} raster={rasterScene} />
                       <rect
                         ref={miniViewportRef}
                         className="mini-viewport"
@@ -9007,13 +9632,14 @@ export function CanvasApp({
                 <div className="fs-floating-layer">
                   {doc.nodes
                     .filter((n) => !!n.window)
-                    .map((n) => renderNodeCard(n, "window", snapshot))}
+                    .map((n) => renderNodeCard(n, "window", snapshot, cardBoxes(n)[Number(lod)]))}
                 </div>
               )}
 
               {/* Full-Page Surfaces */}
               {routeName === "team" && (openTeamNode ? (
-                <TeamView key={openTeamNode.id} node={openTeamNode} snapshot={snapshot}
+                <TeamView key={`${openTeamNode.id}:${teamFocus ?? ""}`} node={openTeamNode} snapshot={snapshot}
+                  nodes={doc.nodes} initialSelection={teamFocus}
                   status={nodeStatusOf(snapshot, openTeamNode.id)} bridge={bridge}
                   leadConversation={<EmbeddedSession node={openTeamNode} bridge={bridge}
                     renderConversation={renderConversation} onError={reportError} onPresenceChange={onPresenceChange} />}
@@ -9059,6 +9685,14 @@ export function CanvasApp({
                   onTabChange={setActivityTab}
                   doc={doc}
                   snapshot={snapshot}
+                  onReplay={run => {
+                    viewAnimToken.current++;
+                    setReplayTime(run.createdAt);
+                    setReplayRun(structuredClone(run));
+                  }}
+                  onReport={setReportRun}
+                  onArena={() => setArenaOpen(true)}
+                  onBatchHuman={setBatchHumanId}
                   onRevealNode={revealNode}
                   onRunCommand={(runId, action) =>
                     void bridge.command(runId, action).catch(reportError)
@@ -9154,7 +9788,7 @@ export function CanvasApp({
                   </header>
                   <div className="conversation-node-host">
                     {conversationFocusAgent ? (
-                      renderNodeCard(conversationFocusAgent, "conversation", snapshot)
+                      renderNodeCard(conversationFocusAgent, "conversation", snapshot, cardBoxes(conversationFocusAgent)[Number(lod)])
                     ) : (
                       <div className="surface-empty" style={{ width: "100%" }}>
                         <Icon name="agent" />
@@ -9202,7 +9836,9 @@ export function CanvasApp({
             onStopNode={stopNode}
             onEditNode={editNode}
             onEditEdge={editEdge}
+            onApplyConfig={applyConfig}
             onDeleteSelection={deleteSelection}
+            onInsertFanout={id => insertFanout(undefined, null, id)}
             onUngroup={ungroup}
             onReleaseToken={(runId, tokenId, accept) =>
               void bridge.release(runId, tokenId, accept).catch(reportError)
@@ -9330,6 +9966,13 @@ export function CanvasApp({
           onClose={() => setQuickCreate(null)}
         />
       )}
+      {variablePanel && <CanvasDialog title={t("flow_variable_panel")} variant="wide" closeLabel={t("close")}
+        onClose={() => setVariablePanel(false)}>
+        <VariablePanel snapshot={snapshot} bridge={bridge} />
+      </CanvasDialog>}
+      {arenaOpen && <ArenaDialog snapshot={snapshot} close={() => setArenaOpen(false)} />}
+      {batchHumanRun && <BatchHuman run={batchHumanRun} bridge={bridge} onClose={() => setBatchHumanId(undefined)} />}
+      {reportRun && <ReportDialog run={reportRun} bridge={bridge} models={modelRoutes} close={() => setReportRun(undefined)} />}
       {teamPicker && (
         <CanvasDialog title={t("teamPickBlueprint")} className="fs-team-dialog" onClose={() => setTeamPicker(null)} closeLabel={t("close")}>
           <div className="fs-team-picker">
@@ -9337,14 +9980,19 @@ export function CanvasApp({
               <button type="button" className="fs-team-link-row" key={team.id} onClick={() => {
                 const created = createCanvasNode("agent", teamPicker.at, undefined, false, { patch: {
                   title: team.title, customTitle: true, teamRef: { teamId: team.id, revision: team.revision },
+                  tab: "crew", width: 440, height: 540,
                 } });
                 pendingFocusRef.current = created.id;
                 setTeamPicker(null);
               }}>
-                <span className="fs-team-mark"><Icon name="team" /></span><span className="fs-team-row-copy">
+                <TeamAvatar variant="team" label={team.title} model={team.lead.model} />
+                <span className="fs-team-row-copy">
                   <strong className="user-content">{team.title}</strong>
-                  <small>{team.lead.model.model} · {t("teamSlotCount", { count: team.slots.length })}</small>
-                </span><Icon name="plus" />
+                  <small><ModelChip model={team.lead.model} quiet /><span>{t("teamSlotCount", { count: team.slots.length })}</span></small>
+                </span>
+                <AvatarStack max={4} items={team.slots.map((slot) => ({ key: slot.slotId, label: slot.label,
+                  model: slot.model ?? snapshot?.roles?.find((role) => role.id === slot.roleId)?.model }))} />
+                <Icon name="plus" />
               </button>
             ))}
           </div>
@@ -9391,6 +10039,15 @@ export function CanvasApp({
           className="fs-menu"
           style={{ left: menu.x, top: menu.y }}
           role="menu"
+          onKeyDown={menu.returnFocus ? (event) => {
+            if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+            event.preventDefault();
+            event.stopPropagation();
+            const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+            const index = buttons.findIndex((button) => button === document.activeElement);
+            const offset = event.key === "ArrowDown" ? 1 : -1;
+            buttons[(index + offset + buttons.length) % buttons.length]?.focus();
+          } : undefined}
         >
           {menu.items.map((item, idx) =>
             item.divider ? (
@@ -9405,6 +10062,7 @@ export function CanvasApp({
                 disabled={item.disabled}
                 className={item.danger ? "danger" : ""}
                 onClick={() => {
+                  menu.returnFocus?.focus({ preventScroll: true });
                   setMenu(null);
                   item.fn?.();
                 }}
@@ -9823,14 +10481,18 @@ export function CanvasApp({
                         type="button"
                         className="fs-session-pick"
                         onClick={() => {
+                          const drop = sessionWireDrop.current;
                           const created: FlowNode = {
-                            ...newNode("agent", 120, 160, s.title),
+                            ...newNode("agent", drop?.world.x ?? 120, drop?.world.y ?? 160, s.title),
                             sessionId: s.sessionId,
                             cwd: s.cwd,
                             expanded: true,
                             tab: "conversation",
                           };
-                          edit((d) => d.nodes.push(created));
+                          edit(d => {
+                            d.nodes.push(created);
+                            if (drop?.wire) linkWireDrop(d, drop.wire, created);
+                          });
                           setSessionModal(null);
                           revealNode(created.id);
                         }}
@@ -10213,11 +10875,11 @@ export function CanvasApp({
                     );
                     if (
                       chosen.length >= 2 &&
-                      chosen.every((p) => p.kind === chosen[0].kind)
+                      chosen.every((p) => p.kind === chosen[0].kind && (p.portId ?? "in") === (chosen[0].portId ?? "in"))
                     ) {
                       const merged: GroupPort = {
                         id: uid(),
-                        kind: chosen[0].kind,
+                        kind: chosen[0].kind, portId: chosen[0].portId,
                         direction: "in",
                         name: mergePortsModal.name || t("inputPort"),
                         nodes: [
@@ -10455,7 +11117,7 @@ export function CanvasApp({
       >
         {toastState.text}
       </div>
-    </div>
+    </div></CanvasPreviewContext.Provider>
   );
 }
 

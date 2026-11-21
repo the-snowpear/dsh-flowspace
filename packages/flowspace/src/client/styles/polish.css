@@ -211,10 +211,8 @@
 }
 .fs-root .fs-grid {
   position: absolute;
-  left: -360px;
-  top: -360px;
-  width: calc((100% + 720px) * 1.25);
-  height: calc((100% + 720px) * 1.25);
+  left: 0;
+  top: 0;
   transform-origin: 0 0;
   pointer-events: none;
   will-change: transform;
@@ -224,7 +222,6 @@
   background-size: 120px 120px, 24px 24px;
 }
 .fs-root .fs-world[data-moving] {
-  will-change: transform;
   /* Content sliding under a still cursor must not churn :hover styles mid-gesture. */
   pointer-events: none;
 }
@@ -1219,6 +1216,18 @@
   opacity: 0.16;
   animation: fs-wire-travel-glow 1.5s linear infinite;
 }
+.fs-root [data-flow-wire] > :is(.edge-flow, .edge-glow) {
+  animation-delay: var(--fs-wire-flow-delay, 0ms);
+}
+.fs-root [data-gpu-flow] > :is(.edge-flow, .edge-glow) {
+  visibility: hidden;
+  animation: none !important;
+}
+.fs-root .fs-wire-flow-canvas:not([hidden]) {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .fs-root .edge-continuation.edge-state-queued.edge-flow {
   display: block;
   stroke: var(--accent);
@@ -1424,72 +1433,6 @@
   width: 14px;
   height: 14px;
   color: var(--text-3);
-}
-
-/* Sub-agent cards: indented children with a rose edge and a live dot */
-.fs-root .fs-struct-subagent {
-  padding-left: 16px;
-  border-color: color-mix(in oklab, var(--k-sub) 20%, var(--card-border));
-  background:
-    linear-gradient(90deg, var(--k-sub-soft), transparent 46%),
-    var(--card-bg);
-}
-.fs-root .fs-struct-subagent::before {
-  content: "";
-  position: absolute;
-  left: 6px;
-  top: 12px;
-  bottom: 12px;
-  width: 2.5px;
-  border-radius: 2px;
-  background: color-mix(in oklab, var(--k-sub) 70%, transparent);
-}
-/* Junction where the tether meets the card */
-.fs-root .fs-struct-subagent::after {
-  content: "";
-  position: absolute;
-  left: -4px;
-  top: calc(50% - 3.5px);
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--surface);
-  box-shadow: inset 0 0 0 1.5px var(--k-sub);
-}
-.fs-root .fs-struct-subagent .fs-struct-head .ic {
-  color: var(--k-sub);
-}
-.fs-root .fs-struct-subagent .fs-struct-badge {
-  color: var(--k-sub);
-  background: var(--k-sub-soft);
-  box-shadow: inset 0 0 0 1px var(--k-sub-border);
-}
-.fs-root .fs-struct-subagent.is-running {
-  border-color: color-mix(in oklab, var(--k-sub) 42%, var(--card-border));
-  box-shadow:
-    var(--card-hi),
-    0 0 0 3px var(--k-sub-soft),
-    0 12px 34px -16px color-mix(in oklab, var(--k-sub) calc(60% * var(--glow)), transparent);
-}
-.fs-root .fs-struct-subagent.is-running::after {
-  background: var(--k-sub);
-  box-shadow: 0 0 0 3px var(--k-sub-soft);
-  animation: fs-breathe 1.6s var(--ease-loop) infinite;
-}
-
-/* Tether: solid soft spine + elbows, a pulse of light while the child runs */
-.fs-root .fs-tether-line {
-  stroke: color-mix(in oklab, var(--k-sub) 42%, transparent);
-  stroke-width: 1.4;
-}
-.fs-root .fs-tether.is-active .fs-tether-line {
-  stroke: color-mix(in oklab, var(--k-sub) 60%, transparent);
-}
-.fs-root .fs-tether-pulse {
-  stroke: color-mix(in oklab, var(--k-sub) 70%, #fff);
-  stroke-width: 2;
-  stroke-dasharray: 18 182;
-  animation: fs-wire-travel 1.8s linear infinite;
 }
 
 /* ============================================================
@@ -1859,8 +1802,8 @@
 }
 .fs-root .fx-lens-grid {
   position: absolute;
-  left: -360px;
-  top: -360px;
+  left: 0;
+  top: 0;
   transform-origin: 0 0;
   will-change: transform;
   background-image:
@@ -2173,7 +2116,6 @@
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {
   .fs-root .node-aura,
-  .fs-root .fs-tether-pulse,
   .fs-root .edge-glow {
     display: none !important;
   }
@@ -2181,7 +2123,6 @@
   .fs-root .edge-flow,
   .fs-root .edge-message,
   .fs-root .fs-structure-edge,
-  .fs-root .fs-struct-subagent.is-running::after,
   .fs-root .port-mark::before,
   .fs-root .port-halo,
   .fs-root .port-core {

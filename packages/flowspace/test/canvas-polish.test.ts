@@ -1,68 +1,57 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { emptyDocument, newNode } from "../src/core/document.ts";
+import type { FlowNode } from "../src/types.ts";
 import { giveRoomBack, makeRoom, nodeBox } from "../src/client/geometry.ts";
-import {
-  buildDerivedStructure,
-  subagentTetherPaths,
-} from "../src/client/structure.ts";
+import { buildChildTree } from "../src/client/childTree.ts";
 import { rewriteNavigatorRowSelector } from "../src/client/hostStyleGuard.ts";
 
-test("sub-agent tether: one spine from the parent bottom plus an elbow into each child", () => {
-  const parent = { x: 100, y: 40, w: 300, h: 200 };
-  const children = [
-    { x: 144, y: 262, w: 236, h: 52 },
-    { x: 144, y: 326, w: 236, h: 52 },
-  ];
-  const { spine, branches, spineX } = subagentTetherPaths(parent, children);
-  assert.equal(spineX, 118);
-  // Spine starts at the parent's bottom edge and stops one elbow radius above the last child.
-  assert.equal(spine, "M 118 240 L 118 340");
-  assert.equal(branches.length, 2);
-  // Each elbow leaves the spine, curves right and lands on the child's left edge mid-height.
-  assert.equal(branches[0], "M 118 276 Q 118 288 130 288 L 144 288");
-  assert.equal(branches[1], "M 118 340 Q 118 352 130 352 L 144 352");
-});
-
-test("derived structure emits a tether spine and per-child branches for expanded sub-agents", () => {
-  const agent = {
-    ...newNode("agent", 300, 140, "Worker"),
-    sessionId: "sess-1",
-    subAgentsExpanded: true,
-  };
-  const { cards, links } = buildDerivedStructure({
-    projects: [],
-    hiddenWorkspaces: [],
-    showBranches: false,
-    showWorktrees: false,
-    visibleNodes: [agent],
-    lod: false,
-    keepExpandedIds: new Set(),
-    subagents: [
-      { sessionId: "sub-1", parentSessionId: "sess-1", title: "Explorer", running: false },
-      { sessionId: "sub-2", parentSessionId: "sess-1", title: "Reviewer", running: true },
-    ],
-    runningNodeIds: new Set(),
-    waitingNodeIds: new Set(),
+test("subagents hang from the agent's bottom port beside its role nodes; a role with several members grows a tree", () => {
+  const agent = { ...newNode("agent", 300, 140, "Lead"), sessionId: "lead-1" };
+  const solo = { ...newNode("role", 260, 700, "Reviewer"), staffOf: agent.id, slotId: "reviewer" };
+  const pair = { ...newNode("role", 560, 700, "Tester"), staffOf: agent.id, slotId: "tester" };
+  const plain = { ...newNode("agent", 1400, 140, "Plain"), sessionId: "plain-1" };
+  const member = (sessionId: string, name: string, nodeId?: string) => ({
+    sessionId, parentId: "lead-1", depth: 1, name, label: name, activity: "idle" as const, mode: "continuable" as const,
+    slotId: nodeId ? name.replace(/-\d+$/, "") : null, ...(nodeId ? { nodeId } : {}),
   });
-  const subCards = cards.filter((c) => c.kind === "subagent");
-  assert.equal(subCards.length, 2);
-  const spine = links.filter((l) => l.kind === "subagent-spine");
-  const branches = links.filter((l) => l.kind === "subagent-branch");
-  assert.equal(spine.length, 1);
-  assert.equal(spine[0].active, true, "spine glows while any child runs");
-  assert.deepEqual(
-    branches.map((b) => b.active),
-    [false, true],
-  );
-  for (const [i, b] of branches.entries()) {
-    assert.ok(b.path?.endsWith(`L ${Math.round(subCards[i].box.x)} ${Math.round(subCards[i].box.y + subCards[i].box.h / 2)}`));
-  }
+  const team = {
+    leadSessionId: "lead-1", nodeId: agent.id, teamId: `canvas-${agent.id}`, title: "Lead", revision: 1, enabled: true,
+    leadModel: { provider: "p", model: "m" }, slots: [], tasks: [], capacity: { active: 0, max: 8 },
+    members: [member("m-1", "reviewer", solo.id), member("m-2", "tester", pair.id), member("m-3", "tester-2", pair.id), member("m-4", "explorer")],
+  };
+  const box = (n: typeof agent) => nodeBox(n, false, false);
+  const { cards, links, members } = buildChildTree({
+    nodes: [agent, solo, pair, plain], box, teams: { "lead-1": team },
+    subagents: [
+      { sessionId: "m-1", parentSessionId: "lead-1", title: "reviewer", running: false },
+      { sessionId: "old-1", parentSessionId: "lead-1", title: "Earlier helper", running: false },
+      { sessionId: "sub-1", parentSessionId: "plain-1", title: "Explorer", running: true },
+    ],
+  });
+  assert.deepEqual(members.get(solo.id)?.map((m) => m.sessionId), ["m-1"], "one member lives in its role node");
+  const row = cards.filter((c) => c.agentNodeId === agent.id && !c.roleNodeId);
+  assert.deepEqual(row.map((c) => c.sessionId).sort(), ["m-4", "old-1"], "outside members and earlier subagents share the agent's row");
+  assert.equal(row.find((c) => c.sessionId === "m-4")?.outside, true);
+  assert.equal(row.find((c) => c.sessionId === "old-1")?.member, false);
+  const pairBox = box(pair);
+  assert.ok(row.every((c) => c.box.x >= pairBox.x + pairBox.w && c.box.y === Math.min(box(solo).y, pairBox.y)), "the row sits beside the roles");
+  const tree = cards.filter((c) => c.roleNodeId === pair.id);
+  assert.deepEqual(tree.map((c) => c.name), ["tester", "tester-2"]);
+  assert.ok(tree.every((c) => c.box.y > pairBox.y + pairBox.h), "several members hang under their role");
+  assert.ok(!cards.some((c) => c.roleNodeId === solo.id));
+  const port = { x: box(agent).x + box(agent).w / 2, y: box(agent).y + box(agent).h };
+  assert.deepEqual(links.find((l) => l.id === "child-old-1")?.from, port, "row links leave the bottom-centre port");
+  const plainCard = cards.find((c) => c.sessionId === "sub-1")!;
+  assert.equal(plainCard.box.x + plainCard.box.w / 2, box(plain).x + box(plain).w / 2, "a lone subagent centres under its agent");
+  assert.equal(links.find((l) => l.id === "child-sub-1")?.active, true);
+  const hidden = buildChildTree({ nodes: [{ ...plain, subAgentsExpanded: false }], box, teams: {}, subagents: [
+    { sessionId: "sub-1", parentSessionId: "plain-1", title: "Explorer", running: true }] });
+  assert.equal(hidden.cards.length, 0, "the subagent chip still folds the row away");
 });
-
 test("a card growing into live chat pushes its row right, cards below down, and gives the room back", () => {
   const doc = emptyDocument();
-  const live = { ...newNode("agent", 0, 0, "Author"), expanded: true, sessionId: "s-1", tab: "conversation" as const };
+  const live: FlowNode = { ...newNode("agent", 0, 0, "Author"), expanded: true, sessionId: "s-1", tab: "conversation" };
   // Row neighbours spaced for the 312px idle card (40px apart).
   const right1 = { ...newNode("agent", 352, 0, "Verifier"), expanded: true };
   const right2 = { ...newNode("agent", 704, 0, "Summary"), expanded: true };
@@ -70,7 +59,7 @@ test("a card growing into live chat pushes its row right, cards below down, and 
   const below = { ...newNode("note", 0, 432, "Notes"), expanded: true };
   // Far away: must not move.
   const far = { ...newNode("note", 0, 2000, "Far"), expanded: true };
-  const group = { ...newNode("group", -40, -60, "Loop"), width: 1100, height: 520 };
+  const group = { ...newNode("group", -40, -60, "Loop"), width: 1100, height: 720 };
   for (const n of [live, right1, right2, below]) n.parentId = group.id;
   doc.nodes = [group, live, right1, right2, below, far];
 
@@ -87,8 +76,9 @@ test("a card growing into live chat pushes its row right, cards below down, and 
   assert.equal(at(far.id).y, 2000);
   assert.equal(at(far.id).nudge, undefined);
   const g = at(group.id);
-  assert.ok(g.width > 1100 && g.height > 520, "enclosing group grows to fit");
+  assert.ok(g.width > 1100 && g.height > 720, "enclosing group grows to fit");
 
+  live.tab = "task";
   giveRoomBack(doc, live);
   assert.deepEqual(
     [right1, right2, below].map((n) => [at(n.id).x, at(n.id).y, at(n.id).nudge]),
@@ -98,7 +88,7 @@ test("a card growing into live chat pushes its row right, cards below down, and 
       [0, 432, undefined],
     ],
   );
-  assert.deepEqual([at(group.id).width, at(group.id).height], [1100, 520]);
+  assert.deepEqual([at(group.id).width, at(group.id).height], [1100, 720]);
 });
 
 test("host style guard rewrites only the navigator-row :has() shape", () => {

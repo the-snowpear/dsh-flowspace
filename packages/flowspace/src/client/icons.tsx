@@ -1,6 +1,20 @@
 import type { FlowEdge, NodeKind } from "../types.ts";
+import { descriptorOf } from "../core/nodes/registry.ts";
 
 export const ICONS: Record<string, string> = {
+  "logic-branch": "M3 8h4 M7 8l3-3.5h3 M7 8l3 3.5h3",
+  "fanout": "M2.5 8h3 M5.5 8 13 3.5 M5.5 8H13 M5.5 8 13 12.5",
+  "merge-in": "M3 3.5l7.5 4.5 M3 8h7.5 M3 12.5 10.5 8 M10.5 8h3",
+  "filter": "M2.5 3.5h11l-4.2 5v4l-2.6 1.2v-5.2z",
+  "sort": "M5 3v10 M2.8 10.8 5 13l2.2-2.2 M11 13V3 M8.8 5.2 11 3l2.2 2.2",
+  "split": "M8 2.5v4 M8 6.5 4 10v3.5 M8 6.5l4 3.5v3.5",
+  "braces": "M5.5 3.5c-1.8 0-2 1.2-2 2.3v.9c0 .8-.5 1.3-1.2 1.3.7 0 1.2.5 1.2 1.3v.9c0 1.1.2 2.3 2 2.3 M10.5 3.5c1.8 0 2 1.2 2 2.3v.9c0 .8.5 1.3 1.2 1.3-.7 0-1.2.5-1.2 1.3v.9c0 1.1-.2 2.3-2 2.3",
+  "bell": "M4 11V7.5a4 4 0 0 1 8 0V11l1 1.5H3z M6.5 14h3",
+  "star": "M8 2.5l1.7 3.5 3.8.5-2.8 2.6.7 3.8L8 11.1l-3.4 1.8.7-3.8-2.8-2.6 3.8-.5z",
+  "dice": "M3.5 3.5h9v9h-9z M6 6h.01 M10 10h.01 M8 8h.01",
+  "trophy": "M5 2.5h6v3a3 3 0 0 1-6 0z M5 3.5H3v1a2 2 0 0 0 2 2 M11 3.5h2v1a2 2 0 0 1-2 2 M8 8.5v3 M5.5 13.5h5",
+  "replay": "M3 8a5 5 0 1 0 1.5-3.6 M3 2.5v2.5h2.5 M7 6l3 2-3 2z",
+  "gauge": "M2.5 11a5.5 5.5 0 0 1 11 0 M8 11l2.5-3.5",
   bench: "M2 3h12v10H2z M6 3v10 M6 8h8",
   hand: "M6 7.5V3.2a1 1 0 0 1 2 0V7 M8 4V2.8a1 1 0 0 1 2 0V7 M10 4.5V3.6a1 1 0 0 1 2 0v5.9a4 4 0 0 1-4 4H6.8a3.8 3.8 0 0 1-3.1-1.6L2.2 9.7a1 1 0 0 1 1.5-1.3L6 10V4.5",
   pointer: "M4.2 2.4l7.6 6.2-3.4.5 1.8 3.6-1.6.8-1.8-3.6-2.6 2.3z",
@@ -30,6 +44,17 @@ export const ICONS: Record<string, string> = {
   termPlus: "M2 3h12v10H2z M4.2 6.2L6.4 8l-2.2 1.8 M9.8 6.2v3.6 M8 8h3.6",
   note: "M3 3h10v7l-3 3H3z M10 13v-3h3",
   board: "M2 3h12v10H2z M6 3v10 M10 3v10",
+  list: "M2.5 4h.01 M2.5 8h.01 M2.5 12h.01 M5.5 4h8 M5.5 8h8 M5.5 12h8",
+  calendar: "M3 4h10v9H3z M3 7h10 M5.5 2.5v3 M10.5 2.5v3 M6 10h4",
+  checklist: "M2.5 4l1.1 1.1L5.5 3 M7.5 4h6 M2.5 8l1.1 1.1L5.5 7 M7.5 8h6 M3.5 12h.01 M7.5 12h6",
+  tag: "M2.8 3h5.3l5.1 5.2-5.1 5.1L2.8 8z M5.5 5.8h.01",
+  link: "M6.8 10.8 5.5 12a2.5 2.5 0 0 1-3.5-3.5l3-3a2.5 2.5 0 0 1 3.5 0 M9.2 5.2 10.5 4A2.5 2.5 0 0 1 14 7.5l-3 3a2.5 2.5 0 0 1-3.5 0 M6 10l4-4",
+  priorityUrgent: "M8 3v6 M8 12.5h.01",
+  chevronLeft: "M10 4 6 8l4 4",
+  chevronDown: "M4 6l4 4 4-4",
+  arrowUp: "M8 13V3 M4.5 6.5 8 3l3.5 3.5",
+  arrowDown: "M8 3v10 M4.5 9.5 8 13l3.5-3.5",
+  sendTask: "M2.4 3.1 14 8 2.4 12.9 4.2 8z M4.2 8h5.2",
   pin: "M8 10v4 M5 10h6 M6 10V4h4v6",
   pop: "M9 3h4v4 M13 3L8 8 M11 9v4H3V5h4",
   chev: "M6 4l4 4-4 4",
@@ -138,8 +163,10 @@ export function PortMark({ kind, proxy = false }: { kind: FlowEdge["kind"]; prox
   );
 }
 
-export function kindIconName(kind: NodeKind | string): string {
+export function kindIconName(kind: NodeKind | string, flowType?: string): string {
   switch (kind) {
+    case "flow":
+      return descriptorOf(flowType)?.icon ?? "card";
     case "agent":
     case "subagent":
       return "agent";
@@ -162,6 +189,8 @@ export function kindIconName(kind: NodeKind | string): string {
       return "diff";
     case "terminal":
       return "term";
+    case "role":
+      return "person";
     case "project":
       return "project";
     case "branch":

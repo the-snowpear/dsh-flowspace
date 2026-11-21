@@ -22,13 +22,20 @@ import type {
   RunStep,
 } from "../types.ts";
 import type { RuntimeAdapter } from "../core/scheduler.ts";
+import type { NodeExecutor } from "../core/nodes/types.ts";
+import { boardContent, resolveBoardReference } from "../core/board.ts";
+import { DEFAULT_LIST_LIMIT, selectedFileContent, textOfContent } from "../core/content.ts";
+import { connectionPort } from "../core/connect.ts";
+import { descriptorOf } from "../core/nodes/registry.ts";
+import { transformData } from "../core/nodes/data/index.ts";
+import { snapshotWithContent } from "../core/nodes/input.ts";
 import {
-  boardSummaryText,
   syncUntitledAgentNode,
   uid,
 } from "../core/document.ts";
 import { sameFsPath } from "./git.ts";
 import type { TeamRuntime } from "./teamRuntime.ts";
+import { ContentSpills, MAX_INLINE_CONTEXT_BYTES, type ContentSpillTable } from "./content.ts";
 
 interface OptionalWorkingDirectoryService {
   set(agent: unknown, path: string, signal?: AbortSignal): Promise<string>;
@@ -72,8 +79,6 @@ interface OptionalTerminalControllerService {
     req: { offset: number; count: number; maxBytes: number },
   ): Promise<{ text: string; totalLines: number; truncated: boolean }>;
 }
-
-const MAX_INLINE_CONTEXT_BYTES = 65536;
 
 const shortHash = (value: string): string =>
   createHash("sha1").update(value).digest("hex").slice(0, 12);
@@ -128,11 +133,39 @@ export function computeFileNodeFingerprint(
 }
 
 export class DshRuntime implements RuntimeAdapter {
+  private readonly spills: ContentSpills;
   constructor(
     private ctx: Context,
     private findNode: (id: string) => FlowNode | undefined,
     private teams: TeamRuntime,
-  ) {}
+    private nodeExecutors: ReadonlyMap<string, NodeExecutor>,
+    spillRecords: ContentSpillTable,
+    private getListLimit: () => number | undefined = () => undefined,
+    private readDataFile?: (path: string, cwd?: string) => Promise<string>,
+  ) {
+    this.spills = new ContentSpills(ctx, spillRecords);
+  }
+
+  freezeContent(snapshot: ContextSnapshot, limit = this.getListLimit() ?? DEFAULT_LIST_LIMIT, ownerSessionId?: string) {
+    return this.spills.freeze(snapshot, limit, ownerSessionId);
+  }
+
+  hydrateContent(snapshot: ContextSnapshot) {
+    return this.spills.hydrate(snapshot);
+  }
+
+  execute: NodeExecutor = async (node, step, signal, options) => {
+    const execute = this.nodeExecutors.get(node.flowType ?? "");
+    if (!execute) throw new Error(`节点执行器不可用：${node.flowType}`);
+    const sources = await Promise.all(step.sources.map(source => this.hydrateContent(source)));
+    const previous = options?.previous && (await this.hydrateContent(snapshotWithContent(node, options.previous))).content;
+    signal.throwIfAborted();
+    const result = await execute(node, { ...step, sources }, signal, { ...options, previous });
+    if ("awaiting" in result) return result;
+    const forwarded = sources.indexOf(result.source);
+    const source = forwarded >= 0 ? step.sources[forwarded] : await this.freezeContent(result.source, options?.listLimit);
+    return { ...result, source, output: result.output === result.source.text ? source.text : result.output };
+  };
 
   teamReference(sessionId: string) {
     return this.teams.reference(sessionId);
@@ -177,12 +210,14 @@ export class DshRuntime implements RuntimeAdapter {
           !sameFsPath(targetDir, opts.workspacePath),
       );
     const hasPlanPreference = node.planMode !== undefined;
-    if (!needsWorkdirSet && !hasPlanPreference) return;
+    const laneModel = node.generatedBy ? node.teamModel : undefined;
+    if (!needsWorkdirSet && !hasPlanPreference && !laneModel) return;
 
     const resolved = await this.ctx.sessionController
       .resolveAgent(sessionId as SessionId)
       .catch(() => null);
     if (!resolved || "error" in resolved) return;
+    if (laneModel) resolved.agent.model.select(laneModel as Parameters<typeof resolved.agent.model.select>[0]);
 
     if (needsWorkdirSet && targetDir) {
       const wd = (
@@ -212,7 +247,7 @@ export class DshRuntime implements RuntimeAdapter {
     }
   }
 
-  async ensure(node: FlowNode, fork?: ContextSnapshot): Promise<string> {
+  async ensure(node: FlowNode, fork?: ContextSnapshot, sessionTitle?: string): Promise<string> {
     const titleDerived = syncUntitledAgentNode(node);
     const ws = node.workspaceId
       ? this.ctx.workspaceRegistry
@@ -220,12 +255,15 @@ export class DshRuntime implements RuntimeAdapter {
           .find((w) => w.id === node.workspaceId)
       : undefined;
 
+    const team = this.teams.wantsTeam(node);
     if (node.sessionId) {
-      if (titleDerived) {
+      // An agent that gained role nodes becomes a team lead before this turn.
+      if (team && !this.teams.isLead(node.sessionId)) await this.teams.sync(node.id);
+      if (titleDerived || sessionTitle) {
         await this.ctx.sessionController
           .rename({
             sessionId: node.sessionId as SessionId,
-            title: node.title,
+            title: sessionTitle ?? node.title,
           })
           .catch(() => {});
       }
@@ -235,8 +273,8 @@ export class DshRuntime implements RuntimeAdapter {
       return node.sessionId;
     }
 
-    const roster = node.teamRef && await this.teams.validateRoster(node.teamRef.teamId);
-    const result = fork?.sourceSessionId && !roster
+    const roster = team ? await this.teams.validateRoster(node) : undefined;
+    const result = fork?.sourceSessionId
       ? await this.ctx.sessionController.fork({
           sessionId: fork.sourceSessionId as SessionId,
           atSeq: fork.seq,
@@ -247,12 +285,12 @@ export class DshRuntime implements RuntimeAdapter {
             : node.cwd || node.worktreePath
               ? { cwd: node.worktreePath ?? node.cwd }
               : {}),
-          ...(!roster && node.agentPreset ? { agentPreset: node.agentPreset } : {}),
+          ...(node.agentPreset ? { agentPreset: node.agentPreset } : {}),
         });
 
     await this.ctx.sessionController.rename({
       sessionId: result.sessionId,
-      title: node.title,
+      title: sessionTitle ?? node.title,
     });
 
     await this.syncLiveAgentConfig(node, result.sessionId, {
@@ -283,8 +321,12 @@ export class DshRuntime implements RuntimeAdapter {
    */
   async contextText(
     sources: ContextSnapshot[],
-    sessionId: string,
+    sessionId?: string,
   ): Promise<string> {
+    if (!sessionId) {
+      const full = await Promise.all(sources.map(source => this.hydrateContent(source)));
+      return full.map(source => source.text).join("\n\n");
+    }
     const active = sources.filter((s) => s.kind !== "fork");
     if (!active.length) return "";
 
@@ -456,7 +498,7 @@ export class DshRuntime implements RuntimeAdapter {
           state: "completed",
           turn,
           endSeq: end.seq,
-          endedAt: Date.now(),
+          endedAt: end.time,
           output:
             chosen?.type === "assistant/message"
               ? plainText(chosen.data.message.content)
@@ -537,7 +579,7 @@ export class DshRuntime implements RuntimeAdapter {
           ? plainText(fallbackAssistant.data.message.content)
           : (output ?? "");
     }
-    return {
+    return this.freezeContent({
       id: uid(),
       kind: mode,
       sourceNodeId: node.id,
@@ -547,7 +589,7 @@ export class DshRuntime implements RuntimeAdapter {
       text: text ?? "",
       version: String(cut),
       capturedAt: Date.now(),
-    };
+    });
   }
 
   private inferReferenceKind(
@@ -572,8 +614,44 @@ export class DshRuntime implements RuntimeAdapter {
     }
   }
 
-  async reference(node: FlowNode, edge?: FlowEdge): Promise<ContextSnapshot> {
+  async reference(node: FlowNode, edge?: FlowEdge, target?: FlowNode, limit = this.getListLimit() ?? DEFAULT_LIST_LIMIT): Promise<ContextSnapshot> {
+    return this.freezeContent(await this.readReference(node, edge, limit, target), limit);
+  }
+
+  /** A preview reads the configured file through the same workspace boundary without persisting a spill. */
+  async previewFile(node: FlowNode, edge: FlowEdge, target: FlowNode, limit: number): Promise<ContextSnapshot> {
+    return this.readReference(node, edge, limit, target);
+  }
+
+  private async readReference(node: FlowNode, edge: FlowEdge | undefined, limit: number, frozenTarget?: FlowNode): Promise<ContextSnapshot> {
     const refKind = this.inferReferenceKind(node);
+    if (edge?.snapshotContent) {
+      return {
+        id: uid(), kind: edge.snapshotContent.dataType === "file" ? "file" : "text", referenceKind: refKind,
+        sourceNodeId: node.id, title: edge.snapshotTitle || node.title,
+        text: edge.snapshotText ?? textOfContent(edge.snapshotContent), content: edge.snapshotContent,
+        version: shortHash(JSON.stringify(edge.snapshotContent)), capturedAt: Date.now(),
+      };
+    }
+    if (node.flowType === "flowspace/constant" && edge?.snapshotText === undefined) {
+      const content = transformData(node, [], limit);
+      return { ...snapshotWithContent(node, content), version: shortHash(JSON.stringify(node.config)) };
+    }
+    if (node.kind === "board" && (edge?.sourceItemKey !== undefined || !edge?.snapshotText)) {
+      const board = frozenTarget?.kind === "flow" ? node : this.findNode(node.id) ?? node;
+      const itemKey = edge?.sourceItemKey;
+      const ref = resolveBoardReference(board, itemKey, limit);
+      return {
+        id: uid(),
+        kind: "text",
+        referenceKind: itemKey === undefined ? "board" : "board-card",
+        sourceNodeId: node.id,
+        ...ref,
+        content: boardContent(board, itemKey, limit),
+        version: shortHash(resolveBoardReference(board, itemKey).text),
+        capturedAt: Date.now(),
+      };
+    }
     if (edge?.snapshotText !== undefined && edge.snapshotText.length > 0) {
       return {
         id: uid(),
@@ -605,9 +683,22 @@ export class DshRuntime implements RuntimeAdapter {
       }
     }
     if (node.kind === "file") {
-      const paths = extractFileNodePaths(node);
+      const configured = extractFileNodePaths(node);
+      const paths = configured.slice(0, limit);
+      const counts = paths.length < configured.length ? { originalCount: configured.length } : {};
       const baseCwd = node.worktreePath ?? node.cwd;
       const version = computeFileNodeFingerprint(node, baseCwd);
+      const target = frozenTarget ?? (edge && this.findNode(edge.target));
+      const inputType = edge && target && descriptorOf(target.flowType)?.family === "data"
+        ? connectionPort(target, edge.kind, "in", edge.targetPort)?.dataType : undefined;
+      if (inputType === "list")
+        return { ...snapshotWithContent(node, selectedFileContent(node, limit)), referenceKind: "file", version };
+      if (this.readDataFile && inputType === "text") {
+        const chunks: string[] = [];
+        for (const path of paths) chunks.push(await this.readDataFile(path, baseCwd));
+        const text = chunks.join("\n");
+        return { ...snapshotWithContent(node, { dataType: "text", value: text }), referenceKind: "file", version };
+      }
       if (!paths.length) {
         return {
           id: uid(),
@@ -617,6 +708,7 @@ export class DshRuntime implements RuntimeAdapter {
           sourceNodeId: node.id,
           title: node.title,
           text: "未配置引用文件路径（当前文件节点为空）",
+          content: { dataType: "file", value: [] },
           version,
           capturedAt: Date.now(),
         };
@@ -645,6 +737,7 @@ export class DshRuntime implements RuntimeAdapter {
           sourceNodeId: node.id,
           title: node.title,
           text: `引用的文件当前不存在（已安全跳过）：${missingPaths.join("、")}`,
+          content: { dataType: "file", value: [], ...counts },
           version,
           capturedAt: Date.now(),
         };
@@ -659,6 +752,7 @@ export class DshRuntime implements RuntimeAdapter {
         sourceNodeId: node.id,
         title: node.title,
         text: `请按任务需要读取文件：${resolved.join("、")}${noteMissing}`,
+        content: { dataType: "file", value: resolved, ...counts },
         version,
         capturedAt: Date.now(),
       };
@@ -737,10 +831,7 @@ export class DshRuntime implements RuntimeAdapter {
         capturedAt: Date.now(),
       };
     }
-    const text =
-      node.kind === "board" && node.columns
-        ? boardSummaryText(node.columns, node.selectedItems) || node.text
-        : node.text;
+    const text = node.text;
     return {
       id: uid(),
       kind: "text",

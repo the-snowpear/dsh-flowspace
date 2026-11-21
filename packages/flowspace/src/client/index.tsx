@@ -17,9 +17,11 @@ import type {
 import type { SessionId } from "@deepseek-ai/dsh-session/types";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Pin, Quote, Workflow } from "lucide-react";
+import { referenceTitle } from "../core/document.ts";
 import { TYPERT_REMOTE } from "../../lib/typert.remote-client.js";
 import { CanvasApp, detectHostDark } from "./CanvasApp.tsx";
 import { FlowClient, type CanvasBridge } from "./bridge.ts";
+import { FanoutSessionHover, FanoutSessionMarker } from "./FanoutSessions.tsx";
 import { capsuleStateOf } from "./geometry.ts";
 import { PayloadPeekPopover } from "./PayloadPeekPopover.tsx";
 import "./style.css";
@@ -35,6 +37,13 @@ declare module "@deepseek-ai/dsh-client-ui-slots" {
       kind: "single";
       scope: "session";
       owner: { nodeId?: string };
+    };
+  }
+  // rc.3 registers this native factory but its client entry does not re-export the toast contract.
+  interface SlotFactoryMap {
+    "workspace.toast.content": {
+      scope: "root";
+      props: { seq: number; text: string; tone: "plain" | "warning" | "success"; onDone: () => void };
     };
   }
 }
@@ -158,6 +167,16 @@ function mountUi(ctx: Context): void {
       ChatBadge,
     ),
   );
+  ctx.slots.inject("sidebar.session.row.trailing", () =>
+    ctx.slots.register({
+      name: "sidebar.session.row.trailing", id: "flowspace-lane", inject: () => ({ bridge }),
+    }, FanoutSessionMarker),
+  );
+  ctx.slots.inject("sidebar.session.row.hover", () =>
+    ctx.slots.register({
+      name: "sidebar.session.row.hover", id: "flowspace-lane", inject: () => ({ bridge }),
+    }, FanoutSessionHover),
+  );
   ctx.slots.inject("conversation.composer.dock", () =>
     ctx.slots.register(
       {
@@ -216,11 +235,14 @@ function foldHostSidebar(ctx: Context): () => void {
 }
 
 type MainProps = PropsRuntime<"main"> &
-  PropsRenderSlots<"flowspace.conversation"> & { bridge: CanvasBridge };
-function Main({ bridge, SessionProvider, renderSlot }: MainProps) {
+  PropsRenderSlots<"flowspace.conversation"> & PropsRenderFactories & { bridge: CanvasBridge };
+function Main({ bridge, SessionProvider, renderSlot, renderFactorySlot }: MainProps) {
   return (
     <CanvasApp
       bridge={bridge}
+      renderNotice={(notice, onDone) => renderFactorySlot("workspace.toast.content", {
+        seq: notice.at, text: `${notice.title} · ${notice.text}`, tone: "plain", onDone,
+      })}
       renderConversation={(node, reference) => (
         <SessionProvider session={reference}>
           {renderSlot("flowspace.conversation", { nodeId: node?.id })}
@@ -291,7 +313,7 @@ function FlowspaceComposerDock({
       {incomingRefs.map((refEdge) => {
         const src = doc.nodes.find((x) => x.id === refEdge.source);
         const state = capsuleStateOf(refEdge, sourceVersions);
-        const label = refEdge.snapshotTitle || src?.title || refEdge.source;
+        const label = referenceTitle(src, refEdge);
         return (
           <button
             key={refEdge.id}

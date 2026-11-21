@@ -5,35 +5,42 @@ import type {
   TypertRemoteInfo,
   TypertRemoteMethod,
 } from '@deepseek-ai/dsh-typert-protocol'
-import type { ArchiveTeamAssetRequest, BindRequest, DraftRequest, EdgePayloadPreview, ExtendLoopRequest, FilePreviewRequest, FlowNode, FlowspaceDocument, FlowspaceRun, FlowspaceSnapshot, GitActionRequest, GitDiffRequest, GitDiffResult, GitInspectRequest, GitRepoStatus, InspectEdgeRequest, LaunchPlan, ReleaseRequest, RerunFailedRequest, RestoreSnapshotRequest, RoleDefinition, RunCommand, SaveRoleRequest, SaveTeamRequest, SessionBrief, SessionChangeDiffRequest, SessionChangesRequest, SessionChangeTurn, SessionFileDiffView, SessionTerminalBrief, SessionTerminalsRequest, SourceRequest, StartRequest, TeamBlueprint, TeamModelRoute, TerminalScreenReadRequest, TerminalScreenSnapshot, WorkflowImportRequest, WorkflowImportResult, WorkspaceBrief, WorkspaceFilePreview, WorkspaceFilesRequest, WorkspaceStructureBrief } from 'dsh-flowspace/types'
+import type { ArchiveTeamAssetRequest, BindRequest, DataPreview, DataPreviewRequest, DraftRequest, EdgePayloadPreview, ExtendLoopRequest, FilePreviewRequest, FlowNode, FlowspaceDocument, FlowspaceRun, FlowspaceSnapshot, GitActionRequest, GitDiffRequest, GitDiffResult, GitInspectRequest, GitRepoStatus, HumanAnswerRequest, InspectEdgeRequest, JsonObject, JsonValue, LaunchPlan, ReleaseRequest, RerunFailedRequest, RestoreSnapshotRequest, RoleDefinition, RunCommand, RunReport, SaveRoleRequest, SaveTeamRequest, SessionBrief, SessionChangeDiffRequest, SessionChangesRequest, SessionChangeTurn, SessionFileDiffView, SessionTerminalBrief, SessionTerminalsRequest, SourceRequest, StartRequest, TeamBlueprint, TeamModel, TeamModelRoute, TerminalScreenReadRequest, TerminalScreenSnapshot, WorkflowImportRequest, WorkflowImportResult, WorkspaceBrief, WorkspaceFilePreview, WorkspaceFilesRequest, WorkspaceStructureBrief } from 'dsh-flowspace/types'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertRemoteNamespace$666c6f777370616365 {
+    answerHuman: (request: HumanAnswerRequest) => Promise<RemoteResult<void>>
     archiveRole: (request: ArchiveTeamAssetRequest) => Promise<RemoteResult<RoleDefinition>>
     archiveTeam: (request: ArchiveTeamAssetRequest) => Promise<RemoteResult<TeamBlueprint>>
     bind: (request: BindRequest) => Promise<RemoteResult<FlowNode>>
     canvasPresence: (sessionIds: string[]) => Promise<RemoteResult<void>>
     command: (request: RunCommand) => Promise<RemoteResult<void>>
+    debugStep: (request: { runId: string; stepId: string; action: "continue" | "step" | "skip"; task?: string; }) => Promise<RemoteResult<void>>
     display: (request: SourceRequest) => Promise<RemoteResult<FlowNode>>
     draft: (request: DraftRequest) => Promise<RemoteResult<void>>
     extendLoop: (request: ExtendLoopRequest) => Promise<RemoteResult<void>>
     follow: (signal?: AbortSignal) => RemoteStreamHandle<FlowspaceSnapshot, never>
+    generateReport: (request: { runId: string; model: TeamModel; }) => Promise<RemoteResult<RunReport>>
     gitAction: (request: GitActionRequest) => Promise<RemoteResult<GitRepoStatus>>
     gitDiff: (request: GitDiffRequest) => Promise<RemoteResult<GitDiffResult>>
     gitInspect: (request: GitInspectRequest) => Promise<RemoteResult<GitRepoStatus>>
     importWorkflow: (request: WorkflowImportRequest) => Promise<RemoteResult<WorkflowImportResult>>
     inspectEdgePayload: (request: InspectEdgeRequest) => Promise<RemoteResult<EdgePayloadPreview>>
+    launchTrigger: (request: { nodeId: string; values?: JsonObject; }) => Promise<RemoteResult<FlowspaceRun>>
     listModelRoutes: () => Promise<RemoteResult<TeamModelRoute[]>>
     listRoles: () => Promise<RemoteResult<RoleDefinition[]>>
     listTeams: () => Promise<RemoteResult<TeamBlueprint[]>>
     openSessionTerminal: (request: SessionTerminalsRequest) => Promise<RemoteResult<SessionTerminalBrief>>
     plan: (request: StartRequest) => Promise<RemoteResult<LaunchPlan>>
+    previewData: (request: DataPreviewRequest, signal?: AbortSignal) => Promise<RemoteResult<DataPreview>>
     projectStructures: () => Promise<RemoteResult<WorkspaceStructureBrief[]>>
     readTerminalScreen: (request: TerminalScreenReadRequest) => Promise<RemoteResult<TerminalScreenSnapshot>>
     readWorkspaceFile: (request: FilePreviewRequest) => Promise<RemoteResult<WorkspaceFilePreview>>
     release: (request: ReleaseRequest) => Promise<RemoteResult<void>>
+    remindEmission: (request: { runId: string; stepId: string; }) => Promise<RemoteResult<void>>
     rerunFailed: (request: RerunFailedRequest) => Promise<RemoteResult<FlowspaceRun>>
     restoreSnapshot: (request: RestoreSnapshotRequest) => Promise<RemoteResult<FlowspaceDocument>>
+    revertContainerChange: (id: string) => Promise<RemoteResult<void>>
     save: (document: FlowspaceDocument) => Promise<RemoteResult<FlowspaceDocument>>
     saveRole: (request: SaveRoleRequest) => Promise<RemoteResult<RoleDefinition>>
     saveTeam: (request: SaveTeamRequest) => Promise<RemoteResult<TeamBlueprint>>
@@ -46,33 +53,41 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     stopNode: (nodeId: string) => Promise<RemoteResult<void>>
     workspaceFiles: (request: WorkspaceFilesRequest) => Promise<RemoteResult<string[]>>
     workspaces: () => Promise<RemoteResult<WorkspaceBrief[]>>
+    writeVariable: (request: { id: string; runId?: string; lane?: string; expectedVersion: number; value?: JsonValue; }) => Promise<RemoteResult<void>>
   }
   interface TypertRemoteMap {
+    'flowspace/answerHuman': (request: HumanAnswerRequest) => Promise<RemoteResult<void>>
     'flowspace/archiveRole': (request: ArchiveTeamAssetRequest) => Promise<RemoteResult<RoleDefinition>>
     'flowspace/archiveTeam': (request: ArchiveTeamAssetRequest) => Promise<RemoteResult<TeamBlueprint>>
     'flowspace/bind': (request: BindRequest) => Promise<RemoteResult<FlowNode>>
     'flowspace/canvasPresence': (sessionIds: string[]) => Promise<RemoteResult<void>>
     'flowspace/command': (request: RunCommand) => Promise<RemoteResult<void>>
+    'flowspace/debugStep': (request: { runId: string; stepId: string; action: "continue" | "step" | "skip"; task?: string; }) => Promise<RemoteResult<void>>
     'flowspace/display': (request: SourceRequest) => Promise<RemoteResult<FlowNode>>
     'flowspace/draft': (request: DraftRequest) => Promise<RemoteResult<void>>
     'flowspace/extendLoop': (request: ExtendLoopRequest) => Promise<RemoteResult<void>>
     'flowspace/follow': (signal?: AbortSignal) => RemoteStreamHandle<FlowspaceSnapshot, never>
+    'flowspace/generateReport': (request: { runId: string; model: TeamModel; }) => Promise<RemoteResult<RunReport>>
     'flowspace/gitAction': (request: GitActionRequest) => Promise<RemoteResult<GitRepoStatus>>
     'flowspace/gitDiff': (request: GitDiffRequest) => Promise<RemoteResult<GitDiffResult>>
     'flowspace/gitInspect': (request: GitInspectRequest) => Promise<RemoteResult<GitRepoStatus>>
     'flowspace/importWorkflow': (request: WorkflowImportRequest) => Promise<RemoteResult<WorkflowImportResult>>
     'flowspace/inspectEdgePayload': (request: InspectEdgeRequest) => Promise<RemoteResult<EdgePayloadPreview>>
+    'flowspace/launchTrigger': (request: { nodeId: string; values?: JsonObject; }) => Promise<RemoteResult<FlowspaceRun>>
     'flowspace/listModelRoutes': () => Promise<RemoteResult<TeamModelRoute[]>>
     'flowspace/listRoles': () => Promise<RemoteResult<RoleDefinition[]>>
     'flowspace/listTeams': () => Promise<RemoteResult<TeamBlueprint[]>>
     'flowspace/openSessionTerminal': (request: SessionTerminalsRequest) => Promise<RemoteResult<SessionTerminalBrief>>
     'flowspace/plan': (request: StartRequest) => Promise<RemoteResult<LaunchPlan>>
+    'flowspace/previewData': (request: DataPreviewRequest, signal?: AbortSignal) => Promise<RemoteResult<DataPreview>>
     'flowspace/projectStructures': () => Promise<RemoteResult<WorkspaceStructureBrief[]>>
     'flowspace/readTerminalScreen': (request: TerminalScreenReadRequest) => Promise<RemoteResult<TerminalScreenSnapshot>>
     'flowspace/readWorkspaceFile': (request: FilePreviewRequest) => Promise<RemoteResult<WorkspaceFilePreview>>
     'flowspace/release': (request: ReleaseRequest) => Promise<RemoteResult<void>>
+    'flowspace/remindEmission': (request: { runId: string; stepId: string; }) => Promise<RemoteResult<void>>
     'flowspace/rerunFailed': (request: RerunFailedRequest) => Promise<RemoteResult<FlowspaceRun>>
     'flowspace/restoreSnapshot': (request: RestoreSnapshotRequest) => Promise<RemoteResult<FlowspaceDocument>>
+    'flowspace/revertContainerChange': (id: string) => Promise<RemoteResult<void>>
     'flowspace/save': (document: FlowspaceDocument) => Promise<RemoteResult<FlowspaceDocument>>
     'flowspace/saveRole': (request: SaveRoleRequest) => Promise<RemoteResult<RoleDefinition>>
     'flowspace/saveTeam': (request: SaveTeamRequest) => Promise<RemoteResult<TeamBlueprint>>
@@ -85,6 +100,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'flowspace/stopNode': (nodeId: string) => Promise<RemoteResult<void>>
     'flowspace/workspaceFiles': (request: WorkspaceFilesRequest) => Promise<RemoteResult<string[]>>
     'flowspace/workspaces': () => Promise<RemoteResult<WorkspaceBrief[]>>
+    'flowspace/writeVariable': (request: { id: string; runId?: string; lane?: string; expectedVersion: number; value?: JsonValue; }) => Promise<RemoteResult<void>>
   }
   interface TypertRemoteNamespaceMap {
     'flowspace': TypertRemoteNamespace$666c6f777370616365
@@ -92,31 +108,38 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 }
 
 export declare const TYPERT_REMOTE: TypertRemoteInfo<{
+  readonly 'flowspace/answerHuman': TypertRemoteMethod<{ readonly 'request': HumanAnswerRequest }, void>
   readonly 'flowspace/archiveRole': TypertRemoteMethod<{ readonly 'request': ArchiveTeamAssetRequest }, RoleDefinition>
   readonly 'flowspace/archiveTeam': TypertRemoteMethod<{ readonly 'request': ArchiveTeamAssetRequest }, TeamBlueprint>
   readonly 'flowspace/bind': TypertRemoteMethod<{ readonly 'request': BindRequest }, FlowNode>
   readonly 'flowspace/canvasPresence': TypertRemoteMethod<{ readonly 'sessionIds': string[] }, void>
   readonly 'flowspace/command': TypertRemoteMethod<{ readonly 'request': RunCommand }, void>
+  readonly 'flowspace/debugStep': TypertRemoteMethod<{ readonly 'request': { runId: string; stepId: string; action: "continue" | "step" | "skip"; task?: string; } }, void>
   readonly 'flowspace/display': TypertRemoteMethod<{ readonly 'request': SourceRequest }, FlowNode>
   readonly 'flowspace/draft': TypertRemoteMethod<{ readonly 'request': DraftRequest }, void>
   readonly 'flowspace/extendLoop': TypertRemoteMethod<{ readonly 'request': ExtendLoopRequest }, void>
   readonly 'flowspace/follow': TypertRemoteMethod<{  }, FlowspaceSnapshot, 'stream'>
+  readonly 'flowspace/generateReport': TypertRemoteMethod<{ readonly 'request': { runId: string; model: TeamModel; } }, RunReport>
   readonly 'flowspace/gitAction': TypertRemoteMethod<{ readonly 'request': GitActionRequest }, GitRepoStatus>
   readonly 'flowspace/gitDiff': TypertRemoteMethod<{ readonly 'request': GitDiffRequest }, GitDiffResult>
   readonly 'flowspace/gitInspect': TypertRemoteMethod<{ readonly 'request': GitInspectRequest }, GitRepoStatus>
   readonly 'flowspace/importWorkflow': TypertRemoteMethod<{ readonly 'request': WorkflowImportRequest }, WorkflowImportResult>
   readonly 'flowspace/inspectEdgePayload': TypertRemoteMethod<{ readonly 'request': InspectEdgeRequest }, EdgePayloadPreview>
+  readonly 'flowspace/launchTrigger': TypertRemoteMethod<{ readonly 'request': { nodeId: string; values?: JsonObject; } }, FlowspaceRun>
   readonly 'flowspace/listModelRoutes': TypertRemoteMethod<{  }, TeamModelRoute[]>
   readonly 'flowspace/listRoles': TypertRemoteMethod<{  }, RoleDefinition[]>
   readonly 'flowspace/listTeams': TypertRemoteMethod<{  }, TeamBlueprint[]>
   readonly 'flowspace/openSessionTerminal': TypertRemoteMethod<{ readonly 'request': SessionTerminalsRequest }, SessionTerminalBrief>
   readonly 'flowspace/plan': TypertRemoteMethod<{ readonly 'request': StartRequest }, LaunchPlan>
+  readonly 'flowspace/previewData': TypertRemoteMethod<{ readonly 'request': DataPreviewRequest }, DataPreview>
   readonly 'flowspace/projectStructures': TypertRemoteMethod<{  }, WorkspaceStructureBrief[]>
   readonly 'flowspace/readTerminalScreen': TypertRemoteMethod<{ readonly 'request': TerminalScreenReadRequest }, TerminalScreenSnapshot>
   readonly 'flowspace/readWorkspaceFile': TypertRemoteMethod<{ readonly 'request': FilePreviewRequest }, WorkspaceFilePreview>
   readonly 'flowspace/release': TypertRemoteMethod<{ readonly 'request': ReleaseRequest }, void>
+  readonly 'flowspace/remindEmission': TypertRemoteMethod<{ readonly 'request': { runId: string; stepId: string; } }, void>
   readonly 'flowspace/rerunFailed': TypertRemoteMethod<{ readonly 'request': RerunFailedRequest }, FlowspaceRun>
   readonly 'flowspace/restoreSnapshot': TypertRemoteMethod<{ readonly 'request': RestoreSnapshotRequest }, FlowspaceDocument>
+  readonly 'flowspace/revertContainerChange': TypertRemoteMethod<{ readonly 'id': string }, void>
   readonly 'flowspace/save': TypertRemoteMethod<{ readonly 'document': FlowspaceDocument }, FlowspaceDocument>
   readonly 'flowspace/saveRole': TypertRemoteMethod<{ readonly 'request': SaveRoleRequest }, RoleDefinition>
   readonly 'flowspace/saveTeam': TypertRemoteMethod<{ readonly 'request': SaveTeamRequest }, TeamBlueprint>
@@ -129,6 +152,7 @@ export declare const TYPERT_REMOTE: TypertRemoteInfo<{
   readonly 'flowspace/stopNode': TypertRemoteMethod<{ readonly 'nodeId': string }, void>
   readonly 'flowspace/workspaceFiles': TypertRemoteMethod<{ readonly 'request': WorkspaceFilesRequest }, string[]>
   readonly 'flowspace/workspaces': TypertRemoteMethod<{  }, WorkspaceBrief[]>
+  readonly 'flowspace/writeVariable': TypertRemoteMethod<{ readonly 'request': { id: string; runId?: string; lane?: string; expectedVersion: number; value?: JsonValue; } }, void>
 }>
 export default TYPERT_REMOTE
 //# sourceMappingURL=typert.remote-client.d.ts.map

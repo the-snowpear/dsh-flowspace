@@ -1,0 +1,267 @@
+/* Teams composed on the canvas: role nodes, staffing wires, and the crew frame inside a team card. */
+
+/* ---------- Staffing port (team, bottom) and socket (role, top) ---------- */
+.fs-root .fs-staff-port,
+.fs-root .fs-staff-socket {
+  position: absolute; left: 50%; z-index: 4;
+  display: grid; place-items: center;
+  padding: 0; border: 0; cursor: crosshair;
+  translate: -50% 0;
+  transition: scale var(--dur) var(--ease-spring), box-shadow var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.fs-root .fs-staff-port {
+  bottom: -13px; height: 24px; min-width: 34px; padding-inline: 8px; gap: 3px;
+  grid-auto-flow: column; border-radius: 12px;
+  color: var(--team-ink); background: var(--surface);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--team-ink) 32%, var(--border-strong)), 0 4px 10px -6px rgba(0, 0, 0, .45);
+  font: 600 10.5px/1 var(--font-mono, inherit); font-variant-numeric: tabular-nums;
+}
+.fs-root .fs-staff-port .ic { width: 12px; height: 12px; }
+/* Any agent takes role nodes; on a plain agent the port waits until the card is hovered or picked. */
+.fs-root .node-agent:not(.node-team) .fs-staff-port {
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--dur) var(--ease), scale var(--dur) var(--ease-spring), background var(--dur) var(--ease);
+}
+.fs-root .node-agent:not(.node-team):is(:hover, :focus-within, .selected, [data-staff-target]) .fs-staff-port {
+  opacity: 1; pointer-events: auto;
+}
+.fs-root .fs-staff-port:hover,
+.fs-root .node[data-staff-snap] .fs-staff-port {
+  scale: 1.12; color: #fff; background: var(--team-ink);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--team-ink) 22%, transparent);
+}
+.fs-root .fs-staff-socket {
+  top: -8px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--hue, var(--team-ink)) 70%, var(--border-strong));
+}
+.fs-root .fs-staff-socket i { width: 6px; height: 6px; border-radius: 50%; background: transparent; transition: background var(--dur) var(--ease); }
+.fs-root .fs-staff-socket[data-staffed] i { background: var(--hue, var(--team-ink)); }
+.fs-root .fs-staff-socket:hover,
+.fs-root .node[data-staff-snap] .fs-staff-socket { scale: 1.3; box-shadow: 0 0 0 2px var(--hue, var(--team-ink)), 0 0 0 6px color-mix(in oklab, var(--hue, var(--team-ink)) 20%, transparent); }
+
+/* Valid drop targets breathe while a staffing wire is in hand. */
+.fs-root .node[data-staff-target] { outline: 1.5px dashed color-mix(in oklab, var(--team-ink) 45%, transparent); outline-offset: 4px; }
+.fs-root .node[data-staff-snap] { outline-style: solid; outline-color: var(--team-ink); }
+
+/* ---------- Staffing wires ---------- */
+.fs-root .fs-staff-line {
+  fill: none; stroke: color-mix(in oklab, var(--team-ink) 55%, var(--border-strong));
+  stroke-width: 1.6; stroke-dasharray: 2 5; stroke-linecap: round;
+  transition: stroke var(--dur) var(--ease), stroke-width var(--dur) var(--ease);
+}
+.fs-root .fs-staff-wire[data-active] .fs-staff-line { stroke: var(--team-ink); stroke-dasharray: none; }
+.fs-root .fs-staff-flow {
+  fill: none; stroke: color-mix(in oklab, var(--team-ink) 60%, #fff); stroke-width: 2.2;
+  stroke-dasharray: 14 186; animation: fs-wire-travel 1.6s linear infinite;
+}
+.fs-root .fs-staff-dot { fill: var(--team-ink); }
+.fs-root .fs-staff-wire[data-staff-hot] .fs-staff-line { stroke: var(--team-ink); stroke-width: 2.4; stroke-dasharray: none; }
+.fs-root .fs-staff-temp { stroke: var(--team-ink); stroke-dasharray: 5 5; animation: fs-staff-march .6s linear infinite; }
+.fs-root .fs-staff-temp[data-snapped] { stroke-dasharray: none; stroke-width: 2.2; animation: none; }
+@keyframes fs-staff-march { to { stroke-dashoffset: -10; } }
+
+/* ---------- Role node ---------- */
+.fs-root .node-role { --role-accent: var(--hue, var(--team-ink)); --kc: var(--role-accent); }
+.fs-root .node-role .node-heading { flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; }
+.fs-root .node-role .node-heading small::before { content: none; }
+.fs-root .node-role .fs-role-avatar { background: none; box-shadow: none; padding: 0; }
+.fs-root .fs-role-title {
+  width: 100%; min-width: 0; padding: 1px 4px; margin-inline-start: -4px;
+  border: 0; border-radius: 6px; background: transparent; color: var(--text);
+  font: 600 13.5px/1.3 inherit;
+  transition: background var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.fs-root .fs-role-title:hover { background: var(--surface-2); }
+.fs-root .fs-role-title:focus { outline: none; background: var(--surface); box-shadow: 0 0 0 1.5px var(--accent-border); }
+.fs-root .fs-role-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; align-content: start; padding: 10px 12px 12px; overflow-x: hidden; }
+.fs-root .fs-role-model > * { max-width: 100%; }
+.fs-root .fs-role-field { display: grid; gap: 4px; min-width: 0; }
+.fs-root .fs-role-field > span { color: var(--text-3); font-size: 11px; letter-spacing: .02em; }
+.fs-root .fs-role-field :is(input, select, textarea) {
+  box-sizing: border-box; width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); font: 12.5px/1.45 inherit; resize: vertical;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.fs-root .fs-role-field :is(input, select, textarea):focus { outline: none; border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-softer); }
+.fs-root .fs-role-preview {
+  margin: 0; padding: 7px 9px; border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--role-accent) 7%, var(--surface-2));
+  color: var(--text-2); font-size: 12px; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.fs-root .fs-role-row { display: flex; align-items: end; gap: 8px; }
+.fs-root .fs-role-model { flex: 1; min-width: 0; }
+.fs-root .fs-role-model[data-missing] .fs-model-select-trigger,
+.fs-root .fs-role-model[data-missing] button[aria-haspopup] { box-shadow: 0 0 0 1px color-mix(in oklab, var(--amber) 55%, transparent); }
+.fs-root .fs-role-foot {
+  display: flex; align-items: center; gap: 6px; margin-top: 2px; padding-top: 8px;
+  border-top: 1px dashed var(--border-strong); color: var(--text-3); font-size: 11.5px;
+}
+.fs-root .fs-role-foot .ic { width: 12px; height: 12px; flex: none; }
+.fs-root .fs-role-foot span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.fs-root .fs-role-foot[data-staffed] { color: var(--team-ink); }
+.fs-root .fs-role-compact { gap: 8px; }
+.fs-root .node-role[data-staff-hot] { box-shadow: var(--card-shadow), 0 0 0 2px color-mix(in oklab, var(--role-accent) 60%, transparent); }
+.fs-root .node-role.is-role-running { border-color: color-mix(in oklab, var(--role-accent) 55%, var(--card-border)); }
+
+/* Who fills the role: one member lives in the role node, several only get counted here. */
+.fs-root .fs-role-members {
+  display: flex; align-items: center; gap: 8px; min-width: 0; width: 100%; box-sizing: border-box;
+  padding: 6px 8px; border: 1px solid color-mix(in oklab, var(--role-accent) 22%, var(--border));
+  border-radius: var(--radius-sm); background: color-mix(in oklab, var(--role-accent) 7%, var(--surface));
+  color: var(--text-2); font: 600 12px/1.25 inherit; text-align: start;
+}
+.fs-root .fs-role-members > .ic { width: 13px; height: 13px; color: var(--role-accent); flex: none; }
+.fs-root .fs-role-members > small { margin-inline-start: auto; color: var(--team-ink); font-weight: 500; }
+.fs-root .fs-role-member { cursor: pointer; transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease); }
+.fs-root .fs-role-member:hover { border-color: color-mix(in oklab, var(--role-accent) 50%, var(--border)); }
+.fs-root .fs-role-member-copy { display: grid; gap: 1px; min-width: 0; margin-inline-end: auto; }
+.fs-root .fs-role-member-copy strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text); font-family: var(--font-mono, inherit); font-size: 11.5px; }
+.fs-root .fs-role-member-copy small { color: var(--text-3); font-weight: 400; font-size: 11px; }
+.fs-root .fs-role-members[data-running] { border-color: color-mix(in oklab, var(--team-ink) 45%, var(--border)); }
+.fs-root .fs-role-members[data-running] .fs-role-member-copy small { color: var(--team-ink); }
+.fs-root .fs-role-member > .ic:last-child { width: 11px; height: 11px; flex: none; color: var(--text-faint); }
+.fs-root .fs-role-compact .fs-role-members { padding: 4px 6px; }
+
+/* ---------- Native children: subagent rows under an agent, member trees under a role ---------- */
+.fs-root .node-agent[data-children] .fs-staff-port { opacity: 1; pointer-events: auto; }
+.fs-root .fs-child-line {
+  fill: none; stroke: color-mix(in oklab, var(--k-sub) 45%, var(--border-strong)); stroke-width: 1.4;
+}
+.fs-root .fs-child-link[data-staff-id] .fs-child-line { stroke: color-mix(in oklab, var(--team-ink) 45%, var(--border-strong)); }
+.fs-root .fs-child-link[data-active] .fs-child-line { stroke: var(--team-ink); }
+.fs-root .fs-child-root { fill: var(--surface); stroke: color-mix(in oklab, var(--team-ink) 55%, var(--border-strong)); stroke-width: 1.4; }
+.fs-root .fs-child-end { fill: color-mix(in oklab, var(--k-sub) 60%, var(--border-strong)); }
+.fs-root .fs-child-link[data-staff-id] .fs-child-end,
+.fs-root .fs-child-link[data-active] .fs-child-end { fill: var(--team-ink); }
+.fs-root .fs-child-link[data-staff-hot] .fs-child-line { stroke: var(--team-ink); stroke-width: 2.2; }
+.fs-root .fs-child-flow {
+  fill: none; stroke: color-mix(in oklab, var(--team-ink) 60%, #fff); stroke-width: 2;
+  stroke-dasharray: 14 186; animation: fs-wire-travel 1.6s linear infinite;
+}
+.fs-root .fs-child-card {
+  position: absolute; display: flex; align-items: center; gap: 9px; box-sizing: border-box; padding: 8px 12px 8px 9px;
+  border: 1px solid color-mix(in oklab, var(--k-sub) 24%, var(--card-border)); border-radius: 14px;
+  background: linear-gradient(90deg, var(--k-sub-soft), transparent 55%), var(--card-bg);
+  box-shadow: var(--card-hi, none), 0 6px 18px -12px rgba(0, 0, 0, .35);
+  color: var(--text); text-align: start; cursor: pointer;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), translate var(--dur) var(--ease-out);
+}
+.fs-root .fs-child-card[data-member] {
+  border-color: color-mix(in oklab, var(--hue, var(--team-ink)) 30%, var(--card-border));
+  background: linear-gradient(90deg, color-mix(in oklab, var(--hue, var(--team-ink)) 9%, transparent), transparent 55%), var(--card-bg);
+}
+.fs-root .fs-child-card[data-outside] { border-style: dashed; }
+.fs-root .fs-child-card:hover { translate: 0 -1px; border-color: color-mix(in oklab, var(--team-ink) 45%, var(--card-border)); }
+.fs-root .fs-child-card[data-staff-hot] { box-shadow: 0 0 0 2px color-mix(in oklab, var(--team-ink) 55%, transparent); }
+.fs-root .fs-child-copy { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.fs-root .fs-child-copy strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 600 12.5px/1.25 inherit; }
+.fs-root .fs-child-card[data-member] .fs-child-copy strong { font-family: var(--font-mono, inherit); font-size: 12px; }
+.fs-root .fs-child-copy small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-3); font-size: 11px; }
+.fs-root .fs-child-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--border-strong); }
+.fs-root .fs-child-card[data-running] { border-color: color-mix(in oklab, var(--team-ink) 50%, var(--card-border)); }
+.fs-root .fs-child-card[data-running] .fs-child-copy small { color: var(--team-ink); }
+.fs-root .fs-child-card[data-running] .fs-child-dot {
+  background: var(--team-ink); box-shadow: 0 0 0 3px color-mix(in oklab, var(--team-ink) 18%, transparent);
+  animation: fs-breathe 1.6s var(--ease-loop, ease-in-out) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fs-root .fs-child-flow { display: none; }
+  .fs-root .fs-child-card[data-running] .fs-child-dot { animation: none; }
+}
+
+/* ---------- Crew frame (team card · Crew tab) ---------- */
+.fs-root .fs-crew { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px 12px; }
+.fs-root .fs-crew-settings { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+.fs-root .fs-crew-settings-toggle {
+  display: flex; align-items: center; gap: 7px; width: 100%; padding: 7px 9px;
+  border: 0; background: none; color: var(--text-2); font: 600 12px/1.2 inherit; cursor: pointer;
+}
+.fs-root .fs-crew-settings-toggle > span { margin-inline-end: auto; }
+.fs-root .fs-crew-settings-toggle small { color: var(--text-3); font-weight: 400; }
+.fs-root .fs-crew-settings-toggle .ic { width: 12px; height: 12px; }
+.fs-root .fs-crew-settings-toggle .ic:last-child { transition: rotate var(--dur) var(--ease-out); }
+.fs-root .fs-crew-settings[data-open] .fs-crew-settings-toggle .ic:last-child { rotate: 90deg; }
+.fs-root .fs-crew-settings-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 260ms var(--ease-out); }
+.fs-root .fs-crew-settings[data-open] .fs-crew-settings-body { grid-template-rows: 1fr; }
+.fs-root .fs-crew-settings-body > div { display: grid; gap: 8px; min-height: 0; overflow: hidden; padding: 0 9px; }
+.fs-root .fs-crew-settings[data-open] .fs-crew-settings-body > div { padding-bottom: 9px; }
+
+.fs-root .fs-crew-stage { position: relative; flex: none; transition: height 320ms var(--ease-out); }
+.fs-root .fs-crew-links { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+.fs-root .fs-crew-tether path { fill: none; stroke: color-mix(in oklab, var(--team-ink) 35%, var(--border-strong)); stroke-width: 1.4; transition: d 320ms var(--ease-out), stroke var(--dur) var(--ease); }
+.fs-root .fs-crew-tether[data-vacant] path { stroke-dasharray: 3 4; }
+.fs-root .fs-crew-tether[data-running] path { stroke: var(--team-ink); }
+.fs-root .fs-crew-tether .fs-crew-tether-flow { stroke: color-mix(in oklab, var(--team-ink) 55%, #fff); stroke-width: 2; stroke-dasharray: 12 188; animation: fs-wire-travel 1.6s linear infinite; }
+.fs-root .fs-crew-tether:is([data-lit], [data-staff-hot]) path:first-child { stroke: var(--team-ink); stroke-width: 2.2; }
+.fs-root .fs-crew-chord {
+  fill: none; stroke: var(--amber); stroke-width: 1.3; stroke-dasharray: 3 3;
+  opacity: calc(.25 + var(--weight, .5) * .55);
+  transition: d 320ms var(--ease-out), opacity var(--dur) var(--ease), stroke-width var(--dur) var(--ease);
+}
+.fs-root .fs-crew-chord[data-lit] { opacity: 1; stroke-width: 2; stroke-dasharray: none; }
+.fs-root .fs-crew-packet { fill: var(--amber); filter: drop-shadow(0 0 4px var(--amber)); }
+.fs-root .fs-crew-packet[data-settled] { fill: var(--green); filter: drop-shadow(0 0 4px var(--green)); }
+
+.fs-root :is(.fs-crew-lead, .fs-crew-seat) {
+  position: absolute; left: 0; top: 0;
+  display: flex; align-items: center; gap: 8px; padding: 0 10px; min-width: 0;
+  border: 1px solid var(--border-strong); border-radius: 11px;
+  background: var(--surface); color: var(--text); text-align: start; cursor: pointer;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 6px 14px -12px rgba(0, 0, 0, .6);
+  transition: transform 340ms var(--ease-spring), width 320ms var(--ease-out), height 320ms var(--ease-out),
+    border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.fs-root .fs-crew-lead {
+  background: color-mix(in oklab, var(--hue, var(--accent)) 9%, var(--surface));
+  border-color: color-mix(in oklab, var(--hue, var(--accent)) 30%, var(--border-strong));
+}
+.fs-root :is(.fs-crew-lead, .fs-crew-seat):hover,
+.fs-root .fs-crew-seat[data-staff-hot] {
+  border-color: color-mix(in oklab, var(--hue, var(--team-ink)) 65%, var(--border-strong));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--hue, var(--team-ink)) 16%, transparent), 0 10px 20px -14px rgba(0, 0, 0, .6);
+}
+.fs-root :is(.fs-crew-lead, .fs-crew-seat):active { scale: .98; }
+.fs-root .fs-crew-seat[data-vacant] { background: var(--surface); border-style: dashed; color: var(--text-2); box-shadow: none; }
+.fs-root .fs-crew-seat[data-outside] { border-style: dotted; }
+.fs-root .fs-crew-seat[data-running] { border-color: color-mix(in oklab, var(--hue, var(--green)) 55%, var(--border-strong)); }
+.fs-root .fs-crew-seat-stack {
+  position: absolute; inset: 0; z-index: -1; border-radius: inherit; border: 1px solid var(--border-strong);
+  background: var(--surface-2); translate: 4px -4px;
+}
+.fs-root .fs-crew-copy { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.fs-root .fs-crew-copy strong { display: flex; align-items: baseline; gap: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; font-weight: 600; }
+.fs-root .fs-crew-copy strong em { color: var(--text-3); font-style: normal; font-weight: 500; font-size: 11px; }
+.fs-root .fs-crew-copy small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-3); font-size: 11px; }
+.fs-root .fs-crew-seat[data-running] .fs-crew-copy small { color: var(--text-2); }
+.fs-root .fs-crew[data-layout="orbit"] :is(.fs-crew-lead, .fs-crew-seat) { padding: 0 8px; gap: 6px; }
+.fs-root .fs-crew-ring { flex: none; rotate: -90deg; }
+.fs-root .fs-crew-ring circle { fill: none; stroke: var(--border-strong); stroke-width: 3; }
+.fs-root .fs-crew-ring .fs-crew-ring-done { stroke: var(--green); stroke-linecap: round; transition: stroke-dasharray 420ms var(--ease-out); }
+.fs-root .fs-crew-empty {
+  position: absolute; inset: 72px 0 auto; margin: 0; padding: 14px; border: 1px dashed var(--border-strong); border-radius: 11px;
+  color: var(--text-3); font-size: 12px; line-height: 1.5; text-align: center;
+}
+.fs-root .fs-crew-stage:has(.fs-crew-empty) { min-height: 150px; }
+
+.fs-root .fs-crew-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); }
+.fs-root .fs-crew-foot > small { color: var(--text-3); font-size: 11px; font-variant-numeric: tabular-nums; margin-inline-end: auto; }
+.fs-root .fs-crew-taskbar { flex: 1 0 100%; height: 5px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.fs-root .fs-crew-taskbar i {
+  display: block; height: 100%; border-radius: inherit;
+  background: linear-gradient(90deg, var(--green) 0 calc(var(--done) * 100%),
+    color-mix(in oklab, var(--green) 40%, transparent) 0 calc((var(--done) + var(--active)) * 100%), transparent 0);
+  transition: background 420ms var(--ease-out);
+}
+.fs-root .fs-crew-room { display: inline-flex; align-items: center; gap: 2px; color: var(--team-ink); font-size: 11.5px; }
+.fs-root .fs-crew-room .ic { width: 10px; height: 10px; transition: translate var(--dur) var(--ease-out); }
+.fs-root .fs-crew-room:hover .ic { translate: 2px 0; }
+
+
+@media (prefers-reduced-motion: reduce) {
+  .fs-root :is(.fs-crew-lead, .fs-crew-seat, .fs-crew-stage, .fs-crew-tether path, .fs-crew-chord) { transition: none; }
+  .fs-root :is(.fs-staff-flow, .fs-crew-tether-flow, .fs-staff-temp) { animation: none; }
+  .fs-root .fs-crew-packet { display: none; }
+}
+.fs-root[data-perf-tier="L1"] :is(.fs-staff-flow, .fs-crew-tether-flow) { display: none; }

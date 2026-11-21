@@ -1,20 +1,26 @@
 import assert from "node:assert/strict";
-import { copyFile, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { boot, findAvailablePort } from "./environment.mjs";
+import { boot, canBindPort, resolveSandboxPaths } from "./environment.mjs";
+import { verifyStructuredEmission } from "./flow-emit-spike.mjs";
+import { verifyContainerTools, verifyVariablesAndDelivery } from "./container-checks.ts";
+import { verifyOperations, verifyTriggers, verifyPlaybackBudgetAndTemplates } from "./extension-checks.ts";
+import { verifyFanout } from "./fanout-checks.ts";
+import { prepareFanoutRecovery, verifyFanoutPolicies, verifyFanoutRecovery } from "./fanout-policy-checks.ts";
+import { verifyDataTransforms } from "./data-checks.ts";
+import { exerciseContentTemplate, checkContentTemplateAfterRestart, checkWatchedContent } from "./content-template-checks.ts";
 import {
   emptyDocument,
   newNode,
+  newFlowNode,
   newEdge,
 } from "../packages/flowspace/src/core/document.ts";
 import { captureTemplate, instantiateTemplate, teamDependenciesFor } from "../packages/flowspace/src/client/templates.ts";
-const environmentName = `integration-${Date.now()}`;
-const integrationPort = await findAvailablePort(3192);
-const { ctx, shutdown, workspace, profile } = await boot({
-  name: environmentName,
-  mock: true,
-  port: integrationPort,
-});
+import { contentList } from "../packages/flowspace/src/core/content.ts";
+import { moveBoardCard, normalizeBoardColumns, removeBoardCard, updateBoardCard } from "../packages/flowspace/src/core/board.ts";
+type Host = Awaited<ReturnType<typeof boot>>;
+type IntegrationFixture = Awaited<ReturnType<typeof initialChecks>>;
 const report: { name: string; passed: boolean }[] = [];
 async function until(test: () => boolean, description: string, timeoutMs = 20_000): Promise<void> {
   const end = Date.now() + timeoutMs;
@@ -22,7 +28,8 @@ async function until(test: () => boolean, description: string, timeoutMs = 20_00
     await new Promise((r) => setTimeout(r, 100));
   assert.ok(test(), description);
 }
-try {
+
+async function initialChecks({ ctx, workspace, profile }: Host) {
   const service = ctx.flowspace;
   assert.ok(service, "FlowSpace service loaded");
   const route = { provider: "flowspace-test", model: "deterministic" };
@@ -512,6 +519,91 @@ try {
   await until(() => teamView()?.capacity.active === 0, "settled members release native capacity");
   report.push({ name: "Team revisions, native member messages, outside roster, capacity and task projection", passed: true });
 
+  // A team composed on the canvas: lead settings on the node, slots from wired role nodes.
+  const canvasDoc = service.snapshot().document;
+  const canvasLead = { ...newNode("agent", 600, 2070, "Canvas team"), cwd: workspace, task: "FLOWSPACE_TEST_DELEGATE",
+    teamConfig: { persona: "Plan, delegate and report.", norms: "Cite evidence." } };
+  const canvasReviewer = { ...newNode("role", 600, 2500, "Canvas reviewer"), staffOf: canvasLead.id, slotId: "reviewer",
+    task: "Review the sample", text: "Review carefully.", teamModel: workerRoute };
+  canvasDoc.nodes.push(canvasLead, canvasReviewer);
+  await service.save(canvasDoc);
+  const canvasRun = await service.start({ kind: "single", nodeIds: [canvasLead.id] });
+  const canvasState = () => service.snapshot().runs.find((run) => run.id === canvasRun.id)!;
+  await until(() => !!canvasState().steps[0]?.sessionId, "canvas team creates its lead");
+  const canvasLeadId = canvasState().steps[0].sessionId!;
+  const canvasView = () => service.snapshot().teams?.[canvasLeadId];
+  await until(() => canvasView()?.members[0]?.slotId === "reviewer", "canvas role node staffs the delegated member");
+  assert.equal(canvasView()?.teamId, `canvas-${canvasLead.id}`);
+  assert.equal(canvasView()?.slots[0]?.nodeId, canvasReviewer.id);
+  assert.equal(canvasView()?.members[0]?.model, workerRoute.model);
+  assert.ok(canvasView()?.leadModel.model, "a lead without a configured model keeps the session default");
+  await until(() => canvasState().state === "completed", "canvas team settles and completes");
+  assert.equal(canvasState().steps[0].output, "TEAM_FINAL_REVIEW");
+  // Wiring another role node in reaches the lead on its next user turn.
+  const rewired = service.snapshot().document;
+  rewired.nodes.push({ ...newNode("role", 900, 2500, "Canvas tester"), staffOf: canvasLead.id, teamModel: workerRoute });
+  await service.save(rewired);
+  const { agent: canvasAgent } = await ctx.sessionController.resolveAgent(canvasLeadId);
+  await ctx.sessionController.prompt({
+    sessionId: canvasLeadId, requestId: crypto.randomUUID(), mode: "queue",
+    content: [{ type: "text", text: "Check the new roster." }],
+  }, AbortSignal.timeout(20_000));
+  await canvasAgent.whenIdle();
+  await until(() => canvasView()?.slots.length === 2, "the lead picks up a newly wired role");
+  assert.equal(canvasView()?.slots[1]?.slotId, "canvas-tester");
+  const loose = service.snapshot().document;
+  const stray = newNode("note", 1200, 2300, "Not an agent");
+  loose.nodes.push(stray, { ...newNode("role", 1200, 2500, "Wrong target"), staffOf: stray.id });
+  await assert.rejects(service.save(loose), /Agent 节点/);
+  // Any agent becomes a team lead in place when a role node is wired in, and goes back when the last one leaves.
+  const plainDoc = service.snapshot().document;
+  const plain = { ...newNode("agent", 1500, 2070, "Plain agent"), cwd: workspace, task: "Say hello" };
+  plainDoc.nodes.push(plain);
+  await service.save(plainDoc);
+  const plainRun = await service.start({ kind: "single", nodeIds: [plain.id] });
+  const plainState = () => service.snapshot().runs.find((run) => run.id === plainRun.id)!;
+  await until(() => plainState().state === "completed", "a plain agent runs before it has roles");
+  const plainId = plainState().steps[0].sessionId!;
+  assert.equal(service.snapshot().teams?.[plainId], undefined);
+  const { agent: plainAgent } = await ctx.sessionController.resolveAgent(plainId);
+  const plainModel = plainAgent.model.current()?.model;
+  // A subagent the agent had before it became a team stays a plain subagent.
+  const earlier = await ctx.subagents.startActivation({
+    provider: "spawn", parent: plainAgent, name: "earlier-helper", label: "Earlier helper", delivery: "caller",
+    agentOptions: workerRoute, signal: AbortSignal.timeout(20_000),
+    prompt: [{ type: "text", text: "FLOWSPACE_TEAM_WORKER: earlier work." }],
+  });
+  await earlier.result;
+  await ctx.subagents.waitForTreeWork(plainAgent);
+  const staffedDoc = service.snapshot().document;
+  const helper = { ...newNode("role", 1500, 2500, "Helper"), staffOf: plain.id, slotId: "reviewer", teamModel: workerRoute };
+  staffedDoc.nodes.push(helper);
+  await service.save(staffedDoc);
+  const plainTeam = () => service.snapshot().teams?.[plainId];
+  await until(() => plainTeam()?.slots[0]?.nodeId === helper.id, "a wired role upgrades the agent's session in place");
+  assert.equal(plainTeam()?.leadModel.model, plainModel);
+  assert.ok(!plainTeam()?.members.some((member) => member.sessionId === earlier.childId), "earlier subagents are not members");
+  await ctx.sessionController.prompt({
+    sessionId: plainId, requestId: crypto.randomUUID(), mode: "queue",
+    content: [{ type: "text", text: "FLOWSPACE_TEST_DELEGATE" }],
+  }, AbortSignal.timeout(20_000));
+  await until(() => plainTeam()?.members[0]?.nodeId === helper.id, "a delegated member resolves to its role node");
+  const helperMember = plainTeam()!.members[0].sessionId;
+  await plainAgent.whenIdle();
+  await ctx.subagents.waitForTreeWork(plainAgent);
+  const unstaffed = service.snapshot().document;
+  const parked = unstaffed.nodes.find((node) => node.id === helper.id)!;
+  delete parked.staffOf;
+  await service.save(unstaffed);
+  await until(() => !plainTeam(), "removing the last role releases the lead");
+  const restaffed = service.snapshot().document;
+  restaffed.nodes.find((node) => node.id === helper.id)!.staffOf = plain.id;
+  await service.save(restaffed);
+  await until(() => plainTeam()?.members.some((member) => member.sessionId === helperMember && member.nodeId === helper.id) ?? false,
+    "wiring the role back returns its member");
+  assert.ok(!plainTeam()?.members.some((member) => member.sessionId === earlier.childId));
+  report.push({ name: "Teams from wired role nodes, in-place upgrade and release, default lead model and live re-staffing", passed: true });
+
   const haltDoc = service.snapshot().document;
   const halt = {
     ...newNode("agent", 600, 1670, "Interrupt review"), cwd: workspace,
@@ -570,131 +662,383 @@ try {
     name: "Profile disable and re-enable retains saved data",
     passed: true,
   });
-  await shutdown.shutdown(0);
-  const restored = await boot({
-    name: environmentName,
-    mock: true,
-    port: integrationPort,
+  return { archivedRole, blueprint, leadId, memberId, workerRoute, countBeforeRestart, bundle,
+    reviewerId: reviewer.id, upstreamTitle: upstream.title };
+}
+
+async function restoredChecks(restored: Host, fixture: IntegrationFixture) {
+  const { archivedRole, blueprint, leadId, memberId, workerRoute, countBeforeRestart } = fixture;
+  assert.deepEqual(restored.ctx.flowspace.listRoles(), [archivedRole]);
+  assert.deepEqual(restored.ctx.flowspace.listTeams(), [blueprint]);
+  assert.equal(restored.ctx.flowspace.snapshot().teams?.[leadId]?.members[0]?.sessionId, memberId);
+  assert.equal(restored.ctx.flowspace.snapshot().teams?.[leadId]?.tasks.length, 2);
+  const { agent: resumedLead } = await restored.ctx.sessionController.resolveAgent(leadId);
+  const tools = await restored.ctx.tools.resolve({
+    agent: resumedLead, modelSelection: resumedLead.model.current(), signal: AbortSignal.timeout(10_000),
   });
   try {
-    assert.deepEqual(restored.ctx.flowspace.listRoles(), [archivedRole]);
-    assert.deepEqual(restored.ctx.flowspace.listTeams(), [blueprint]);
-    assert.equal(restored.ctx.flowspace.snapshot().teams?.[leadId]?.members[0]?.sessionId, memberId);
-    assert.equal(restored.ctx.flowspace.snapshot().teams?.[leadId]?.tasks.length, 2);
-    const { agent: resumedLead } = await restored.ctx.sessionController.resolveAgent(leadId);
-    const tools = await restored.ctx.tools.resolve({
-      agent: resumedLead, modelSelection: resumedLead.model.current(), signal: AbortSignal.timeout(10_000),
-    });
-    try {
-      const names = restored.ctx.tools.schemas(resumedLead, tools).map((entry) => entry.name);
-      assert.ok(names.includes("team_delegate"));
-      assert.ok(!names.some((name) => ["subagent", "subagent_fork", "workflow"].includes(name)));
-    } finally {
-      tools.dispose();
+    const names = restored.ctx.tools.schemas(resumedLead, tools).map((entry) => entry.name);
+    assert.ok(names.includes("team_delegate"));
+    assert.ok(!names.some((name) => ["subagent", "subagent_fork", "workflow"].includes(name)));
+  } finally {
+    tools.dispose();
+  }
+  assert.equal(
+    restored.ctx.flowspace.snapshot().document.nodes[0].draft,
+    "Persisted draft",
+  );
+  assert.equal(restored.ctx.flowspace.snapshot().document.nodes[0].x, 713);
+  assert.equal(
+    restored.ctx.flowspace.snapshot().runs.length,
+    countBeforeRestart,
+  );
+  assert.equal(
+    restored.ctx.flowspace.snapshot().document.templates?.length,
+    1,
+  );
+  assert.equal(
+    restored.ctx.flowspace.snapshot().document.snapshots?.length,
+    1,
+  );
+  assert.ok(
+    restored.ctx.flowspace
+      .snapshot()
+      .runs.some((r) => r.state === "interrupted"),
+  );
+  const resumedSignal = AbortSignal.timeout(15_000);
+  await restored.ctx.subagents.prompt({
+    childSessionId: memberId, requestId: crypto.randomUUID(), delivery: "steer",
+    content: [{ type: "text", text: "Cold member continuation." }],
+  }, resumedSignal);
+  await restored.ctx.subagents.waitForTreeWork(resumedLead);
+  using memberLog = await restored.ctx.sessionQuery.observeSession(memberId);
+  assert.ok(memberLog.events.some((event) => event.type === "user/message" && JSON.stringify(event.data).includes("Cold member continuation.")));
+  assert.ok(memberLog.events.some((event) => event.type === "subagent/descriptor" && event.data.agentModel === workerRoute.model));
+  report.push({
+    name: "Host restart preserves draft, layout and run identity without replay",
+    passed: true,
+  });
+}
+
+async function portableChecks(fresh: Host, fixture: IntegrationFixture) {
+  const { bundle, workerRoute, blueprint, reviewerId, upstreamTitle } = fixture;
+  const imported = fresh.ctx.flowspace;
+  assert.deepEqual(imported.listTeams(), []);
+  assert.deepEqual(imported.listRoles(), []);
+  const missingModel = { provider: "offline-provider", model: "unavailable" };
+  bundle.dependencies.roles[0].model = missingModel;
+  assert.deepEqual(await imported.importWorkflow(bundle), { kind: "missing-models", models: [missingModel] });
+  assert.deepEqual(imported.listRoles(), []);
+  const replacements = [{ from: missingModel, to: workerRoute }];
+  const restored = await imported.importWorkflow({ ...bundle, replacements });
+  assert.equal(restored.kind, "imported");
+  const rebuilt = restored.document;
+  const tpl = rebuilt.templates[0];
+  assert.equal(tpl.nodes.find((node) => node.teamRef)?.teamRef.teamId, blueprint.id);
+  assert.deepEqual(imported.listRoles()[0].model, workerRoute);
+  assert.equal((await imported.importWorkflow(bundle)).kind, "imported");
+  assert.equal(imported.listTeams().length, 1);
+  const copied = await imported.importWorkflow({ ...bundle, replacements, copyAssets: true });
+  assert.equal(copied.kind, "imported");
+  const clone = copied.document.templates.at(-1);
+  const cloneRef = clone.nodes.find((node) => node.teamRef).teamRef;
+  const cloneTeam = imported.listTeams().find((team) => team.id === cloneRef.teamId);
+  assert.notEqual(cloneTeam.id, blueprint.id);
+  assert.notEqual(cloneTeam.slots[0].roleId, reviewerId);
+
+  const newDoc = copied.document;
+  const instance = instantiateTemplate(newDoc, clone, 200, 140, clone.title, { cwd: fresh.workspace });
+  const input = newDoc.nodes.find((node) => node.parentId === instance.id && node.title === upstreamTitle);
+  await imported.save(newDoc);
+  const launch = await imported.start({ kind: "single", nodeIds: [input.id] });
+  const restoredRun = () => imported.snapshot().runs.find((run) => run.id === launch.id);
+  await until(() => ["completed", "error"].includes(restoredRun()?.state), "imported team workflow settles from an empty library", 45_000);
+  assert.equal(restoredRun().state, "completed", JSON.stringify(restoredRun().steps.map((step) => step.error)));
+  assert.equal(restoredRun().steps[1].output, "TEAM_FINAL_REVIEW");
+  report.push({ name: "Exported team workflow, blank-library import, model replacement, reuse, copy and execution", passed: true });
+
+  const boardDoc = emptyDocument();
+  const board = {
+    ...newNode("board", 0, 0),
+    columns: [
+      { id: "todo", name: "Acceptance", role: "todo" as const, cards: [
+        { id: "test", text: "Verify build", checklist: [{ id: "sub", text: "BOARD_ASSERTION", done: false }] },
+        { id: "unrelated", text: "UNRELATED_BOARD_TASK" },
+      ] },
+      { id: "done", name: "Verified", role: "done" as const, cards: [] },
+    ],
+    selectedItems: ["unrelated"],
+  };
+  const assignee = {
+    ...newNode("agent", 660, 0), draft: "Check acceptance criteria", cwd: fresh.workspace,
+    participation: "manual" as const, nativeTrigger: "disabled" as const,
+  };
+  const cardEdge = { ...newEdge(board.id, assignee.id, "reference"), sourceItemKey: "test" };
+  boardDoc.nodes = [board, assignee];
+  boardDoc.edges = [cardEdge];
+  const priorRuns = imported.snapshot().runs.length;
+  await imported.save(boardDoc);
+  assert.equal(imported.snapshot().runs.length, priorRuns);
+  const initial = await imported.inspectEdgePayload({ edgeId: cardEdge.id });
+  assert.equal(initial.sourceTitle, "Verify build");
+  assert.match(initial.content, /BOARD_ASSERTION/);
+  assert.doesNotMatch(initial.content, /UNRELATED_BOARD_TASK/);
+  const boardRun = await imported.start({ kind: "single", nodeIds: [assignee.id] });
+  const boardResult = () => imported.snapshot().runs.find((run) => run.id === boardRun.id);
+  await until(() => boardResult()?.state === "completed", "board reference reaches the native agent");
+  const boardStep = boardResult()!.steps[0];
+  assert.equal(boardStep.sources.find((source) => source.referenceKind === "board-card")?.text, initial.content);
+  assert.equal((await imported.inspectEdgePayload({ edgeId: cardEdge.id })).freshness, "sent");
+
+  const siblingEdit = imported.snapshot().document;
+  siblingEdit.nodes[0].columns = updateBoardCard(siblingEdit.nodes[0].columns!, "unrelated", (card) => ({ ...card, text: "Revised unrelated task" }));
+  await imported.save(siblingEdit);
+  assert.equal((await imported.inspectEdgePayload({ edgeId: cardEdge.id })).freshness, "sent");
+
+  const moved = imported.snapshot().document;
+  moved.nodes[0].columns = updateBoardCard(
+    moveBoardCard(normalizeBoardColumns(moved.nodes[0].columns), "test", "done"),
+    "test",
+    (card) => ({ ...card, text: "Verified build", checklist: [{ id: "sub", text: "BOARD_REVISED_ASSERTION", done: true }] }),
+  );
+  await imported.save(moved);
+  const revised = await imported.inspectEdgePayload({ edgeId: cardEdge.id });
+  assert.equal(revised.freshness, "updated");
+  assert.equal(revised.sourceTitle, "Verified build");
+  assert.match(revised.content, /Verified[\s\S]+- \[x\] BOARD_REVISED_ASSERTION/);
+  const nativeBoardRequest = crypto.randomUUID();
+  await fresh.ctx.sessionController.prompt({
+    sessionId: boardStep.sessionId!, requestId: nativeBoardRequest, mode: "queue",
+    content: [{ type: "text", text: "Read the updated task" }],
+  }, AbortSignal.timeout(15_000));
+  const attachedAgent = await fresh.ctx.sessionController.resolveAgent(boardStep.sessionId!);
+  await attachedAgent.agent.whenIdle();
+  using boardLog = await fresh.ctx.sessionQuery.observeSession(boardStep.sessionId!);
+  const boardMessage = JSON.stringify(boardLog.events.find((event) =>
+    event.type === "user/message" && "rpcId" in event.data.source && event.data.source.rpcId === nativeBoardRequest,
+  ));
+  assert.match(boardMessage, /canvas-reference kind=\\"board-card\\"/);
+  assert.match(boardMessage, /BOARD_REVISED_ASSERTION/);
+  const deleted = imported.snapshot().document;
+  deleted.nodes[0].selectedItems = ["test", "unrelated"];
+  deleted.nodes[0].columns = removeBoardCard(deleted.nodes[0].columns!, "test");
+  const cleaned = await imported.save(deleted);
+  assert.deepEqual(cleaned.edges, []);
+  assert.deepEqual(cleaned.nodes[0].selectedItems, ["unrelated"]);
+  report.push({ name: "Stable board-card reference reaches the native agent and follows edits, moves and deletion", passed: true });
+
+  const agent = (title: string) => ({
+    ...newNode("agent", 0, 0, title), cwd: fresh.workspace, task: title, draft: title, nativeTrigger: "disabled" as const,
+  });
+  for (const kind of ["condition", "human-choice"] as const) {
+    const doc = emptyDocument();
+    const source = agent("FLOWSPACE_P1_PASS");
+    const judge = newFlowNode(`flowspace/${kind}`, 350, 0);
+    const selected = agent("Selected downstream");
+    const skipped = agent("Skipped downstream");
+    const branchId = kind === "condition" ? "pass" : "review";
+    const otherPort = kind === "condition" ? "else" : "pass";
+    doc.nodes = [source, judge, selected, skipped];
+    doc.edges = [
+      { ...newEdge(source.id, judge.id, "continuation"), targetPort: "in" },
+      { ...newEdge(judge.id, selected.id, "continuation"), sourcePort: branchId },
+      { ...newEdge(judge.id, skipped.id, "continuation"), sourcePort: otherPort },
+    ];
+    await imported.save(doc);
+    const launch = await imported.start({ kind: "global", nodeIds: [] });
+    const current = () => imported.snapshot().runs.find(run => run.id === launch.id)!;
+    if (kind === "human-choice") {
+      await until(() => current().steps.some(step => step.state === "awaiting"), "human choice reaches awaiting");
+      const waiting = current().steps.find(step => step.nodeId === judge.id)!;
+      assert.deepEqual(waiting.human?.options, ["pass", "review"]);
+      assert.equal(current().steps.length, 2);
+      const answer = { runId: launch.id, stepId: waiting.id, option: branchId };
+      await assert.rejects(imported.answerHuman({ ...answer, option: "unknown" }), /无效的人工选项/);
+      assert.equal(current().steps.find(step => step.id === waiting.id)?.state, "awaiting");
+      await imported.answerHuman(answer);
+      await assert.rejects(imported.answerHuman(answer), /没有等待回答/);
     }
-    assert.equal(
-      restored.ctx.flowspace.snapshot().document.nodes[0].draft,
-      "Persisted draft",
-    );
-    assert.equal(restored.ctx.flowspace.snapshot().document.nodes[0].x, 713);
-    assert.equal(
-      restored.ctx.flowspace.snapshot().runs.length,
-      countBeforeRestart,
-    );
-    assert.equal(
-      restored.ctx.flowspace.snapshot().document.templates?.length,
-      1,
-    );
-    assert.equal(
-      restored.ctx.flowspace.snapshot().document.snapshots?.length,
-      1,
-    );
-    assert.ok(
-      restored.ctx.flowspace
-        .snapshot()
-        .runs.some((r) => r.state === "interrupted"),
-    );
-    const resumedSignal = AbortSignal.timeout(15_000);
-    await restored.ctx.subagents.prompt({
-      childSessionId: memberId, requestId: crypto.randomUUID(), delivery: "steer",
-      content: [{ type: "text", text: "Cold member continuation." }],
-    }, resumedSignal);
-    await restored.ctx.subagents.waitForTreeWork(resumedLead);
-    using memberLog = await restored.ctx.sessionQuery.observeSession(memberId);
-    assert.ok(memberLog.events.some((event) => event.type === "user/message" && JSON.stringify(event.data).includes("Cold member continuation.")));
-    assert.ok(memberLog.events.some((event) => event.type === "subagent/descriptor" && event.data.agentModel === workerRoute.model));
-    report.push({
-      name: "Host restart preserves draft, layout and run identity without replay",
-      passed: true,
-    });
-  } finally {
-    await restored.shutdown.shutdown(0);
+    await until(() => current().state === "completed", `${kind} routes to a native downstream agent`);
+    const result = current();
+    const decision = result.steps.find(step => step.nodeId === judge.id)!;
+    const recipient = result.steps.find(step => step.nodeId === selected.id)!;
+    assert.equal(result.steps.length, 4);
+    assert.equal(recipient.state, "completed");
+    assert.equal(decision.state, "completed");
+    assert.equal(decision.route, branchId);
+    assert.equal(decision.sessionId, undefined);
+    assert.equal(decision.sources.length, 1);
+    assert.equal(decision.sources[0].sourceNodeId, source.id);
+    assert.match(decision.sources[0].text, /FLOWSPACE_P1_PASS/);
+    assert.deepEqual(recipient.sources, decision.sources);
+    const omitted = result.steps.find(step => step.nodeId === skipped.id)!;
+    assert.equal(omitted.state, "skipped");
+    assert.equal(omitted.sessionId, undefined);
+    assert.ok(imported.snapshot().document.nodes.filter(node => node.sessionId).every(node => [source.id, selected.id].includes(node.id)));
+    using log = await fresh.ctx.sessionQuery.observeSession(recipient.sessionId!);
+    const deliveries = log.events.flatMap(event => event.type === "user/message" && event.data.source.kind === "user"
+      ? [event.data.source.rpcId] : []);
+    assert.deepEqual(deliveries, [recipient.requestId]);
+    report.push({ name: kind === "condition"
+      ? "Condition forwards the exact native Agent snapshot and skips the unselected Agent"
+      : "Human choice rejects invalid and duplicate answers and runs the selected Agent once", passed: true });
   }
 
-  const fresh = await boot({ name: `${environmentName}-portable`, mock: true, port: integrationPort });
+  const judgeDoc = emptyDocument();
+  const judgeInput = agent("P1 judge input");
+  const code = newFlowNode("flowspace/code", 0, 0);
+  code.config = { ...code.config, source: "(input) => typeof input.text === 'string' && Boolean(input.sourceNodeId) && typeof process === 'undefined' && typeof require === 'undefined'" };
+  const ai = newFlowNode("flowspace/ai-judge", 350, 0);
+  ai.config = { ...ai.config, provider: workerRoute.provider, model: workerRoute.model };
+  judgeDoc.nodes = [judgeInput, code, ai];
+  judgeDoc.edges = [
+    { ...newEdge(judgeInput.id, code.id, "continuation"), targetPort: "in" },
+    { ...newEdge(code.id, ai.id, "continuation"), sourcePort: "pass", targetPort: "in" },
+  ];
+  await imported.save(judgeDoc);
+  const launchJudges = await imported.start({ kind: "global", nodeIds: [] });
+  const judgesRun = () => imported.snapshot().runs.find(run => run.id === launchJudges.id)!;
+  await until(() => judgesRun().state === "completed", "packaged QuickJS worker and DSH judge stream complete");
+  const [seed, ...judges] = judgesRun().steps;
+  assert.equal(seed.nodeId, judgeInput.id);
+  assert.ok(seed.sessionId);
+  assert.deepEqual(judges.map(step => [step.nodeId, step.state, step.route]), [[code.id, "completed", "pass"], [ai.id, "completed", "pass"]]);
+  assert.equal(judges[1].verdict?.model, workerRoute.model);
+  assert.equal(judges[1].verdict?.reason, "Fixture reviewed");
+  assert.equal(judges[1].telemetry?.inputTokens, 7);
+  assert.equal(judges[1].telemetry?.outputTokens, 3);
+  assert.ok(judges.every(step => !step.sessionId));
+  report.push({ name: "Packaged QuickJS and native DSH judge stream execute without agent sessions", passed: true });
+
+  const typedDoc = emptyDocument();
+  typedDoc.settings.listLimit = 2;
+  const frozen = contentList([{ nested: [null, ["博物馆", null]] }, null, "omitted"], 2);
+  const note = newNode("note", 0, 0, "Frozen collection"), consumer = agent("Read frozen entries");
+  const archive = newNode("note", 0, 300, "Full catalogue");
+  const longRecord = { label: "展签".repeat(12_000), footnotes: [null] };
+  typedDoc.nodes = [note, archive, consumer];
+  typedDoc.edges = [
+    { ...newEdge(note.id, consumer.id, "reference"), snapshotContent: frozen },
+    { ...newEdge(archive.id, consumer.id, "reference"), snapshotContent: contentList([longRecord]) },
+  ];
+  const loaded = await imported.importWorkflow({ document: typedDoc });
+  assert.equal(loaded.kind, "imported");
+  assert.deepEqual(imported.snapshot().document.edges[0].snapshotContent, frozen);
+  const typedRun = await imported.start({ kind: "single", nodeIds: [consumer.id] });
+  const currentTyped = () => imported.snapshot().runs.find(run => run.id === typedRun.id)!;
+  await until(() => currentTyped().state === "completed", "native dispatch with frozen JSON");
+  assert.deepEqual(currentTyped().steps[0].sources[0].content, frozen);
+  const spilled = currentTyped().steps[0].sources[1].content?.items?.[0];
+  assert.ok(spilled?.spill && spilled.value === undefined);
+  assert.ok(spilled.spill.bytes > 65536);
+  assert.deepEqual(JSON.parse(await fresh.ctx.fs.readText(await fresh.ctx.fs.resolve(spilled.spill.locator))), longRecord);
+  const peek = await imported.inspectEdgePayload({ edgeId: typedDoc.edges[0].id });
+  assert.deepEqual([peek.itemCount, peek.originalCount], [2, 3]);
+  report.push({ name: "Portable typed references retain nested nulls, item identity and truncation in native runs", passed: true });
+  await verifyStructuredEmission(fresh);
+  report.push({ name: "Native flow_emit ownership, ordered streaming and end-of-turn delivery", passed: true });
+  await verifyContainerTools(fresh);
+  report.push({ name: "Native container tools honor single-card scope, approvals and version conflicts", passed: true });
+  await verifyVariablesAndDelivery(fresh);
+  report.push({ name: "Versioned variables freeze in native Agent inputs and deliver once into a board", passed: true });
+  await verifyOperations(fresh);
+  report.push({ name: "Native subprocess and Git operations freeze parameters and wait for user input", passed: true });
+  await verifyTriggers(fresh);
+  report.push({ name: "Launchpad origin, status event delivery and typed human answers", passed: true });
+  await verifyPlaybackBudgetAndTemplates(fresh);
+  report.push({ name: "Breakpoints, runtime budget, persisted run report and five built-in play templates", passed: true });
+  await verifyFanout(fresh);
+  report.push({ name: "Static fan-out preserves draft identities, runs each native lane once, and retains removed sessions", passed: true });
+  await verifyFanoutPolicies(fresh);
+  report.push({ name: "Fan-out concurrency and ordered all, first and quorum results with native sessions", passed: true });
+  await verifyDataTransforms(fresh);
+  report.push({ name: "Data transforms preserve named inputs, stable item identity, native usage and per-run accumulation", passed: true });
+  const filesDoc = emptyDocument();
+  filesDoc.settings.listLimit = 2;
+  const path = "data-input.txt";
+  await writeFile(join(fresh.workspace, path), "星".repeat(24_000) + "\nsecond\nthird");
+  const file = { ...newNode("file", 0, 0), cwd: fresh.workspace, selectedItems: [path] };
+  const split = newFlowNode("flowspace/split", 400, 0);
+  const fileList = newFlowNode("flowspace/dedupe", 400, 300);
+  filesDoc.nodes = [file, split, fileList];
+  filesDoc.edges = [split, fileList].map(node => ({ ...newEdge(file.id, node.id, "reference"), targetPort: "in" }));
+  await imported.save(filesDoc);
+  const fileRun = await imported.start({ kind: "global", nodeIds: [] });
+  const fileResult = () => imported.snapshot().runs.find(run => run.id === fileRun.id)!;
+  await until(() => ["completed", "error"].includes(fileResult().state), "static file transformation settles");
+  const fileStep = fileResult().steps.find(step => step.nodeId === split.id)!;
+  assert.equal(fileStep.state, "completed", fileStep.error);
+  assert.ok(fileStep.sources[0].textSpill && fileStep.outputContent?.items?.[0].spill);
+  assert.equal(fileStep.outputContent.originalCount, 3);
+  assert.equal(fileStep.outputContent.items[1].value, "second");
+  assert.deepEqual(fileResult().steps.find(step => step.nodeId === fileList.id)?.outputContent?.items, [{ key: path, value: path }]);
+  report.push({ name: "Static file transforms read the actual file, spill long items and report original length", passed: true });
+  await checkWatchedContent(fresh);
+  report.push({ name: "Editing a file in place refreshes preview and static draft lanes without creating a run or session", passed: true });
+}
+
+const phases = ["initial", "restored", "portable"] as const;
+type Phase = typeof phases[number];
+
+async function runPhase(phase: Phase, environmentName: string, port: number) {
+  const { home } = resolveSandboxPaths(environmentName);
+  const host = await boot({ name: phase === "portable" ? `${environmentName}-portable` : environmentName, mock: true, port });
+  const fixturePath = join(home, "integration-fixture.json");
+  let exitCode = 1;
   try {
-    const imported = fresh.ctx.flowspace;
-    assert.deepEqual(imported.listTeams(), []);
-    assert.deepEqual(imported.listRoles(), []);
-    const missingModel = { provider: "offline-provider", model: "unavailable" };
-    bundle.dependencies.roles[0].model = missingModel;
-    assert.deepEqual(await imported.importWorkflow(bundle), { kind: "missing-models", models: [missingModel] });
-    assert.deepEqual(imported.listRoles(), []);
-    const replacements = [{ from: missingModel, to: workerRoute }];
-    const restored = await imported.importWorkflow({ ...bundle, replacements });
-    assert.equal(restored.kind, "imported");
-    const rebuilt = restored.document;
-    const tpl = rebuilt.templates[0];
-    assert.equal(tpl.nodes.find((node) => node.teamRef)?.teamRef.teamId, blueprint.id);
-    assert.deepEqual(imported.listRoles()[0].model, workerRoute);
-    assert.equal((await imported.importWorkflow(bundle)).kind, "imported");
-    assert.equal(imported.listTeams().length, 1);
-    const copied = await imported.importWorkflow({ ...bundle, replacements, copyAssets: true });
-    assert.equal(copied.kind, "imported");
-    const clone = copied.document.templates.at(-1);
-    const cloneRef = clone.nodes.find((node) => node.teamRef).teamRef;
-    const cloneTeam = imported.listTeams().find((team) => team.id === cloneRef.teamId);
-    assert.notEqual(cloneTeam.id, blueprint.id);
-    assert.notEqual(cloneTeam.slots[0].roleId, reviewer.id);
-
-    const newDoc = copied.document;
-    const instance = instantiateTemplate(newDoc, clone, 200, 140, clone.title, { cwd: fresh.workspace });
-    const input = newDoc.nodes.find((node) => node.parentId === instance.id && node.title === upstream.title);
-    await imported.save(newDoc);
-    const launch = await imported.start({ kind: "single", nodeIds: [input.id] });
-    const restoredRun = () => imported.snapshot().runs.find((run) => run.id === launch.id);
-    await until(() => ["completed", "error"].includes(restoredRun()?.state), "imported team workflow settles from an empty library", 45_000);
-    assert.equal(restoredRun().state, "completed", JSON.stringify(restoredRun().steps.map((step) => step.error)));
-    assert.equal(restoredRun().steps[1].output, "TEAM_FINAL_REVIEW");
-    report.push({ name: "Exported team workflow, blank-library import, model replacement, reuse, copy and execution", passed: true });
+    if (phase === "initial") {
+      const fixture = await initialChecks(host);
+      const fanoutRecovery = await prepareFanoutRecovery(host);
+      const contentTemplate = await exerciseContentTemplate(host);
+      await writeFile(join(home, "content-template.json"), JSON.stringify(contentTemplate));
+      report.push({ name: "Portable split-fanout-merge template runs its frozen three items in source order", passed: true });
+      await writeFile(fixturePath, JSON.stringify({ ...fixture, countBeforeRestart: host.ctx.flowspace.snapshot().runs.length }));
+      await writeFile(join(home, "fanout-recovery.json"), JSON.stringify(fanoutRecovery));
+    } else {
+      const fixture: IntegrationFixture = JSON.parse(await readFile(fixturePath, "utf8"));
+      if (phase === "restored") {
+        await restoredChecks(host, fixture);
+        await verifyFanoutRecovery(host, JSON.parse(await readFile(join(home, "fanout-recovery.json"), "utf8")));
+        report.push({ name: "Cold restart resumes a fan-out queue without replaying completed native requests", passed: true });
+        await checkContentTemplateAfterRestart(host, JSON.parse(await readFile(join(home, "content-template.json"), "utf8")));
+        report.push({ name: "Content template graph, lane results and native requests survive a cold Host restart", passed: true });
+      }
+      else await portableChecks(host, fixture);
+    }
+    await writeFile(join(home, `integration-${phase}.json`), JSON.stringify(report));
+    exitCode = 0;
+  } catch (error) {
+    console.error(error);
+    console.error(JSON.stringify(host.ctx.get("flowspace")?.snapshot().runs.map((run) => ({
+      id: run.id, state: run.state, notes: run.notes,
+      steps: run.steps.map((step) => ({ state: step.state, error: step.error })),
+    })), null, 2));
   } finally {
-    await fresh.shutdown.shutdown(0);
+    await host.shutdown.shutdown(exitCode);
   }
-  console.log(
-    JSON.stringify(
-      { model: "deterministic fixture; real DSH runtime", report },
-      null,
-      2,
-    ),
-  );
-} catch (error) {
-  console.error(error);
-  console.error(
-    JSON.stringify(
-      ctx
-        .get("flowspace")
-        ?.snapshot()
-        .runs.map((r) => ({
-          id: r.id,
-          state: r.state,
-          notes: r.notes,
-          steps: r.steps.map((s) => ({ state: s.state, error: s.error })),
-        })),
-      null,
-      2,
-    ),
-  );
-  process.exitCode = 1;
-} finally {
-  await shutdown.shutdown(process.exitCode ?? 0);
+}
+
+// rc.3 owns process exit during profile disposal. Each boot needs its own
+// process so startup, shutdown and cold-restart assertions run independently.
+const phase = process.argv[2] as Phase | undefined;
+if (phase) {
+  assert.ok(phases.includes(phase));
+  await runPhase(phase, process.argv[3], Number(process.argv[4]));
+} else {
+  const environmentName = `integration-${Date.now()}-${process.pid}`;
+  const { home } = resolveSandboxPaths(environmentName);
+  for (const stage of phases) {
+    const address = await canBindPort(0);
+    assert.ok(address.ok && address.port, "The integration Host needs a local port");
+    const port = String(address.port);
+    const child = spawnSync(process.execPath, ["--import", "tsx", import.meta.filename, stage, environmentName, port], {
+      stdio: "inherit", windowsHide: true, timeout: 600_000, killSignal: "SIGKILL",
+    });
+    if (child.error) throw child.error;
+    assert.equal(child.status, 0, `${stage} Host exited with ${child.signal ?? child.status}`);
+    const completed = JSON.parse(await readFile(join(home, `integration-${stage}.json`), "utf8"));
+    assert.ok(completed.length, `${stage} Host finished its assertions`);
+    report.push(...completed);
+  }
+  console.log(JSON.stringify({ model: "deterministic fixture; real DSH runtime", report }, null, 2));
 }

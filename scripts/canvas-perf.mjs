@@ -44,8 +44,8 @@ function graph(count, mode) {
   return doc;
 }
 
-async function zoom(page, delta) {
-  return page.evaluate(async delta => {
+async function zoom(page, delta, expected = delta > 0 ? "44%" : "86%") {
+  return page.evaluate(async ({ delta, expected }) => {
     const world = document.querySelector(".fs-world");
     const viewport = document.querySelector(".fs-viewport");
     const rect = viewport.getBoundingClientRect();
@@ -66,7 +66,6 @@ async function zoom(page, delta) {
       function sample(now) {
         samples.push({ time: now, interval: now - previous });
         previous = now;
-        const expected = delta > 0 ? "44%" : "86%";
         if (world.isConnected && now - start < 30000 && (now - start < 500 || world.dataset.moving || document.querySelector(".zoom-label")?.textContent !== expected)) requestAnimationFrame(sample);
         else resolve();
       }
@@ -82,13 +81,126 @@ async function zoom(page, delta) {
       elements: world.querySelectorAll("*").length,
       connected: world.isConnected,
     };
-  }, delta);
+  }, { delta, expected });
+}
+
+async function activeFlow(count, dpr, isolated) {
+  // Supply consumed continuation tokens and live destinations through the same
+  // snapshot stream as a running workflow, without starting external sessions.
+  const doc = emptyDocument();
+  doc.viewport = { x: 36, y: 58, zoom: 0.86 };
+  doc.prefs = { filter: "all", wireRouting: "overlap", showBranches: false, showWorktrees: false };
+  doc.nodes.push(newNode("note", 180, 120, "Drag test"));
+  doc.nodes.push({ ...newNode("group", 90, 72, "Drag group"), width: 480, height: 400 });
+  for (let row = 0; row < count; row++) {
+    const from = newNode("agent", -738, row * 17, `Source ${row}`);
+    const to = newNode("agent", 3375, row * 17, `Target ${row}`);
+    to.sessionId = `canvas-flow-fixture-${row}`;
+    doc.nodes.push(from, to);
+    doc.edges.push(newEdge(from.id, to.id, "continuation"));
+  }
+  const host = service.ctx.flowspace;
+  if (isolated) doc.prefs.hiddenWorkspaces = (await host.projectStructures()).map(project => project.id);
+  await host.save(doc);
+  const original = host.snapshot;
+  host.snapshot = function () {
+    const snapshot = original.call(this);
+    const destinations = snapshot.document.nodes.filter(node => node.sessionId?.startsWith("canvas-flow-fixture-"));
+    const live = destinations.map(node => ({
+      nodeId: node.id, sessionId: node.sessionId, running: true, output: "", seq: 0, pendingInput: [],
+    }));
+    const tokens = snapshot.document.edges.map(edge => ({
+      id: edge.id, edgeId: edge.id, stepId: edge.source, createdAt: 0, ready: true, consumed: true, boundary: false, dismissed: false,
+      source: { id: edge.id, kind: "text", sourceNodeId: edge.source, capturedAt: 0, title: "", text: "" },
+    }));
+    return { ...snapshot, live, runs: [{
+      id: "canvas-flow-fixture", title: "Canvas flow fixture", origin: "canvas", state: "running", createdAt: 0,
+      scope: null, roots: [], participants: [], graph: { nodes: snapshot.document.nodes, edges: snapshot.document.edges },
+      steps: [], tokens, notes: [],
+    }] };
+  };
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: dpr });
+  try {
+    const url = service.ctx.get("connection").authenticatedUrl(`http://127.0.0.1:${port}`) + "#flowspace";
+    await openCanvas(page, url);
+    await page.waitForFunction(n => document.querySelectorAll(".edge-flow.edge-state-active").length === n, count);
+    const session = await page.context().newCDPSession(page);
+    await session.send("Performance.enable");
+    const metrics = async () => Object.fromEntries((await session.send("Performance.getMetrics")).metrics.map(entry => [entry.name, entry.value]));
+    const gpuWires = () => page.locator("[data-gpu-flow]").count();
+    const accelerated = await gpuWires();
+    const initial = await metrics();
+    const idle = await page.evaluate(async () => {
+      let previous = await new Promise(requestAnimationFrame);
+      const end = previous + 1800;
+      const frames = [];
+      do {
+        const next = await new Promise(requestAnimationFrame);
+        frames.push(next - previous);
+        previous = next;
+      } while (previous < end);
+      return frames;
+    });
+    const after = await metrics();
+    const drags = {};
+    for (const kind of ["pan", "node", "group"]) {
+      drags[kind] = quantile(await dragSample(page, kind), 0.95);
+    }
+    const down = await zoom(page, 75);
+    const up = await zoom(page, -75);
+    if (!down.crossing.length || !up.crossing.length) throw new Error("Active flow did not cross the layout threshold");
+    if (accelerated) {
+      // Verify the layer releases the original animation when the GPU context is lost.
+      const hasTestExtension = await page.locator(".fs-wire-flow-canvas").evaluate(canvas => {
+        const context = canvas.getContext("webgl2");
+        const extension = context?.getExtension("WEBGL_lose_context");
+        if (!extension) return false;
+        extension.loseContext();
+        setTimeout(() => extension.restoreContext(), 650);
+        return true;
+      });
+      if (hasTestExtension) {
+        await page.waitForFunction(() => !document.querySelector("[data-gpu-flow]"));
+        await page.waitForFunction(() => document.querySelector("[data-gpu-flow]"));
+      }
+    }
+    const root = page.locator(".fs-root").first();
+    const screenshot = async () => {
+      const theme = await root.getAttribute("data-theme");
+      const suffix = isolated ? "-isolated" : "";
+      await page.screenshot({ path: join(directory, `flow-${count}-${dpr}x${suffix}-${theme}.png`) });
+      return theme;
+    };
+    const theme = await screenshot();
+    if (process.env.FLOWSPACE_VISUAL === "1") {
+      await page.getByRole("button", { name: /^(界面主题|theme)$/i }).first().click();
+      await page.waitForTimeout(1900);
+      if (theme === await screenshot()) throw new Error("The active flow theme did not switch");
+    }
+    host.snapshot = original;
+    host.publish();
+    await page.waitForFunction(() => !document.querySelector("g[data-gpu-flow], .edge-flow.edge-state-active"));
+    if (accelerated && await page.locator(".fs-wire-flow-canvas").isVisible()) throw new Error("Idle WebGL layer remained visible");
+    return { active: count, dpr, isolated, accelerated, idleP95: quantile(idle, 0.95),
+      idleMainMsPerFrame: Math.round((after.TaskDuration - initial.TaskDuration) * 10000 / idle.length) / 10,
+      drags, crossingP95: quantile([...down.crossing, ...up.crossing], 0.95) };
+  } finally {
+    host.snapshot = original;
+    await page.close();
+  }
 }
 
 try {
   await initializeMuseum(service);
   const url = service.ctx.get("connection").authenticatedUrl(`http://127.0.0.1:${port}`) + "#flowspace";
   for (const scene of cases.length ? cases : ["museum", "200-overlap", "200-avoid", "500-overlap", "500-avoid"]) {
+    if (scene.startsWith("flow-")) {
+      const [, count, dpr = "1", variant] = scene.split("-");
+      report.scenes[scene] = await activeFlow(Number(count), Number(dpr), variant === "isolated");
+      await writeFile(join(directory, "report.json"), JSON.stringify(report));
+      console.log("PERF", scene, JSON.stringify(report.scenes[scene]));
+      continue;
+    }
     if (scene === "native") {
       report.scenes.native = await verifyNative(browser, service, url, directory);
       await writeFile(join(directory, "report.json"), JSON.stringify(report));
@@ -134,9 +246,15 @@ try {
     const timing = Object.fromEntries(after.metrics.filter(metric => ["LayoutDuration", "RecalcStyleDuration", "ScriptDuration"].includes(metric.name))
       .map(metric => [metric.name, Math.round((metric.value - initial.metrics.find(entry => entry.name === metric.name).value) * 1000)]));
     const hot = passes.slice(2);
+    const regular = [];
+    for (let round = 0; round < rounds; round++) {
+      regular.push(await zoom(page, 20, "72%"), await zoom(page, -20, "86%"));
+    }
     const result = {
       coldMax: quantile(passes.slice(0, 2).flatMap(pass => pass.crossing), 1),
       hotCrossMax: quantile(hot.flatMap(pass => pass.crossing), 1),
+      hotCrossP95: quantile(hot.flatMap(pass => pass.crossing), 0.95),
+      regularP95: quantile(regular.flatMap(pass => pass.frames), 0.95),
       p95: quantile(hot.flatMap(pass => pass.frames), 0.95),
       stableP95: quantile(hot.flatMap(pass => pass.stable), 0.95),
       max: quantile(passes.flatMap(pass => pass.frames), 1),

@@ -6,6 +6,7 @@ import type {
   StartRequest,
 } from "../types.ts";
 import { groupDescendants, members } from "./document.ts";
+import { descriptorOf, isExecutable } from "./nodes/registry.ts";
 
 export function activeEdges(edges: FlowEdge[]): FlowEdge[] {
   return edges.filter((e) => e.kind === "continuation" && e.trigger !== "off");
@@ -113,8 +114,9 @@ export function graphOrder(
   rank: Map<string, number>;
   cyclic: Set<number>;
 } {
-  const links = activeEdges(edges),
-    ids = nodes.filter((n) => n.kind === "agent").map((n) => n.id);
+  // Layout callers can supply their entire vertex set as ordered roots.
+  const ids = new Set([...roots, ...nodes.filter(isExecutable).map((n) => n.id)]);
+  const links = activeEdges(edges).filter((edge) => ids.has(edge.source) && ids.has(edge.target));
   const index = new Map<string, number>(),
     low = new Map<string, number>(),
     component = new Map<string, number>(),
@@ -155,9 +157,26 @@ export function graphOrder(
     }
   };
   [...roots, ...ids].forEach((id) => {
-    if (!index.has(id)) visit(id);
+    if (ids.has(id) && !index.has(id)) visit(id);
   });
   return { component, rank, cyclic };
+}
+
+export function isFanoutMaster(graph: Pick<FlowspaceDocument, "nodes">, node: FlowNode): boolean {
+  if (node.masterOf) return true;
+  if (node.generatedBy || !node.parentId) return false;
+  const pair = graph.nodes.find(parent => parent.id === node.parentId)?.fanout;
+  return !!pair && node.id !== pair.fanId && node.id !== pair.mergeId;
+}
+
+function canStartNode(doc: FlowspaceDocument, node: FlowNode): boolean {
+  if (node.generatedBy || isFanoutMaster(doc, node)) return false;
+  if (node.kind === "agent") return true;
+  if (node.kind !== "flow" || !isExecutable(node)) return false;
+  if (node.flowType === "flowspace/constant" || node.flowType === "flowspace/random" ||
+      node.flowType === "flowspace/assign" && node.config?.inputValue === false) return true;
+  if (node.flowType !== "flowspace/fanout" && descriptorOf(node.flowType)?.family !== "data") return false;
+  return doc.edges.some(edge => edge.kind === "reference" && edge.target === node.id);
 }
 
 export function launchPlan(
@@ -184,7 +203,9 @@ export function launchPlan(
           : expandIds(request.nodeIds);
 
   const pool = doc.nodes.filter(
-    (n) => n.kind === "agent" && selected.includes(n.id),
+    (n) => selected.includes(n.id) && (canStartNode(doc, n) ||
+      (explicitTargetIds.has(n.id) && ["single", "from-node", "to-node"].includes(request.kind) &&
+        isExecutable(n) && !n.generatedBy && !isFanoutMaster(doc, n))),
   );
   const skipped: LaunchPlan["skipped"] = [];
   const bypassedIds = new Set<string>();
@@ -202,7 +223,7 @@ export function launchPlan(
       return "已旁路透传";
     }
     if (
-      !n.draft.trim() &&
+      n.kind === "agent" && !n.draft.trim() &&
       !n.task.trim() &&
       !(n.continuationPrompt ?? "").trim()
     ) {
@@ -210,7 +231,7 @@ export function launchPlan(
     }
     if (!forceSelf && n.participation === "manual") return "仅手动启动";
     if (
-      !forceSelf &&
+      n.kind === "agent" && !forceSelf &&
       !n.draft.trim() &&
       n.lastSubmittedTask === n.task &&
       n.rerun !== "always" &&
@@ -267,11 +288,14 @@ export function launchPlan(
     }
   }
 
+  const traversable = new Set([...bypassedIds, ...doc.nodes
+    .filter((n) => (n.kind === "flow" || n.generatedBy || isFanoutMaster(doc, n)) &&
+      isExecutable(n) && n.participation !== "paused").map((n) => n.id)]);
   const roots = [...ids].filter(
     (id) =>
       request.kind === "single" ||
       (request.kind === "from-node" && explicitTargetIds.has(id)) ||
-      !hasEligibleUpstream(id, ids, bypassedIds, links),
+      !hasEligibleUpstream(id, ids, traversable, links),
   );
   let covered = new Set(reachable(roots, links, doc.nodes));
   for (const id of ids) {

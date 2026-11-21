@@ -1,12 +1,11 @@
 import type {
   FlowNode,
-  SubagentBrief,
   WorkspaceBrief,
   WorkspaceStructureBrief,
 } from "../types.ts";
 import { bounds, nodeBox, type Box } from "./geometry.ts";
 
-export type StructureKind = "project" | "branch" | "worktree" | "subagent";
+export type StructureKind = "project" | "branch" | "worktree";
 
 export interface DerivedStructureCard {
   id: string;
@@ -30,35 +29,6 @@ export interface DerivedStructureLink {
   fromBox: Box;
   toBox: Box;
   active?: boolean;
-  /** `subagent` links are tree tethers (spine + elbows) drawn from `path`. */
-  kind?: "structure" | "subagent-spine" | "subagent-branch";
-  /** Pre-routed SVG path; when absent the renderer routes `fromBox` → `toBox`. */
-  path?: string;
-}
-
-/** Corner radius of a sub-agent tether elbow. */
-const TETHER_RADIUS = 12;
-
-/**
- * File-tree tether geometry for a parent Agent's sub-agents: one vertical spine
- * dropping from the parent card plus a rounded elbow into each child card's left edge.
- */
-export function subagentTetherPaths(
-  parentBox: Box,
-  childBoxes: Box[],
-): { spine: string; branches: string[]; spineX: number } {
-  const spineX = Math.round(parentBox.x + 18);
-  const top = Math.round(parentBox.y + parentBox.h);
-  const r = TETHER_RADIUS;
-  const mids = childBoxes.map((b) => Math.round(b.y + b.h / 2));
-  const last = mids.length ? mids[mids.length - 1] : top;
-  const spine = `M ${spineX} ${top} L ${spineX} ${Math.max(top, last - r)}`;
-  const branches = childBoxes.map((b, i) => {
-    const cy = mids[i];
-    const cx = Math.round(b.x);
-    return `M ${spineX} ${cy - r} Q ${spineX} ${cy} ${spineX + r} ${cy} L ${cx} ${cy}`;
-  });
-  return { spine, branches, spineX };
 }
 
 export interface DraftAffiliation {
@@ -121,9 +91,7 @@ export function resolveDraftAffiliation(opts: {
     }
   }
 
-  const candidateCards = opts.structureCards.filter(
-    (c) => c.kind !== "subagent",
-  );
+  const candidateCards = opts.structureCards;
   if (opts.dropPoint && candidateCards.length > 0) {
     const { x, y } = opts.dropPoint;
     let best = candidateCards[0];
@@ -155,7 +123,7 @@ export function resolveDraftAffiliation(opts: {
 }
 
 /**
- * Derives the read-only 4-tier skeleton (`Project -> Branch -> Worktree -> Agent -> SubAgent`, M06).
+ * Derives the read-only 4-tier skeleton (`Project -> Branch -> Worktree -> Agent`, M06).
  * Collapsed intermediate tiers (`showBranches=false` or `showWorktrees=false`) are automatically bridged.
  */
 export function buildDerivedStructure(opts: {
@@ -167,7 +135,6 @@ export function buildDerivedStructure(opts: {
   visibleGroupBoxes?: Box[];
   lod: boolean;
   keepExpandedIds: Set<string>;
-  subagents: SubagentBrief[];
   runningNodeIds: Set<string>;
   waitingNodeIds: Set<string>;
 }): { cards: DerivedStructureCard[]; links: DerivedStructureLink[] } {
@@ -177,7 +144,7 @@ export function buildDerivedStructure(opts: {
   const shownProjects = opts.projects.filter(
     (p) => !opts.hiddenWorkspaces.includes(p.id),
   );
-  if (!shownProjects.length && !opts.subagents.length) {
+  if (!shownProjects.length) {
     return { cards, links };
   }
 
@@ -334,60 +301,6 @@ export function buildDerivedStructure(opts: {
     }
 
     cursorY = tierMaxY + 48;
-  }
-
-  // Sub-Agent tier (4th/5th tier under bound parent Agent when subAgentsExpanded is true)
-  for (const agent of agentNodes) {
-    if (!agent.sessionId || !agent.subAgentsExpanded) continue;
-    const subs = opts.subagents.filter(
-      (s) => s.parentSessionId === agent.sessionId,
-    );
-    if (!subs.length) continue;
-    const parentBox = nodeBox(
-      agent,
-      opts.lod,
-      opts.keepExpandedIds.has(agent.id),
-    );
-    const subBoxes: Box[] = subs.map((_, idx) => ({
-      x: parentBox.x + 44,
-      y: parentBox.y + parentBox.h + 22 + idx * 64,
-      w: Math.max(220, parentBox.w - 64),
-      h: 52,
-      compact: true,
-    }));
-    const tether = subagentTetherPaths(parentBox, subBoxes);
-    links.push({
-      id: `slink-agent-${agent.id}-subspine`,
-      fromBox: parentBox,
-      toBox: subBoxes[subBoxes.length - 1],
-      active: subs.some((s) => s.running),
-      kind: "subagent-spine",
-      path: tether.spine,
-    });
-    subs.forEach((sub, idx) => {
-      const subBox = subBoxes[idx];
-      const subCard: DerivedStructureCard = {
-        id: `struct-sub-${sub.sessionId}`,
-        kind: "subagent",
-        title: sub.title,
-        subtitle: sub.sessionId.slice(0, 12),
-        badge: sub.running ? "running" : "sub",
-        workspaceId: agent.workspaceId ?? "",
-        cwd: agent.worktreePath || agent.cwd || "",
-        sessionId: sub.sessionId,
-        parentAgentNodeId: agent.id,
-        box: subBox,
-      };
-      cards.push(subCard);
-      links.push({
-        id: `slink-agent-${agent.id}-sub-${sub.sessionId}`,
-        fromBox: parentBox,
-        toBox: subBox,
-        active: sub.running,
-        kind: "subagent-branch",
-        path: tether.branches[idx],
-      });
-    });
   }
 
   return { cards, links };

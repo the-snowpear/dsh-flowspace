@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyDocument, newEdge, newNode } from "../src/core/document.ts";
 import { applyGeometry, byId, indexNodes, intersects, runtimeIndex, shareSnapshotValue } from "../src/client/sceneModel.ts";
-import { pathExtent, SceneWires } from "../src/client/sceneWires.ts";
+import { buildGuideRoute, obstacleDelta, pathExtent, RouteObstacles, SceneWires } from "../src/client/sceneWires.ts";
 import { route, routePath } from "../src/client/wireRouting.ts";
 import type { FlowspaceRun } from "../src/types.ts";
 
@@ -70,11 +70,101 @@ test("waiting status is indexed against the captured run graph", () => {
   const edge = newEdge("upstream", node.id, "continuation");
   const run: FlowspaceRun = { id: "run", title: "", origin: "canvas", state: "waiting", createdAt: 0, scope: null,
     roots: [], participants: [], notes: [], steps: [], graph: { nodes: [node], edges: [edge] },
-    tokens: [{ id: "gate", edgeId: edge.id, stepId: "s", consumed: false, dismissed: false, ready: false, boundary: true,
+    tokens: [{ id: "gate", edgeId: edge.id, stepId: "s", createdAt: 0, consumed: false, dismissed: false, ready: false, boundary: true,
       source: { id: "context", kind: "text", sourceNodeId: "upstream", capturedAt: 0, title: "input", text: "wait" } }],
   };
   const index = runtimeIndex({ document, runs: [run], live: [] });
   assert.equal(index.statuses.get(node.id), "waiting");
   assert.equal(index.waiting.get(node.id)?.[0].token.id, "gate");
+  assert.equal(index.waitingByEdge.get(edge.id), index.waiting.get(node.id)?.[0]);
   assert.equal(byId(document.edges).get(edge.id), undefined);
+});
+
+test("moving an obstacle preserves overlap guides but updates affected wire labels", () => {
+  const cache = new SceneWires();
+  const edge = newEdge("a", "b", "continuation");
+  const a = { x: 0, y: 0, w: 280, h: 120 }, b = { ...a, x: 900 };
+  const from = { x: 280, y: 25, box: a }, to = { x: 900, y: 25, box: b };
+  const ids = new Set(["project"]);
+  cache.update([a, b], [edge], ids);
+  const guide = cache.getPath("project", from, to, "overlap");
+  const original = cache.get(edge, from, to, "overlap");
+  const obstacle = { x: original.geom.label.x - 55, y: 0, w: 110, h: 100 };
+  const boxes = [a, b, obstacle];
+  cache.update(boxes, [edge], ids);
+  assert.equal(cache.getPath("project", from, to, "overlap"), guide);
+  const updated = cache.get(edge, from, to, "overlap");
+  assert.notDeepEqual(updated.geom.label, original.geom.label);
+  assert.deepEqual(updated.geom, route(from, to, { mode: "overlap", obstacles: boxes }));
+});
+
+test("obstacle moves invalidate both ends of the move and retain distant workflow wires", () => {
+  const cache = new SceneWires();
+  const near = newEdge("left", "right", "continuation");
+  const far = newEdge("above", "below", "continuation");
+  const left = { x: -850, y: 0, w: 280, h: 100 };
+  const right = { ...left, x: 250 };
+  const above = { ...left, y: 5000 }, below = { ...right, y: 5000 };
+  const obstacle = { ...left, x: -430, y: -240, h: 120 };
+  const before = [left, right, above, below, obstacle];
+  const after = [left, right, above, below, { ...obstacle, y: 0 }];
+  const end = (box: typeof left, out: boolean) => ({ x: box.x + (out ? box.w : 0), y: box.y + 25, box });
+  const edges = [near, far];
+  cache.update(before, edges);
+  const initial = cache.get(near, end(left, true), end(right, false), "avoid");
+  const remote = cache.get(far, end(above, true), end(below, false), "avoid");
+  assert.deepEqual([...cache.update(after, edges)], [near.id]);
+  assert.notEqual(cache.get(near, end(left, true), end(right, false), "avoid").geom.path, initial.geom.path);
+  assert.equal(cache.get(far, end(above, true), end(below, false), "avoid"), remote);
+  assert.deepEqual([...cache.update(before, edges)], [near.id]);
+  assert.equal(cache.get(near, end(left, true), end(right, false), "avoid").geom.path, initial.geom.path);
+});
+
+test("guide batches using obstacle deltas reproduce main-thread paths after consecutive moves", () => {
+  const main = new SceneWires();
+  const worker = new RouteObstacles();
+  const origin = { x: -900, y: -100, w: 225, h: 74 };
+  const target = { x: 800, y: 500, w: 280, h: 375 };
+  const from = { x: origin.x + origin.w, y: origin.y + origin.h / 2, box: origin };
+  const to = { x: target.x, y: target.y + target.h / 2, box: target };
+  const task = main.guide("project", from, to, "avoid");
+  let previous: typeof origin[] = [];
+  for (const x of [0, 900, -600, 0]) {
+    const boxes = [origin, target, { x, y: 30, w: 260, h: 600 }];
+    main.update(boxes, [], new Set([task.id]));
+    worker.apply(structuredClone(obstacleDelta(previous, boxes)));
+    assert.deepEqual(buildGuideRoute(task, worker), main.getPath(task.id, from, to, "avoid"));
+    previous = boxes;
+  }
+});
+
+test("late guide results survive unrelated moves and leave stale or replaced routes untouched", () => {
+  const cache = new SceneWires();
+  const origin = { x: 0, y: 0, w: 220, h: 74 };
+  const target = { x: 850, y: 500, w: 280, h: 118 };
+  const far = { ...target, y: 5000 };
+  const from = { x: origin.x + origin.w, y: origin.y + origin.h / 2, box: origin };
+  const to = { x: target.x, y: target.y + target.h / 2, box: target };
+  const task = cache.guide("project", from, to, "avoid");
+  const ids = new Set([task.id]);
+  cache.update([origin, target, far], [], ids);
+  const original = buildGuideRoute(task, cache.obstacles);
+  const revision = cache.obstacleRevision;
+
+  const farMoved = { ...far, x: 940 };
+  cache.update([origin, target, farMoved], [], ids);
+  cache.acceptGuide(task, original, revision);
+  assert.deepEqual(cache.lookupGuide(task), { path: original, current: true });
+
+  const near = { x: 450, y: 40, w: 280, h: 375 };
+  cache.update([origin, target, farMoved, near], [], ids);
+  cache.acceptGuide(task, original, revision);
+  assert.equal(cache.lookupGuide(task).current, false);
+
+  const newTask = cache.guide(task.id, from, { ...to, y: to.y + 20 }, "avoid");
+  cache.acceptGuide(newTask, original, cache.obstacleRevision);
+  assert.equal(cache.lookupGuide(newTask).current, false);
+  const exact = cache.getPath(newTask.id, newTask.from, newTask.to, newTask.mode);
+  cache.acceptGuide(newTask, original, revision);
+  assert.deepEqual(cache.lookupGuide(newTask), { path: exact, current: true });
 });

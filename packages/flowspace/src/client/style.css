@@ -2,9 +2,13 @@
 @import "./styles/tokens.css";
 @import "./styles/shell.css";
 @import "./styles/nodes.css";
+@import "./styles/board.css";
 @import "./styles/wires.css";
 @import "./styles/surfaces.css";
 @import "./styles/extensions.css";
 @import "./styles/polish.css";
 @import "./styles/teams.css";
 @import "./styles/team-room.css";
+@import "./styles/team-canvas.css";
+@import "./styles/compact.css";
+@import "./styles/flow-ext.css";

@@ -5,8 +5,15 @@ import { CanvasDialog } from "./CanvasDialog.tsx";
 import { TeamModelPicker } from "./TeamAssetEditor.tsx";
 import { Icon } from "./icons.tsx";
 import { t } from "./i18n.ts";
+import { workflowNodes } from "../core/document.ts";
+import { flowRunsCode } from "../core/nodes/registry.ts";
 
 const key = (selection: TeamModel) => JSON.stringify([selection.provider, selection.model, selection.reasoningEffort ?? ""]);
+
+export function containsCodeNode(request: WorkflowImportRequest): boolean {
+  const nodes = request.document ? workflowNodes(request.document) : request.template?.nodes;
+  return !!nodes?.some(flowRunsCode);
+}
 
 export function WorkflowImportDialog({ request, bridge, onClose, onImported, initialMissing = [] }: {
   request: WorkflowImportRequest;
@@ -16,13 +23,17 @@ export function WorkflowImportDialog({ request, bridge, onClose, onImported, ini
   initialMissing?: TeamModel[];
 }) {
   const [copyAssets, setCopyAssets] = useState(false);
+  const [enableTriggers, setEnableTriggers] = useState(false);
+  const hasTriggers = (request.template?.nodes ?? request.document?.nodes ?? []).some(node => node.flowType === "flowspace/trigger");
   const [missing, setMissing] = useState(initialMissing);
   const [routes, setRoutes] = useState<TeamModelRoute[]>();
   const [replacements, setReplacements] = useState<TeamModelReplacement[]>([]);
   const [pending, setPending] = useState(false);
+  const [codeConfirmed, setCodeConfirmed] = useState(false);
   const [error, setError] = useState("");
   const bundled = request.dependencies;
   const canCopy = !!(bundled?.teams?.length || bundled?.roles?.length);
+  const hasCode = containsCodeNode(request);
 
   useEffect(() => {
     if (!missing.length || routes) return;
@@ -31,10 +42,11 @@ export function WorkflowImportDialog({ request, bridge, onClose, onImported, ini
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (hasCode && !codeConfirmed) return;
     setPending(true);
     setError("");
     try {
-      const result = await bridge.importWorkflow({ ...request, replacements, copyAssets });
+      const result = await bridge.importWorkflow({ ...request, replacements, copyAssets, enableTriggers });
       if (result.kind === "imported") {
         onImported(result.document);
       } else {
@@ -55,6 +67,14 @@ export function WorkflowImportDialog({ request, bridge, onClose, onImported, ini
   return (
     <CanvasDialog title={t("workflowImport")} className="fs-team-dialog" onClose={onClose} closeLabel={t("close")}>
       <form className="fs-workflow-import" onSubmit={(event) => void submit(event)}>
+        {hasCode && <fieldset disabled={pending}>
+          <legend>{t("flow_view_import_code")}</legend>
+          <p className="inspector-description">{t("flow_view_code_sandbox")}</p>
+          <label className="fs-team-import-option"><input type="checkbox" checked={codeConfirmed}
+            onChange={event => setCodeConfirmed(event.target.checked)} /><span>{t("flow_view_accept_code")}</span></label>
+        </fieldset>}
+        {hasTriggers && <label className="fs-team-import-option"><input type="checkbox" checked={enableTriggers}
+          onChange={event => setEnableTriggers(event.target.checked)} /><span>{t("flow_trig_enable_import")}</span></label>}
         {canCopy && (
           <fieldset disabled={pending}>
             <legend>{t("workflowImportAssets")}</legend>
@@ -78,7 +98,7 @@ export function WorkflowImportDialog({ request, bridge, onClose, onImported, ini
         )}
         {error && <p role="alert" className="fs-team-error">{error}</p>}
         <div className="fs-team-actions">
-          <button type="submit" className="button button-primary" disabled={pending}><Icon name="upload" />{t("workflowImport")}</button>
+          <button type="submit" className="button button-primary" disabled={pending || (hasCode && !codeConfirmed)}><Icon name="upload" />{t("workflowImport")}</button>
         </div>
       </form>
     </CanvasDialog>

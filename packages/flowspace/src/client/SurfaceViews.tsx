@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type {
   CanvasPrefs,
   CanvasSnapshot,
@@ -24,6 +25,17 @@ import { BrandMark, Icon, PortMark, kindIconName } from "./icons.tsx";
 import { PayloadPeekCard } from "./PayloadPeekPopover.tsx";
 import { allTemplates, builtinTemplates, teamRevisionDifferences } from "./templates.ts";
 import { TeamLibrary } from "./TeamLibrary.tsx";
+import { descriptorOf } from "../core/nodes/registry.ts";
+import { DEFAULT_LIST_LIMIT } from "../core/content.ts";
+import { canConnect, canStreamTo, structuredInput } from "../core/connect.ts";
+import { isContainer } from "../core/containers.ts";
+import { ContainerHistory, DeliverySettings, PermissionSettings } from "./nodes/ContainerControls.tsx";
+import { EventSettings } from "./nodes/InteractionViews.tsx";
+import { BudgetFields } from "./nodes/PlayViews.tsx";
+import { canInsertFanout } from "../core/fanout.ts";
+import { isFanoutMaster } from "../core/graph.ts";
+import { ConfigForm, EdgeLogicForm } from "./nodes/ConfigForm.tsx";
+import { DataCallDetails } from "./nodes/DataCallDetails.tsx";
 
 export type AlignMode =
   | "left"
@@ -33,6 +45,10 @@ export type AlignMode =
   | "middle"
   | "bottom";
 export type DistributeAxis = "horizontal" | "vertical";
+
+function needsManualRelease(token: FlowToken) {
+  return !token.ready && !token.consumed && !token.dismissed && (token.delayUntil === undefined || token.needsRelease);
+}
 
 export interface StructureInspectorItem {
   id: string;
@@ -191,8 +207,8 @@ export function MiniGraph({
     const a = source.box;
     const b = target.box;
     const geom = route(
-      { x: a.x + a.w, y: a.y + portY(source.node, edge.kind, !!a.compact), box: a },
-      { x: b.x, y: b.y + portY(target.node, edge.kind, !!b.compact), box: b },
+      { x: a.x + a.w, y: a.y + portY(source.node, edge.kind, !!a.compact, edge.sourcePort ?? "out", 0, a.h, "out"), box: a },
+      { x: b.x, y: b.y + portY(target.node, edge.kind, !!b.compact, edge.targetPort ?? "in", 0, b.h, "in"), box: b },
       { kind: edge.kind, mode: wireRouting, obstacles, waypoints: edge.waypoints },
     );
     return [{ edge, geom }];
@@ -496,8 +512,10 @@ export interface InspectorProps {
   selectedStructureCard?: StructureInspectorItem | null;
   onClose: () => void;
   onEditNode: (id: string, changes: Partial<FlowNode>) => void;
+  onApplyConfig: (id: string, config: NonNullable<FlowNode["config"]>, version: number) => Promise<void>;
   onEditEdge: (id: string, changes: Partial<FlowEdge>) => void;
   onDeleteSelection: () => void;
+  onInsertFanout?: (edgeId: string) => void;
   onUngroup: (groupId: string) => void;
   onReleaseToken: (runId: string, tokenId: string, accept: boolean) => void;
   onExtendLoop?: (runId: string, edgeId: string, nodeId?: string) => void;
@@ -536,8 +554,10 @@ export function InspectorPanel({
   selectedStructureCard,
   onClose,
   onEditNode,
+  onApplyConfig,
   onEditEdge,
   onDeleteSelection,
+  onInsertFanout,
   onUngroup,
   onReleaseToken,
   onExtendLoop,
@@ -743,7 +763,10 @@ export function InspectorPanel({
 
     /* 2. Single Edge Inspector + Embedded Payload X-Ray */
     if (selectedEdge) {
+      const sourceNode = doc.nodes.find((n) => n.id === selectedEdge.source);
       const targetNode = doc.nodes.find((n) => n.id === selectedEdge.target);
+      const hasStructuredOutput = selectedEdge.kind === "continuation" && selectedEdge.trigger !== "off" &&
+        sourceNode?.kind === "agent" && targetNode && structuredInput(targetNode, selectedEdge.targetPort);
       const waitingTokens: { run: FlowspaceRun; token: TokenWithLoopGate }[] =
         snapshot?.runs
           .filter((r) => ["running", "waiting", "paused"].includes(r.state))
@@ -752,24 +775,25 @@ export function InspectorPanel({
               .filter(
                 (tk) =>
                   tk.edgeId === selectedEdge.id &&
-                  !tk.ready &&
-                  !tk.consumed &&
-                  !tk.dismissed,
+                  needsManualRelease(tk),
               )
               .map((token) => ({ run, token: token as TokenWithLoopGate })),
           ) ?? [];
 
       return (
         <div className="inspector-content">
-          <span className="eyebrow">{t(selectedEdge.kind)}</span>
+          <span className="eyebrow">{t(selectedEdge.kind === "event" ? "flow_evt_wire" : selectedEdge.kind)}</span>
           <h2 className="user-content">
             {titleOf(selectedEdge.source)}
             <span>→</span>
             {titleOf(selectedEdge.target)}
           </h2>
 
-          {selectedEdge.kind === "continuation" ? (
+          {selectedEdge.kind === "event" ? <EventSettings edge={selectedEdge} edit={onEditEdge} /> : selectedEdge.kind === "continuation" ? (
             <>
+              {targetNode && isContainer(targetNode)
+                ? <DeliverySettings edge={selectedEdge} target={targetNode} edit={onEditEdge} />
+                : <>
               <label className="field-label">{t("mode")}</label>
               <div className="mode-options">
                 {(
@@ -779,22 +803,15 @@ export function InspectorPanel({
                     ["fork", "fork"],
                   ] as const
                 ).map(([mode, glyph]) => {
-                  const disabled =
-                    mode === "fork" &&
-                    (!!targetNode?.sessionId || !!targetNode?.teamRef ||
-                      doc.edges.some(
-                        (e) =>
-                          e.id !== selectedEdge.id &&
-                          e.target === selectedEdge.target &&
-                          e.mode === "fork",
-                      ));
+                  const eligibility = canConnect({ ...selectedEdge, mode, source: sourceNode, target: targetNode,
+                    edges: doc.edges, edgeId: selectedEdge.id });
                   return (
                     <button
                       key={mode}
                       type="button"
                       className={selectedEdge.mode === mode ? "selected" : ""}
-                      disabled={disabled}
-                      title={disabled ? t(targetNode?.teamRef ? "teamInboundModes" : "draftOnly") : undefined}
+                      disabled={!eligibility.ok}
+                      title={eligibility.ok ? undefined : t(eligibility.reason)}
                       onClick={() => onEditEdge(selectedEdge.id, { mode })}
                     >
                       <Icon name={glyph} />
@@ -806,6 +823,7 @@ export function InspectorPanel({
                   );
                 })}
               </div>
+                </>}
 
               <label className="field-label">{t("trigger")}</label>
               <div className="choice-buttons">
@@ -829,6 +847,22 @@ export function InspectorPanel({
                 ))}
               </div>
 
+              {hasStructuredOutput && (
+                <>
+                  <span className="field-label" id="fs-edge-emit-mode">{t("flow_emit_mode")}</span>
+                  <div className="choice-buttons" role="group" aria-labelledby="fs-edge-emit-mode">
+                    {(["end", "stream"] as const).map(mode => {
+                      const selected = (selectedEdge.emitMode ?? "end") === mode;
+                      const enabled = mode === "end" || canStreamTo(targetNode, selectedEdge.targetPort);
+                      return <button key={mode} type="button" className={selected ? "selected" : ""}
+                        aria-pressed={selected} disabled={!enabled} title={enabled ? undefined : t("flow_emit_stream_targets")}
+                        onClick={() => onEditEdge(selectedEdge.id, { emitMode: mode })}>
+                        {t(mode === "end" ? "flow_emit_end" : "flow_emit_stream")}
+                      </button>;
+                    })}
+                  </div>
+                </>
+              )}
               <label className="field-label" htmlFor="fs-edge-rounds">
                 {t("maxRounds")}
               </label>
@@ -848,6 +882,7 @@ export function InspectorPanel({
                 <span>{t("rounds", { count: selectedEdge.maxRounds })}</span>
               </div>
 
+              <EdgeLogicForm edge={selectedEdge} apply={logic => onEditEdge(selectedEdge.id, { logic })} />
               {selectedEdge.originMode && (
                 <p className="muted">
                   {t("createdBy", { mode: t(selectedEdge.originMode) })}
@@ -856,6 +891,8 @@ export function InspectorPanel({
             </>
           ) : (
             <>
+              {sourceNode && targetNode?.kind === "agent" && isContainer(sourceNode) &&
+                <PermissionSettings edge={selectedEdge} source={sourceNode} edit={onEditEdge} />}
               <p className="inspector-description">
                 {t(selectedEdge.always ? "alwaysTip" : "pendingTip")}
               </p>
@@ -905,6 +942,10 @@ export function InspectorPanel({
           )}
 
           {/* Glass-Box Wire Payload X-Ray Card */}
+          {onInsertFanout && canInsertFanout(doc, selectedEdge) &&
+            <button type="button" className="text-button" onClick={() => onInsertFanout(selectedEdge.id)}>
+              <Icon name="fanout" /><span>{t("flow_insert_fanout")}</span>
+            </button>}
           <PayloadPeekCard
             edge={selectedEdge}
             doc={doc}
@@ -1127,10 +1168,10 @@ export function InspectorPanel({
           <button
             type="button"
             className="text-button danger"
-            onClick={() => onUngroup(selectedNode.id)}
+            onClick={() => selectedNode.fanout ? onDeleteSelection() : onUngroup(selectedNode.id)}
           >
             <Icon name="x" />
-            <span>{t("ungroup")}</span>
+            <span>{t(selectedNode.fanout ? "deleteNode" : "ungroup")}</span>
           </button>
         </div>
       );
@@ -1139,13 +1180,14 @@ export function InspectorPanel({
     /* 4. Single Node Inspector */
     if (selectedNode) {
       const state = nodeStatusOf(snapshot, selectedNode.id);
+      const descriptor = selectedNode.kind === "flow" ? descriptorOf(selectedNode.flowType) : undefined;
       const canRunPartial = Boolean(
         onRunFromHere || onRunToHere || bridge,
       );
 
       return (
         <div className="inspector-content">
-          <span className="eyebrow">{selectedNode.kind}</span>
+          <span className="eyebrow">{descriptor ? t(descriptor.titleKey) : selectedNode.kind}</span>
           <h2 className="user-content">{selectedNode.title}</h2>
           {selectedNode.kind === "agent" && (
             <span className={`status status-${state}`}>
@@ -1166,8 +1208,49 @@ export function InspectorPanel({
             }
           />
 
+          {descriptor && <ConfigForm key={JSON.stringify([selectedNode.id, selectedNode.flowType, selectedNode.config])}
+            descriptor={descriptor} value={selectedNode.config ?? descriptor.defaultConfig} bridge={bridge}
+            connectedPorts={doc.edges.flatMap(edge => [
+              ...(edge.source === selectedNode.id ? [{ id: edge.sourcePort ?? "out", direction: "out" as const }] : []),
+              ...(edge.target === selectedNode.id ? [{ id: edge.targetPort ?? "in", direction: "in" as const }] : []),
+            ])}
+            apply={config => onApplyConfig(selectedNode.id, config, descriptor.version)} />}
+          {selectedNode.flowType === "flowspace/exec-terminal" && selectedNode.config?.mode === "interactive" &&
+            <label className="field-label">{t("flow_exec_terminal_owner")}
+              <select className="select-field" value={selectedNode.terminalSessionId ?? ""}
+                onChange={event => onEditNode(selectedNode.id, { terminalSessionId: event.target.value || undefined })}>
+                <option value="">{t("flow_exec_terminal_upstream")}</option>
+                {doc.nodes.filter(node => node.kind === "agent" && node.sessionId).map(node =>
+                  <option key={node.id} value={node.sessionId}>{node.title}</option>)}
+              </select>
+            </label>}
+          {descriptor?.family === "data" &&
+            <DataCallDetails key={selectedNode.id} steps={runtimeIndex(snapshot).steps.get(selectedNode.id)} />}
+          {isContainer(selectedNode) && <ContainerHistory
+            key={selectedNode.id} nodeId={selectedNode.id} doc={doc} snapshot={snapshot} bridge={bridge} />}
           {selectedNode.kind === "agent" && (
             <>
+              <label className="switch-row">
+                {t("flow_bp_title")}
+                <button type="button" role="switch" aria-checked={!!selectedNode.breakpoint} className="switch"
+                  onClick={() => onEditNode(selectedNode.id, { breakpoint: !selectedNode.breakpoint })} />
+              </label>
+              <label className="switch-row">
+                {t("flow_exec_canvas_tools")}
+                <button type="button" role="switch" aria-checked={!!selectedNode.canvasToolsOnly} className="switch"
+                  onClick={() => onEditNode(selectedNode.id, { canvasToolsOnly: !selectedNode.canvasToolsOnly })} />
+              </label>
+              <details><summary>{t("flow_budget_title")}</summary>
+                <BudgetFields value={selectedNode.budget} update={budget => onEditNode(selectedNode.id, { budget })} />
+              </details>
+              {selectedNode.masterOf && <details><summary>{t("flow_lane_bindings")}</summary>
+                {(["provider", "model", "persona", "cwd"] as const).map(key => <label key={key} className="field-label">
+                  {t(`flow_lane_bind_${key}`)}
+                  <input className="text-field fs-var-mono" value={selectedNode.laneBindings?.[key] ?? ""}
+                    onChange={event => onEditNode(selectedNode.id, { laneBindings: { ...selectedNode.laneBindings,
+                      [key]: event.target.value || undefined } })} />
+                </label>)}
+              </details>}
               <label className="field-label">{t("workspace")}</label>
               <select
                 className="text-field"
@@ -1795,31 +1878,37 @@ function summarizeRunSteps(
   run: FlowspaceRun,
   snapshot: FlowspaceSnapshot | null,
 ) {
+  const nodes = new Map(run.graph.nodes.map(node => [node.id, node]));
+  const steps = new Map(run.steps.map(step => [step.nodeId, step as StepWithTelemetry]));
+  const edges = new Map(run.graph.edges.map(edge => [edge.id, edge]));
+  const gates = new Map<string, TokenWithLoopGate>();
+  for (const token of run.tokens) {
+    if (token.ready || token.consumed || token.dismissed) continue;
+    const target = edges.get(token.edgeId)?.target;
+    if (target && !gates.has(target)) gates.set(target, token);
+  }
+  const liveNodes = new Map(snapshot?.live.map(node => [node.nodeId, node]));
+  const fanoutLanes = new Map(run.fanouts?.map(batch =>
+    [batch.fanId, new Map(batch.lanes.map(lane => [lane.item.key, lane]))]));
+  const dataFlow = !!run.fanouts?.length || run.steps.some(step => descriptorOf(nodes.get(step.nodeId)?.flowType)?.family === "data");
   const participantIds = [
     ...new Set([
       ...run.roots,
       ...run.participants,
       ...run.steps.map((s) => s.nodeId),
     ]),
-  ].filter((id) => run.graph.nodes.find((n) => n.id === id)?.kind === "agent");
+  ].filter(id => {
+    const node = nodes.get(id);
+    return node && !node.removed && !isFanoutMaster(run.graph, node) &&
+      (node.kind === "agent" || (dataFlow && node.kind === "flow"));
+  });
 
   const stepItems = participantIds.map((nodeId) => {
-    const node = run.graph.nodes.find((n) => n.id === nodeId)!;
-    const nodeSteps = run.steps.filter(
-      (s) => s.nodeId === nodeId,
-    ) as StepWithTelemetry[];
-    const latest = nodeSteps.at(-1);
-    const gate = run.tokens.find(
-      (tk) =>
-        !tk.ready &&
-        !tk.consumed &&
-        !tk.dismissed &&
-        run.graph.edges.find((e) => e.id === tk.edgeId)?.target === nodeId,
-    ) as TokenWithLoopGate | undefined;
-    const gateEdge = gate
-      ? run.graph.edges.find((e) => e.id === gate.edgeId)
-      : undefined;
-    const live = snapshot?.live.find((l) => l.nodeId === nodeId);
+    const node = nodes.get(nodeId)!;
+    const latest = steps.get(nodeId);
+    const gate = gates.get(nodeId);
+    const gateEdge = gate && edges.get(gate.edgeId);
+    const live = liveNodes.get(nodeId);
 
     let state = (node.participation as string) === "bypassed" ? "bypassed" : "pending";
     let reason = "";
@@ -1836,13 +1925,17 @@ function summarizeRunSteps(
     } else if (latest) {
       state = latest.state;
     }
+    const lane = node.generatedBy && node.itemKey && fanoutLanes.get(node.generatedBy)?.get(node.itemKey);
+    if (lane && lane.state === "cancelled") state = "cancelled";
+    const title = node.generatedBy && node.laneIndex !== undefined && node.itemTitle
+      ? t("flow_lane_item_name", { n: node.laneIndex + 1, item: node.itemTitle }) : node.title;
     const telemetryLabel = latest ? formatStepTelemetrySummary(latest) : "";
-    return { node, state, reason, gate, gateEdge, latest, telemetryLabel };
+    return { node, title, state, reason, gate, gateEdge, latest, telemetryLabel };
   });
 
   const total = Math.max(1, stepItems.length);
   const done = stepItems.filter(
-    (s) => s.state === "completed" || s.state === "bypassed",
+    (s) => s.state === "completed" || s.state === "bypassed" || (dataFlow && (s.state === "skipped" || s.state === "cancelled")),
   ).length;
   const blocker = stepItems.find((s) => s.state === "waiting");
   const active = stepItems.find((s) => ["running", "queued", "settling"].includes(s.state));
@@ -1864,6 +1957,26 @@ export interface RunOverviewDockProps {
   onExtendLoop?: (runId: string, edgeId: string, nodeId?: string) => void;
   onExtractStep: (nodeId: string, text: string, seq?: number) => void;
   onPinDeliverable: (path: string, nodeId: string) => void;
+}
+
+function waitingHumanSteps(snapshot: FlowspaceSnapshot | null) {
+  return (snapshot?.runs ?? []).filter(run => ["waiting", "running", "paused"].includes(run.state))
+    .flatMap(run => run.steps.flatMap(step => {
+      if (step.state !== "awaiting" || (!step.human && !step.debug)) return [];
+      const node = run.graph.nodes.find(node => node.id === step.nodeId);
+      return node ? [{ step, node }] : [];
+    }));
+}
+
+function HumanWaitRows({ waits, reveal }: {
+  waits: ReturnType<typeof waitingHumanSteps>; reveal: (id: string) => void;
+}) {
+  return <>{waits.map(({ step, node }) => <article key={step.id} className="queue-row fs-human-queue">
+    <Icon name={step.debug ? "pause" : "person"} />
+    <div><b className="user-content">{node.title}</b>
+      <p>{step.debug ? t(step.debug.reason === "budget" ? "flow_budget_pause" : "flow_bp_hit") : step.human?.question}</p></div>
+    <button type="button" className="button-quiet" onClick={() => reveal(node.id)}>{t("locate")}</button>
+  </article>)}</>;
 }
 
 export function RunOverviewDock({
@@ -1951,11 +2064,12 @@ export function RunOverviewDock({
   }
 
   if (tab === "waiting") {
+    const humanWaits = waitingHumanSteps(snapshot);
     const waitingTokens = (snapshot?.runs ?? [])
       .filter((r) => ["running", "waiting", "paused"].includes(r.state))
       .flatMap((run) =>
         run.tokens
-          .filter((tk) => !tk.ready && !tk.consumed && !tk.dismissed)
+          .filter(needsManualRelease)
           .map((token) => {
             const edge = run.graph.edges.find((e) => e.id === token.edgeId);
             return {
@@ -1969,11 +2083,12 @@ export function RunOverviewDock({
     const pendingApprovals = (snapshot?.live ?? []).filter(
       (l) => l.pendingInput.length > 0,
     );
-    if (!waitingTokens.length && !pendingApprovals.length) {
+    if (!waitingTokens.length && !pendingApprovals.length && !humanWaits.length) {
       return <p className="muted">{t("noWaiting")}</p>;
     }
     return (
       <div className="activity-list fs-run-dock">
+        <HumanWaitRows waits={humanWaits} reveal={onRevealNode} />
         {pendingApprovals.map((live) => {
           const node = doc.nodes.find((n) => n.id === live.nodeId);
           if (!node) return null;
@@ -2174,7 +2289,7 @@ export function RunOverviewDock({
                   onClick={() => onRevealNode(item.node.id)}
                 >
                   <i />
-                  <b className="user-content">{item.node.title}</b>
+                  <b className="user-content">{item.title}</b>
                   <small>
                     {t(
                       item.reason ||
@@ -2235,6 +2350,10 @@ export function ActivitySurface({
   onExtractStep,
   onPinDeliverable,
   onReturnCanvas,
+  onReplay,
+  onReport,
+  onArena,
+  onBatchHuman,
 }: {
   tab: "runs" | "outputs" | "waiting";
   onTabChange: (next: "runs" | "outputs" | "waiting") => void;
@@ -2249,8 +2368,14 @@ export function ActivitySurface({
   onExtractStep: (nodeId: string, text: string, seq?: number) => void;
   onPinDeliverable: (path: string, nodeId: string) => void;
   onReturnCanvas: () => void;
+  onReplay?: (run: FlowspaceRun) => void;
+  onReport?: (run: FlowspaceRun) => void;
+  onArena?: () => void;
+  onBatchHuman?: (runId: string) => void;
 }) {
-  const runs = (snapshot?.runs ?? []).toReversed();
+  const [origin, setOrigin] = useState<"all" | FlowspaceRun["origin"]>("all");
+  const runs = (snapshot?.runs ?? []).filter(run => origin === "all" || run.origin === origin).toReversed();
+  const humanWaits = waitingHumanSteps(snapshot);
   const circumference = 2 * Math.PI * 17;
 
   const handleLoopExtend = (runId: string, edgeId: string, nodeId?: string) => {
@@ -2268,7 +2393,7 @@ export function ActivitySurface({
     .filter((r) => ["running", "waiting", "paused"].includes(r.state))
     .flatMap((run) =>
       run.tokens
-        .filter((tk) => !tk.ready && !tk.consumed && !tk.dismissed)
+        .filter(needsManualRelease)
         .map((token) => {
           const edge = run.graph.edges.find((e) => e.id === token.edgeId);
           return {
@@ -2326,18 +2451,27 @@ export function ActivitySurface({
             onClick={() => onTabChange("waiting")}
           >
             {t("waitingTab")}
-            <span>{waitingTokens.length + pendingApprovals.length}</span>
+            <span>{waitingTokens.length + pendingApprovals.length + humanWaits.length}</span>
           </button>
         </div>
 
         <div className="activity-list">
+          {tab === "runs" && <div className="button-row">
+            <select className="select-field" aria-label={t("flow_run_origin")} value={origin}
+              onChange={event => setOrigin(event.target.value as typeof origin)}>
+              {(["all", "canvas", "chat", "trigger"] as const).map(value => <option key={value} value={value}>
+                {t(value === "all" ? "all" : `flow_origin_${value}`)}
+              </option>)}
+            </select>
+            {onArena && <button className="button-quiet" type="button" onClick={onArena}><Icon name="trophy" />{t("flow_arena_table")}</button>}
+          </div>}
           {tab === "runs" ? (
             runs.length ? (
               runs.map((run, idx) => {
                 const { stepItems, total, done, blocker, active } =
                   summarizeRunSteps(run, snapshot);
                 const originLabel =
-                  run.origin === "chat"
+                  run.origin === "trigger" ? t("flow_origin_trigger") : run.origin === "chat"
                     ? t("runTypeChat")
                     : run.scope
                       ? t("runTypeGroup")
@@ -2406,6 +2540,13 @@ export function ActivitySurface({
                             <span>{t("resume")}</span>
                           </button>
                         )}
+                        {onReplay && <button className="button-quiet" type="button" onClick={() => onReplay(run)}>
+                          <Icon name="replay" />{t("flow_replay_play")}
+                        </button>}
+                        {onBatchHuman && run.steps.some(step => step.itemKey && step.state === "awaiting" && step.human && !step.human.operation) &&
+                          <button className="button-quiet" type="button" onClick={() => onBatchHuman(run.id)}>{t("flow_human_batch")}</button>}
+                        {onReport && ["completed", "error", "cancelled", "interrupted"].includes(run.state) &&
+                          <button className="button-quiet" type="button" onClick={() => onReport(run)}>{t("flow_report_title")}</button>}
                         {run.steps.some((s) =>
                           ["error", "aborted", "interrupted"].includes(s.state),
                         ) && (
@@ -2440,7 +2581,7 @@ export function ActivitySurface({
                           onClick={() => onRevealNode(item.node.id)}
                         >
                           <i />
-                          <b className="user-content">{item.node.title}</b>
+                          <b className="user-content">{item.title}</b>
                           <small>
                             {t(
                               item.reason ||
@@ -2468,7 +2609,7 @@ export function ActivitySurface({
                           />
                           <span>
                             {t("runBlockedBy", {
-                              name: blocker.node.title,
+                              name: blocker.title,
                               reason: t(blocker.reason || "waiting"),
                             })}
                           </span>
@@ -2516,7 +2657,7 @@ export function ActivitySurface({
                           {run.state === "completed"
                             ? t("runAllDone")
                             : active
-                              ? t("runNextStep", { name: active.node.title })
+                              ? t("runNextStep", { name: active.title })
                               : run.notes.at(-1) || t(run.state)}
                         </div>
                       )}
@@ -2693,8 +2834,9 @@ export function ActivitySurface({
                 <p>{t("noActivityDescription")}</p>
               </div>
             )
-          ) : waitingTokens.length || pendingApprovals.length ? (
+          ) : waitingTokens.length || pendingApprovals.length || humanWaits.length ? (
             <>
+              <HumanWaitRows waits={humanWaits} reveal={onRevealNode} />
               {pendingApprovals.map((live) => {
                 const node = doc.nodes.find((n) => n.id === live.nodeId);
                 if (!node) return null;
@@ -2796,6 +2938,7 @@ export function SettingsSurface({
   onLoadStarter: () => void;
 }) {
   const lang = getLanguage();
+  const listLimit = doc.settings.listLimit ?? DEFAULT_LIST_LIMIT;
   return (
     <div className="fs-surface">
       <div className="surface-page settings-page">
@@ -2803,6 +2946,28 @@ export function SettingsSurface({
           <span className="eyebrow">FLOWSPACE · PREFERENCES</span>
           <h1>{t("settings")}</h1>
         </header>
+        <section className="settings-section">
+          <h2>{t("flow_budget_title")}</h2>
+          <BudgetFields value={doc.settings.budget} update={budget => onUpdateSettings({ budget })} />
+        </section>
+        <section className="settings-section">
+          <h2>{t("flow_trig_gate")}</h2>
+          {(["cooldownSec", "dailyLimit"] as const).map(key => <label className="setting-row" key={key}>
+            <span>{t(`flow_form_${key}`)}</span>
+            <input className="text-field" type="number" min={key === "dailyLimit" ? 1 : 0} value={doc.settings.triggerGuards?.[key] ?? ""}
+              onChange={event => onUpdateSettings({ triggerGuards: { ...doc.settings.triggerGuards,
+                [key]: event.target.value ? event.target.valueAsNumber : undefined } })} />
+          </label>)}
+          <label className="setting-row">{t("flow_form_busy")}
+            <select className="select-field" value={doc.settings.triggerGuards?.busy ?? "skip"}
+              onChange={event => onUpdateSettings({ triggerGuards: { ...doc.settings.triggerGuards,
+                busy: event.target.value as "skip" | "queue" | "interrupt" } })}>
+              {(["skip", "queue", "interrupt"] as const).map(key => <option key={key} value={key}>{t(key === "skip" ? "flow_exec_skip" : `flow_form_${key}`)}</option>)}
+            </select>
+          </label>
+          {typeof Notification !== "undefined" && <button type="button" className="button-quiet"
+            onClick={() => { void Notification.requestPermission(); }}>{t("flow_notice_permission")}</button>}
+        </section>
 
         <section className="settings-section">
           <h2>{t("appearance")}</h2>
@@ -2926,6 +3091,35 @@ export function SettingsSurface({
 
         <section className="settings-section">
           <h2>{t("orchestration")}</h2>
+          <div className="setting-row">
+            <div>
+              <label htmlFor="fs-list-limit"><b>{t("flow_list_limit")}</b></label>
+              <p id="fs-list-limit-description">{t("flow_list_limit_description")}</p>
+            </div>
+            <div className="fs-field">
+              <input
+                key={listLimit}
+                id="fs-list-limit"
+                aria-describedby="fs-list-limit-description"
+                className="text-field"
+                type="number"
+                min={1}
+                max={Number.MAX_SAFE_INTEGER}
+                step={1}
+                required
+                defaultValue={listLimit}
+                onKeyDown={event => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                }}
+                onBlur={event => {
+                  const field = event.currentTarget;
+                  if (field.reportValidity() && field.valueAsNumber !== listLimit) {
+                    onUpdateSettings({ listLimit: field.valueAsNumber });
+                  }
+                }}
+              />
+            </div>
+          </div>
           <div className="setting-row">
             <div>
               <b>{t("nativeChatTriggers")}</b>

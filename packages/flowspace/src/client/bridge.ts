@@ -7,6 +7,8 @@ import { sanitizeDocumentForWire } from "../core/document.ts";
 import type {
   ArchiveTeamAssetRequest,
   BindRequest,
+  DataPreview,
+  DataPreviewRequest,
   EdgePayloadPreview,
   ExtendLoopRequest,
   FlowNode,
@@ -17,6 +19,7 @@ import type {
   GitDiffResult,
   GitRepoStatus,
   InspectEdgeRequest,
+  JsonValue,
   LaunchPlan,
   RoleDefinition,
   SaveRoleRequest,
@@ -51,6 +54,11 @@ export interface CanvasBridge {
   useValue<T>(read: (snapshot: FlowspaceSnapshot | null) => T): T;
   connect(): () => void;
   save(doc: FlowspaceDocument): Promise<FlowspaceDocument>;
+  revertContainerChange(id: string): Promise<void>;
+  writeVariable(request: { id: string; runId?: string; lane?: string; expectedVersion: number; value?: JsonValue }): Promise<void>;
+  launchTrigger(nodeId: string, values: import("../types.ts").JsonObject): Promise<import("../types.ts").FlowspaceRun>;
+  debugStep(request: { runId: string; stepId: string; action: "continue" | "step" | "skip"; task?: string }): Promise<void>;
+  generateReport(runId: string, model: import("../types.ts").TeamModel): Promise<import("../types.ts").RunReport>;
   importWorkflow(request: WorkflowImportRequest): Promise<WorkflowImportResult>;
   listRoles(): Promise<RoleDefinition[]>;
   saveRole(request: SaveRoleRequest): Promise<RoleDefinition>;
@@ -65,8 +73,11 @@ export interface CanvasBridge {
   extendLoop(req: ExtendLoopRequest): Promise<void>;
   command(runId: string, action: "pause" | "resume" | "cancel"): Promise<void>;
   release(runId: string, tokenId: string, accept: boolean): Promise<void>;
+  answerHuman(runId: string, stepId: string, option: string, values?: import("../types.ts").JsonObject): Promise<void>;
+  remindEmission(runId: string, stepId: string): Promise<void>;
   restoreSnapshot(snapshotId: string): Promise<FlowspaceDocument>;
   inspectEdgePayload(req: InspectEdgeRequest): Promise<EdgePayloadPreview>;
+  previewData(req: DataPreviewRequest, signal?: AbortSignal): Promise<DataPreview>;
   bind(req: BindRequest): Promise<FlowNode>;
   display(req: SourceRequest): Promise<FlowNode>;
   sessions(): Promise<SessionBrief[]>;
@@ -218,6 +229,21 @@ export class FlowClient implements CanvasBridge {
     const clean = sanitizeDocumentForWire(doc);
     return value(await this.ctx.remote.flowspace.save(clean));
   }
+  async revertContainerChange(id: string): Promise<void> {
+    value(await this.ctx.remote.flowspace.revertContainerChange(id));
+  }
+  async writeVariable(request: Parameters<CanvasBridge["writeVariable"]>[0]): Promise<void> {
+    value(await this.ctx.remote.flowspace.writeVariable(request));
+  }
+  async launchTrigger(nodeId: string, values: import("../types.ts").JsonObject) {
+    return value(await this.ctx.remote.flowspace.launchTrigger({ nodeId, values }));
+  }
+  async debugStep(request: Parameters<CanvasBridge["debugStep"]>[0]) {
+    value(await this.ctx.remote.flowspace.debugStep(request));
+  }
+  async generateReport(runId: string, model: import("../types.ts").TeamModel) {
+    return value(await this.ctx.remote.flowspace.generateReport({ runId, model }));
+  }
   async importWorkflow(request: WorkflowImportRequest): Promise<WorkflowImportResult> {
     return value(await this.ctx.remote.flowspace.importWorkflow(request));
   }
@@ -282,10 +308,19 @@ export class FlowClient implements CanvasBridge {
       await this.ctx.remote.flowspace.restoreSnapshot({ snapshotId }),
     );
   }
+  async answerHuman(runId: string, stepId: string, option: string, values?: import("../types.ts").JsonObject): Promise<void> {
+    value(await this.ctx.remote.flowspace.answerHuman({ runId, stepId, option, values }));
+  }
+  async remindEmission(runId: string, stepId: string): Promise<void> {
+    value(await this.ctx.remote.flowspace.remindEmission({ runId, stepId }));
+  }
   async inspectEdgePayload(
     req: InspectEdgeRequest,
   ): Promise<EdgePayloadPreview> {
     return value(await this.ctx.remote.flowspace.inspectEdgePayload(req));
+  }
+  async previewData(req: DataPreviewRequest, signal?: AbortSignal): Promise<DataPreview> {
+    return value(await this.ctx.remote.flowspace.previewData(req, signal));
   }
   async bind(req: BindRequest): Promise<FlowNode> {
     return value(await this.ctx.remote.flowspace.bind(req));

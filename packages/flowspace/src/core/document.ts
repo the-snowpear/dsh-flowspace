@@ -4,6 +4,9 @@ import type {
   FlowNode,
   FlowspaceDocument,
 } from "../types.ts";
+import { defaultBoardWithExamples, findBoardCard, formatBoardMarkdown, normalizeBoardColumns } from "./board.ts";
+import { tFor, type Locale } from "../client/i18n.ts";
+import { DEFAULT_FLOW_SIZE, descriptorOf, sizeOf } from "./nodes/registry.ts";
 
 export function workflowNodes(document: FlowspaceDocument): FlowNode[] {
   return [
@@ -17,19 +20,25 @@ export const uid = (): string => crypto.randomUUID();
 
 export const DEFAULT_AGENT_TITLES = new Set(["新 Agent", "New Agent", ""]);
 
-function stripNullFields<T>(value: T): T {
+function stripNullFields<T>(value: T, structuredContent = false): T {
   if (value === null || value === undefined || typeof value !== "object") {
     return value;
   }
   if (Array.isArray(value)) {
     return value
       .filter((item) => item !== null && item !== undefined)
-      .map((item) => stripNullFields(item)) as unknown as T;
+      .map((item) => stripNullFields(item, structuredContent)) as unknown as T;
   }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (structuredContent && k === "value") {
+      out[k] = v;
+      continue;
+    }
     if (v === null || v === undefined) continue;
-    out[k] = stripNullFields(v);
+    // Plugin JSON may use null as a value, including in arrays.
+    out[k] = k === "config" && "kind" in value && value.kind === "flow"
+      ? v : stripNullFields(v, structuredContent || k === "snapshotContent");
   }
   return out as T;
 }
@@ -62,28 +71,27 @@ const DEFAULT_DIMS: Record<FlowNode["kind"], [number, number]> = {
   file: [300, 286],
   display: [300, 252],
   group: [1152, 474],
-  board: [520, 310],
+  board: [580, 380],
   detail: [340, 362],
   git: [380, 376],
   changes: [340, 318],
   terminal: [360, 300],
+  role: [260, 336],
+  flow: DEFAULT_FLOW_SIZE.full,
 };
 
 export function boardSummaryText(
   columns: BoardColumn[],
   selectedIds?: string[],
 ): string {
-  const chosen = selectedIds?.length ? new Set(selectedIds) : null;
-  const lines: string[] = [];
-  for (const col of columns) {
-    const cards = chosen
-      ? col.cards.filter((c) => chosen.has(c.id))
-      : col.cards;
-    if (!cards.length) continue;
-    lines.push(`[${col.name}]`);
-    for (const card of cards) lines.push(`- ${card.text}`);
+  return formatBoardMarkdown(normalizeBoardColumns(columns), selectedIds);
+}
+
+export function referenceTitle(node: FlowNode | undefined, edge: FlowEdge): string {
+  if (node?.kind === "board" && edge.sourceItemKey !== undefined) {
+    return findBoardCard(node.columns ?? [], edge.sourceItemKey)?.card.text || node.title;
   }
-  return lines.join("\n");
+  return edge.snapshotTitle || node?.title || edge.source;
 }
 
 /** Derive an auto-title from the first non-empty line of a draft prompt (D38). */
@@ -129,20 +137,10 @@ export function newNode(
   x: number,
   y: number,
   title?: string,
+  locale: "zh" | "en" = "zh",
 ): FlowNode {
   const [width, height] = DEFAULT_DIMS[kind] ?? [312, 260];
-  const columns: BoardColumn[] | undefined =
-    kind === "board"
-      ? [
-          {
-            id: uid(),
-            name: "待办",
-            cards: [{ id: uid(), text: "梳理核心需求与验收边界" }],
-          },
-          { id: uid(), name: "进行中", cards: [] },
-          { id: uid(), name: "完成", cards: [] },
-        ]
-      : undefined;
+  const columns = kind === "board" ? defaultBoardWithExamples(locale) : undefined;
   const isCustomTitle =
     Boolean(title) &&
     !(kind === "agent" && DEFAULT_AGENT_TITLES.has((title ?? "").trim()));
@@ -157,11 +155,13 @@ export function newNode(
         file: "文件引用",
         display: "展示结果",
         group: "工作流",
-        board: "任务看板",
+        board: locale === "en" ? "Task board" : "任务看板",
         detail: "执行详情",
         git: "Git 仓库",
         changes: "轮次改动",
         terminal: "终端快照",
+        role: "新岗位",
+        flow: tFor(locale, "flow_node"),
       }[kind],
     x,
     y,
@@ -173,7 +173,9 @@ export function newNode(
       kind === "display" ||
       kind === "board" ||
       kind === "detail" ||
-      kind === "git",
+      kind === "git" ||
+      kind === "role" ||
+      kind === "flow",
     task: "",
     draft: "",
     nativeTrigger: "inherit",
@@ -191,6 +193,20 @@ export function newNode(
     ...(columns ? { columns, selectedItems: [] } : {}),
   };
 }
+export function newFlowNode(flowType: string, x: number, y: number, locale: Locale = "zh"): FlowNode {
+  const node = newNode("flow", x, y, undefined, locale);
+  node.flowType = flowType;
+  const descriptor = descriptorOf(flowType);
+  if (descriptor) {
+    node.titleKey = descriptor.titleKey;
+    node.title = tFor(locale, node.titleKey);
+    node.config = structuredClone(descriptor.defaultConfig);
+    node.configVersion = descriptor.version;
+    [node.width, node.height] = sizeOf(node, false);
+  }
+  return node;
+}
+
 export function newEdge(
   source: string,
   target: string,
@@ -201,6 +217,7 @@ export function newEdge(
     source,
     target,
     kind,
+    ...(kind === "event" ? { event: { mode: "end" as const, kinds: ["done" as const], cooldownMs: 1000, maxTimes: 10 } } : {}),
     mode: "conclusion",
     trigger: kind === "reference" ? "off" : "auto",
     maxRounds: 3,

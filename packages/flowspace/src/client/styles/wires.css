@@ -381,8 +381,8 @@
   padding-left: 7px;
   border-left: 2px solid var(--m-f);
 }
-.fs-root .semantic-zoom .exchange-tag em,
-.fs-root .semantic-zoom .edge-tag:not(.edge-state-waiting):not(.edge-state-boundary) {
+.fs-root .fs-tags-layer[data-fs-semantic] .exchange-tag em,
+.fs-root .fs-tags-layer[data-fs-semantic] .edge-tag:not(.edge-state-waiting):not(.edge-state-boundary) {
   display: none;
 }
 

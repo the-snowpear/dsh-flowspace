@@ -149,6 +149,34 @@ export function clientEsbuildOptions({ dev = false } = {}) {
     jsx: "automatic",
     sourcemap: dev ? "inline" : false,
     external: CLIENT_EXTERNALS,
+    plugins: [{
+      name: "inline-worker",
+      setup(plugin) {
+        plugin.onResolve({ filter: /\.worker\.ts\?source$/ }, ({ path, resolveDir }) => ({
+          path: resolve(resolveDir, path.slice(0, -"?source".length)),
+          namespace: "flowspace-worker",
+        }));
+        plugin.onLoad({ filter: /./, namespace: "flowspace-worker" }, async ({ path }) => {
+          const result = await build({
+            absWorkingDir: root,
+            entryPoints: [path],
+            bundle: true,
+            platform: "browser",
+            target: "es2022",
+            format: "iife",
+            minify: !dev,
+            sourcemap: dev ? "inline" : false,
+            write: false,
+            metafile: true,
+          });
+          return {
+            contents: result.outputFiles[0].text,
+            loader: "text",
+            watchFiles: Object.keys(result.metafile.inputs).map(file => resolve(root, file)),
+          };
+        });
+      },
+    }],
     define: {
       "process.env.NODE_ENV": JSON.stringify(dev ? "development" : "production"),
     },
