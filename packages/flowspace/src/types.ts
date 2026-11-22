@@ -1165,3 +1165,28 @@ export interface TerminalScreenReadRequest {
   terminalId?: string;
   lines?: number;
 }
+export interface WriteVariableRequest {
+  id: string;
+  runId?: string;
+  lane?: string;
+  expectedVersion: number;
+  value?: JsonValue;
+}
+export interface LaunchTriggerRequest {
+  nodeId: string;
+  values?: JsonObject;
+}
+export interface DebugStepRequest {
+  runId: string;
+  stepId: string;
+  action: "continue" | "step" | "skip";
+  task?: string;
+}
+export interface GenerateReportRequest {
+  runId: string;
+  model: TeamModel;
+}
+export interface RemindEmissionRequest {
+  runId: string;
+  stepId: string;
+}

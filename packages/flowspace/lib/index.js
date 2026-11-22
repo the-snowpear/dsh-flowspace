@@ -89,9 +89,6 @@ var __callDispose = (stack, error, hasError) => {
 };
 
 // packages/flowspace/src/index.ts
-import { randomUUID } from "node:crypto";
-import { statSync as statSync2 } from "node:fs";
-import { isAbsolute as isAbsolute3, relative as relative3, resolve as resolve4 } from "node:path";
 import { Service } from "@deepseek-ai/cordis";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 
@@ -445,90 +442,6 @@ function pruneBoardReferences(node2, edges) {
     (edge2) => edge2.source !== node2.id || edge2.kind !== "reference" || edge2.sourceItemKey === void 0 || ids.has(edge2.sourceItemKey)
   );
   return retained.length === edges.length ? edges : retained;
-}
-
-// packages/flowspace/src/core/containers.ts
-var isContainer = (node2) => node2?.kind === "board" || node2?.kind === "note" || node2?.kind === "file" || node2?.flowType === "flowspace/variable";
-function containerPermission(node2, edge2) {
-  if (edge2.kind !== "reference" || !isContainer(node2) || edge2.snapshotText !== void 0 || edge2.snapshotContent)
-    return "read";
-  if (edge2.permission === "advance" && node2?.kind !== "board") return "read";
-  return edge2.permission ?? "read";
-}
-function boardIdsForReference(node2, edge2) {
-  const columns = normalizeBoardColumns(node2.columns);
-  return edge2.sourceItemKey !== void 0 ? new Set(findBoardCard(columns, edge2.sourceItemKey) ? [edge2.sourceItemKey] : []) : new Set(referenceColumns(columns, node2.selectedItems, node2.boardSettings?.refScope).flatMap((column) => column.cards.map((card) => card.id)));
-}
-function canvasEntry(node2, itemId) {
-  if (node2.kind === "note") return { kind: "note", text: node2.text };
-  if (node2.kind !== "board" || itemId === void 0) return null;
-  const columns = normalizeBoardColumns(node2.columns);
-  const entry = findBoardCard(columns, itemId);
-  return entry ? {
-    kind: "board",
-    columnId: entry.column.id,
-    card: entry.card,
-    ...entry.column.cards[entry.index + 1] ? { beforeId: entry.column.cards[entry.index + 1].id } : {}
-  } : null;
-}
-function writeCanvasEntry(node2, itemId, entry) {
-  if (node2.kind === "note" && entry?.kind === "note") {
-    node2.text = entry.text;
-    return true;
-  }
-  if (node2.kind !== "board" || itemId === void 0 || entry && entry.kind !== "board") return false;
-  const columns = normalizeBoardColumns(node2.columns);
-  const without = removeBoardCard(columns, itemId);
-  if (!entry) {
-    node2.columns = without;
-    return true;
-  }
-  const destination = without.findIndex((column2) => column2.id === entry.columnId);
-  if (destination < 0) return false;
-  const column = without[destination];
-  const before = column.cards.findIndex((card) => card.id === entry.beforeId);
-  node2.columns = without.with(destination, {
-    ...column,
-    cards: column.cards.toSpliced(before < 0 ? column.cards.length : before, 0, entry.card)
-  });
-  return true;
-}
-function mergeEntry(current, change, history) {
-  const { before, after } = change;
-  if (deepEqual(current, before)) return after;
-  if (current?.kind === "note" && after?.kind === "note") return history ? after : current;
-  if (current?.kind !== "board" || before?.kind !== "board") return current;
-  if (after === null) return history || deepEqual(current.card, before.card) ? null : current;
-  if (after.kind !== "board") return current;
-  const fields = { ...current.card };
-  for (const key of /* @__PURE__ */ new Set([...Object.keys(before.card), ...Object.keys(after.card)])) {
-    if (deepEqual(before.card[key], after.card[key]) || !history && !deepEqual(current.card[key], before.card[key])) continue;
-    Object.assign(fields, { [key]: after.card[key] });
-  }
-  const moved = before.columnId !== after.columnId;
-  const canMove = moved && (history || current.columnId === before.columnId);
-  return { ...current, ...canMove ? { columnId: after.columnId, beforeId: after.beforeId } : {}, card: fields };
-}
-function rebaseContainerChanges(document, changes, history = false) {
-  const revision = document.containerRevision ?? 0;
-  const newer = changes.filter((change) => !change.pending && change.revision > revision);
-  if (!newer.length) return document;
-  const next = { ...document, nodes: [...document.nodes], containerRevision: newer.at(-1).revision };
-  const indices = new Map(next.nodes.map((node2, index) => [node2.id, index]));
-  for (const change of newer) {
-    const index = indices.get(change.nodeId);
-    if (index === void 0 || change.before?.kind === "file" || change.after?.kind === "file") continue;
-    const node2 = next.nodes[index];
-    const current = canvasEntry(node2, change.itemId);
-    const entry = mergeEntry(current, change, history);
-    if (deepEqual(current, entry)) continue;
-    const updated = { ...node2 };
-    if (writeCanvasEntry(updated, change.itemId, entry)) {
-      next.nodes[index] = updated;
-      if (updated.kind === "board") next.edges = pruneBoardReferences(updated, next.edges);
-    }
-  }
-  return next;
 }
 
 // packages/flowspace/src/core/i18n.ts
@@ -3170,118 +3083,424 @@ function members(doc, groupId) {
   return doc.nodes.filter((n) => n.parentId === groupId).flatMap((n) => n.kind === "group" ? members(doc, n.id) : [n.id]);
 }
 
-// packages/flowspace/src/core/nodeFields.ts
-var EPHEMERAL_UI_NODE_FIELDS = ["window", "nudge"];
-var SESSION_IDENTITY_NODE_FIELDS = [
-  "sessionId",
-  "lastSubmittedTask"
-];
-var PORTABLE_STRIP_NODE_FIELDS = [
-  ...SESSION_IDENTITY_NODE_FIELDS,
-  ...EPHEMERAL_UI_NODE_FIELDS,
-  "workspaceId",
-  "cwd",
-  "branch",
-  "worktreePath",
-  "changesSessionId",
-  "changesSeq",
-  "changesTurn",
-  "terminalSessionId",
-  "terminalId"
-];
-var PRESERVED_BOUND_NODE_FIELDS = [
-  "sessionId",
-  "cwd",
-  "workspaceId",
-  "branch",
-  "worktreePath",
-  "lastSubmittedTask"
-];
-var FANOUT_OVERRIDE_NODE_FIELDS = [
-  "title",
-  "task",
-  "draft",
-  "continuationPrompt",
-  "text",
-  "config",
-  "configVersion",
-  "breakpoint",
-  "budget",
-  "canvasToolsOnly",
-  "laneBindings",
-  "lanePersona",
-  "agentPreset",
-  "columns",
-  "boardSettings",
-  "selectedItems",
-  "items",
-  "roleLabel",
-  "planMode",
-  "teamRef",
-  "teamConfig",
-  "teamLayout",
-  "roleRef",
-  "teamModel",
-  "maxInstances",
-  "slotId",
-  "nativeTrigger",
-  "participation",
-  "rerun"
-];
-var FANOUT_OVERRIDE_EDGE_FIELDS = [
-  "kind",
-  "source",
-  "target",
-  "sourcePort",
-  "targetPort",
-  "mode",
-  "trigger",
-  "emitMode",
-  "always",
-  "maxRounds",
-  "logic",
-  "sourceItemKey",
-  "permission",
-  "ask",
-  "delivery",
-  "event"
-];
-function stripFields(target, fields) {
-  for (const field of fields) delete target[field];
-  return target;
+// packages/flowspace/src/core/nodes/data/index.ts
+var asText = (value) => typeof value === "string" ? value : JSON.stringify(value);
+function itemValue(item) {
+  if (item.value === void 0) throw new Error("\u8BF7\u4ECE spill \u8BFB\u53D6\u5B8C\u6574\u6761\u76EE\u540E\u518D\u6267\u884C\u53D8\u6362");
+  return item.value;
 }
-function stripForFreshInstance(node2) {
-  stripFields(node2, SESSION_IDENTITY_NODE_FIELDS);
-  stripFields(node2, EPHEMERAL_UI_NODE_FIELDS);
-  return node2;
+function sourceValue(source) {
+  const content = contentOf(source);
+  if (content.spill) throw new Error("\u8BF7\u4ECE spill \u8BFB\u53D6\u5B8C\u6574\u5185\u5BB9\u540E\u518D\u6267\u884C\u53D8\u6362");
+  if (content.items) return content.items.map(itemValue);
+  return content.value === void 0 ? source.text : content.value;
 }
-function copyBoundNodeFields(target, prior) {
-  for (const field of PRESERVED_BOUND_NODE_FIELDS) {
-    if (prior[field] !== void 0) {
-      target[field] = prior[field];
+function dataText(inputs) {
+  return inputs.map(({ source }) => {
+    if (source.textSpill) throw new Error("\u8BF7\u4ECE spill \u8BFB\u53D6\u5B8C\u6574\u6587\u672C\u540E\u518D\u6267\u884C\u53D8\u6362");
+    return source.text || (source.content ? textOfContent(source.content) : "");
+  }).join("\n");
+}
+function concatenate(parts, limit) {
+  const retained = [];
+  let total = 0;
+  for (const part of parts) {
+    const entries = part.items ?? [];
+    total += part.originalCount ?? entries.length;
+    for (const entry of entries.slice(0, limit - retained.length)) retained.push(entry);
+  }
+  const originalKeys = new Set(retained.map((item) => item.key));
+  const seen = /* @__PURE__ */ new Set(), occurrences = /* @__PURE__ */ new Map();
+  const items = retained.map((item) => {
+    if (!seen.has(item.key)) {
+      seen.add(item.key);
+      return item;
+    }
+    let number = occurrences.get(item.key) ?? 1;
+    let key;
+    do {
+      key = "repeat:" + JSON.stringify([item.key, ++number]);
+    } while (originalKeys.has(key) || seen.has(key));
+    occurrences.set(item.key, number);
+    seen.add(key);
+    return { ...item, key };
+  });
+  return { dataType: "list", items, ...total > items.length ? { originalCount: total } : {} };
+}
+function dataItems(inputs, limit = DEFAULT_LIST_LIMIT) {
+  const parts = inputs.map(({ source }) => {
+    const content = contentOf(source);
+    if (content.dataType === "list") return content;
+    if (content.spill) return { dataType: "list", items: [{ key: content.spill.locator, spill: content.spill }] };
+    if (content.dataType === "file" && Array.isArray(content.value)) {
+      const result = contentList(content.value, limit, content.value.map((value) => typeof value === "string" ? value : void 0));
+      if (content.originalCount !== void 0) result.originalCount = content.originalCount;
+      return result;
+    }
+    if (content.value === void 0 && content.dataType === "signal") return { dataType: "list", items: [] };
+    return contentList([sourceValue(source)], limit);
+  });
+  return concatenate(parts, limit);
+}
+function formatTemplate(template2, fields, item) {
+  const names = [...fields.keys()].sort((a, b) => b.length - a.length);
+  return template2.replace(/\{\{([^{}]+)\}\}/g, (_token, field) => {
+    const key = field.trim();
+    if (fields.has(key)) return asText(fields.get(key));
+    const name = names.find((name2) => key.startsWith(name2 + ".") || key.startsWith(name2 + "["));
+    const root = name === void 0 ? item : fields.get(name);
+    if (root === void 0) return "";
+    return pathValues(root, name === void 0 ? key : key.slice(name.length)).map(asText).join(", ");
+  });
+}
+function formatItem(template2, item, index) {
+  const value = itemValue(item);
+  return formatTemplate(template2, /* @__PURE__ */ new Map([
+    ["item", value],
+    ["key", item.key],
+    ["index", index],
+    ["n", index + 1]
+  ]), value);
+}
+function namedText(config, inputs) {
+  const values = /* @__PURE__ */ new Map();
+  for (const input of inputs) {
+    const prior = values.get(input.port);
+    if (prior) prior.push(sourceValue(input.source));
+    else values.set(input.port, [sourceValue(input.source)]);
+  }
+  const fields = /* @__PURE__ */ new Map();
+  for (const name of config.inputs) {
+    const input = values.get(name) ?? [];
+    fields.set(name, input.length === 1 ? input[0] : input.length ? input : "");
+  }
+  return formatTemplate(String(config.template), fields);
+}
+function ruleMatches(config, item) {
+  const selection = config.condition;
+  return conditionRoute({ branches: [{ ...selection, id: "pass", label: "pass" }] }, asText(itemValue(item))) === "pass";
+}
+function compare(a, b) {
+  if (a === b) return 0;
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  if (typeof a === "boolean" && typeof b === "boolean") return Number(a) - Number(b);
+  const ranks = ["boolean", "number", "string", "object"];
+  const rank = ranks.indexOf(typeof a) - ranks.indexOf(typeof b);
+  if (rank) return rank;
+  const left = typeof a === "string" ? a : canonicalJson(a);
+  const right = typeof b === "string" ? b : canonicalJson(b);
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+function sorted(list, config) {
+  const entries = list.items.map((item) => ({ item, key: config.mode === "rule" ? Number(!ruleMatches(config, item)) : pathValues(itemValue(item), String(config.path))[0] }));
+  entries.sort(({ key: a }, { key: b }) => {
+    if (a == null || b == null) return Number(a == null) - Number(b == null);
+    return (config.order === "desc" ? -1 : 1) * compare(a, b);
+  });
+  return { ...list, items: entries.map((entry) => entry.item) };
+}
+function normalizeText(text) {
+  return text.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
+}
+function transformData(node2, inputs, limit = DEFAULT_LIST_LIMIT, previous) {
+  const config = node2.config ?? {};
+  if (dataMode(node2) !== "rule") throw new Error("\u4EE3\u7801\u6216 AI \u53D8\u6362\u9700\u8981\u7531 Host \u8BD5\u8FD0\u884C");
+  switch (node2.flowType) {
+    case "flowspace/constant":
+      return config.mode === "list" ? contentList(constantValues(String(config.value)), limit) : { dataType: "text", value: config.value };
+    case "flowspace/template":
+      return { dataType: "text", value: namedText(config, inputs) };
+    case "flowspace/split":
+      return contentList(splitValues(config, dataText(inputs)), limit);
+    case "flowspace/extract":
+      if (config.mode === "json-path" && inputs.length === 1 && inputs[0].source.content && inputs[0].source.content.dataType !== "text") {
+        return contentList(pathValues(sourceValue(inputs[0].source), String(config.path)), limit);
+      }
+      return contentList(extractValues(config, dataText(inputs)), limit);
+    case "flowspace/parse":
+      return contentList(parseValues(config, dataText(inputs)), limit);
+  }
+  const list = dataItems(inputs, limit);
+  const items = list.items;
+  switch (node2.flowType) {
+    case "flowspace/join": {
+      const lines2 = items.map((item, index) => {
+        if (config.mode === "template") return formatItem(String(config.template), item, index);
+        const text = asText(itemValue(item));
+        return config.mode === "numbered" ? `${index + 1}. ${text}` : text;
+      });
+      return {
+        dataType: "text",
+        value: lines2.join(config.mode === "numbered" ? "\n" : String(config.delimiter)),
+        ...list.originalCount === void 0 ? {} : { originalCount: list.originalCount }
+      };
+    }
+    case "flowspace/map":
+      return { ...list, items: items.map((item, index) => ({ key: item.key, value: formatItem(String(config.template), item, index) })) };
+    case "flowspace/filter":
+      return { ...list, items: items.filter((item) => ruleMatches(config, item)) };
+    case "flowspace/sort":
+      return sorted(list, config);
+    case "flowspace/dedupe": {
+      const seen = /* @__PURE__ */ new Set();
+      return { ...list, items: items.filter((item) => {
+        const key = canonicalJson(itemValue(item), config.mode === "normalized" ? normalizeText : void 0);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }) };
+    }
+    case "flowspace/accumulate":
+      return previous ? concatenate([previous, list], limit) : list;
+    default:
+      throw new Error(`\u672A\u77E5\u7684\u6570\u636E\u53D8\u6362\uFF1A${node2.flowType}`);
+  }
+}
+
+// packages/flowspace/src/core/budget.ts
+function budgetUsage(steps, start, now) {
+  const active2 = steps.filter((step) => !!step.startedAt || step.state !== "queued" && step.state !== "awaiting");
+  return {
+    tokens: steps.reduce((total, step) => total + (step.telemetry?.inputTokens ?? 0) + (step.telemetry?.outputTokens ?? 0), 0),
+    seconds: Math.max(0, (now - start) / 1e3),
+    rounds: active2.length
+  };
+}
+function budgetHit(run, step, beforeDispatch, now) {
+  const limitForNode = run.graph.nodes.find((node2) => node2.id === step.nodeId)?.budget;
+  const sets = [
+    { key: "run", nodeId: void 0, limits: run.budget, steps: run.steps, start: run.createdAt },
+    {
+      key: step.nodeId,
+      nodeId: step.nodeId,
+      limits: limitForNode,
+      steps: run.steps.filter((entry) => entry.nodeId === step.nodeId),
+      start: step.startedAt ?? now
+    }
+  ];
+  for (const set of sets) {
+    if (!set.limits) continue;
+    const usage = budgetUsage(set.steps, set.start, now);
+    for (const dimension of ["tokens", "seconds", "rounds"]) {
+      const limit = set.limits[dimension];
+      const key = `${set.key}:${dimension}`;
+      const value = usage[dimension] + (beforeDispatch && dimension === "rounds" ? 1 : 0);
+      if (limit !== void 0 && value > limit && !run.budgetAcknowledged?.includes(key))
+        return { key, nodeId: set.nodeId, dimension, value, limit, at: now };
     }
   }
 }
 
-// packages/flowspace/src/core/team.ts
-var SLOT_ID = /^(?!lead$)[a-z][a-z0-9-]{0,31}$/;
-function staffedIds(nodes) {
-  return new Set(nodes.flatMap((node2) => node2.kind === "role" && node2.staffOf ? [node2.staffOf] : []));
+// packages/flowspace/src/core/containers.ts
+var isContainer = (node2) => node2?.kind === "board" || node2?.kind === "note" || node2?.kind === "file" || node2?.flowType === "flowspace/variable";
+function containerPermission(node2, edge2) {
+  if (edge2.kind !== "reference" || !isContainer(node2) || edge2.snapshotText !== void 0 || edge2.snapshotContent)
+    return "read";
+  if (edge2.permission === "advance" && node2?.kind !== "board") return "read";
+  return edge2.permission ?? "read";
 }
-var isTeamNode = (node2, staffed) => !!node2 && node2.kind === "agent" && (!!node2.teamRef || staffed.has(node2.id));
-function teamIdOf(node2, staffed) {
-  if (!node2 || !isTeamNode(node2, staffed)) return;
-  return node2.teamRef?.teamId ?? canvasTeamId(node2.id);
+function boardIdsForReference(node2, edge2) {
+  const columns = normalizeBoardColumns(node2.columns);
+  return edge2.sourceItemKey !== void 0 ? new Set(findBoardCard(columns, edge2.sourceItemKey) ? [edge2.sourceItemKey] : []) : new Set(referenceColumns(columns, node2.selectedItems, node2.boardSettings?.refScope).flatMap((column) => column.cards.map((card) => card.id)));
 }
-var canvasTeamId = (nodeId) => `canvas-${nodeId}`;
-function staffNodes(nodes, teamNodeId) {
-  return nodes.filter((node2) => node2.kind === "role" && node2.staffOf === teamNodeId).sort((a, b) => a.x - b.x || a.y - b.y || a.id.localeCompare(b.id));
+function canvasEntry(node2, itemId) {
+  if (node2.kind === "note") return { kind: "note", text: node2.text };
+  if (node2.kind !== "board" || itemId === void 0) return null;
+  const columns = normalizeBoardColumns(node2.columns);
+  const entry = findBoardCard(columns, itemId);
+  return entry ? {
+    kind: "board",
+    columnId: entry.column.id,
+    card: entry.card,
+    ...entry.column.cards[entry.index + 1] ? { beforeId: entry.column.cards[entry.index + 1].id } : {}
+  } : null;
 }
-function slotIdFor(title, taken) {
-  const base = title.normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^[^a-z]+/, "").replace(/-+$/, "").slice(0, 24) || "member";
-  let id = base;
-  for (let index = 2; taken.has(id) || !SLOT_ID.test(id); index++) id = `${base}-${index}`;
-  return id;
+function writeCanvasEntry(node2, itemId, entry) {
+  if (node2.kind === "note" && entry?.kind === "note") {
+    node2.text = entry.text;
+    return true;
+  }
+  if (node2.kind !== "board" || itemId === void 0 || entry && entry.kind !== "board") return false;
+  const columns = normalizeBoardColumns(node2.columns);
+  const without = removeBoardCard(columns, itemId);
+  if (!entry) {
+    node2.columns = without;
+    return true;
+  }
+  const destination = without.findIndex((column2) => column2.id === entry.columnId);
+  if (destination < 0) return false;
+  const column = without[destination];
+  const before = column.cards.findIndex((card) => card.id === entry.beforeId);
+  node2.columns = without.with(destination, {
+    ...column,
+    cards: column.cards.toSpliced(before < 0 ? column.cards.length : before, 0, entry.card)
+  });
+  return true;
+}
+function mergeEntry(current, change, history) {
+  const { before, after } = change;
+  if (deepEqual(current, before)) return after;
+  if (current?.kind === "note" && after?.kind === "note") return history ? after : current;
+  if (current?.kind !== "board" || before?.kind !== "board") return current;
+  if (after === null) return history || deepEqual(current.card, before.card) ? null : current;
+  if (after.kind !== "board") return current;
+  const fields = { ...current.card };
+  for (const key of /* @__PURE__ */ new Set([...Object.keys(before.card), ...Object.keys(after.card)])) {
+    if (deepEqual(before.card[key], after.card[key]) || !history && !deepEqual(current.card[key], before.card[key])) continue;
+    Object.assign(fields, { [key]: after.card[key] });
+  }
+  const moved = before.columnId !== after.columnId;
+  const canMove = moved && (history || current.columnId === before.columnId);
+  return { ...current, ...canMove ? { columnId: after.columnId, beforeId: after.beforeId } : {}, card: fields };
+}
+function rebaseContainerChanges(document, changes, history = false) {
+  const revision = document.containerRevision ?? 0;
+  const newer = changes.filter((change) => !change.pending && change.revision > revision);
+  if (!newer.length) return document;
+  const next = { ...document, nodes: [...document.nodes], containerRevision: newer.at(-1).revision };
+  const indices = new Map(next.nodes.map((node2, index) => [node2.id, index]));
+  for (const change of newer) {
+    const index = indices.get(change.nodeId);
+    if (index === void 0 || change.before?.kind === "file" || change.after?.kind === "file") continue;
+    const node2 = next.nodes[index];
+    const current = canvasEntry(node2, change.itemId);
+    const entry = mergeEntry(current, change, history);
+    if (deepEqual(current, entry)) continue;
+    const updated = { ...node2 };
+    if (writeCanvasEntry(updated, change.itemId, entry)) {
+      next.nodes[index] = updated;
+      if (updated.kind === "board") next.edges = pruneBoardReferences(updated, next.edges);
+    }
+  }
+  return next;
+}
+
+// packages/flowspace/src/core/connect.ts
+function connectionPort(node2, role, direction, portId) {
+  const id = portId ?? direction;
+  if (role === "event") {
+    if (direction === "out") return hasStatusPort(node2.kind, node2.flowType, !!node2.fanout) ? { id, role, direction, dataType: "signal" } : void 0;
+    return connectionPort(node2, "continuation", "in", portId);
+  }
+  if (node2.kind === "flow")
+    return portsOf(node2).find((port) => port.id === id && port.role === role && port.direction === direction);
+  if (id !== direction || node2.kind === "role") return void 0;
+  if (role === "continuation" && direction === "in" && isContainer(node2))
+    return { id, role, direction, dataType: "text" };
+  if ((direction === "in" || role === "continuation") && node2.kind !== "agent") return void 0;
+  const dataType2 = node2.kind === "board" ? "list" : node2.kind === "file" ? "file" : "text";
+  return { id, role, direction, dataType: dataType2 };
+}
+function structuredInput(target, portId) {
+  const type = connectionPort(target, "continuation", "in", portId)?.dataType;
+  return type === "list" || type === "record" ? type : void 0;
+}
+function canStreamTo(target, portId) {
+  if (!structuredInput(target, portId)) return false;
+  return descriptorOf(target.flowType)?.family === "data" || target.flowType === "flowspace/fanout" || target.flowType === "flowspace/merge-sort";
+}
+function mergeResultPort(config, portId) {
+  if (portId && portId !== "out" && portId !== "pass") return portId;
+  if (config?.sortMode && config.sortMode !== "off") return "pass";
+  return portId === "pass" ? "out" : portId;
+}
+function connectionOutput(source, target, edge2) {
+  const port = connectionPort(source, edge2.kind, "out", edge2.sourcePort);
+  if (!port) return void 0;
+  if (edge2.kind === "reference" && edge2.snapshotContent) return { ...port, dataType: edge2.snapshotContent.dataType };
+  if (edge2.kind === "reference" && source.kind === "file" && (target.flowType === "flowspace/fanout" || descriptorOf(target.flowType)?.family === "data") && connectionPort(target, "reference", "in", edge2.targetPort)?.dataType === "list")
+    return { ...port, dataType: "list" };
+  if (edge2.kind === "reference" && source.kind === "board" && edge2.sourceItemKey !== void 0)
+    return { ...port, dataType: "record" };
+  if (edge2.kind === "continuation" && source.kind === "agent")
+    return { ...port, dataType: structuredInput(target, edge2.targetPort) ?? port.dataType };
+  return port;
+}
+function canConnect(connection) {
+  const { source, target, kind, targetPort, sourceItemKey } = connection;
+  if (!source || !target) return { ok: false, reason: "flow_missing_endpoint" };
+  if (kind === "event") {
+    if (!connectionPort(source, "event", "out", connection.sourcePort) || !connectionPort(target, "event", "in", targetPort) || target.kind !== "agent" && !isContainer(target) && !["flowspace/notice", "flowspace/parse", "flowspace/condition", "flowspace/code", "flowspace/ai-judge", "flowspace/human-choice"].includes(target.flowType ?? ""))
+      return { ok: false, reason: "flow_evt_target" };
+    if (connection.event?.mode === "continuous" && (target.kind === "agent" || target.flowType === "flowspace/ai-judge" || descriptorOf(target.flowType)?.capabilities.callsModel || target.config?.mode === "ai"))
+      return { ok: false, reason: "flow_evt_model" };
+    return { ok: true };
+  }
+  if ((connection.permission || connection.ask) && (kind !== "reference" || !isContainer(source) || target.kind !== "agent" || connection.snapshotContent))
+    return { ok: false, reason: "flow_invalid_permission" };
+  if (kind === "continuation" && isContainer(target) && connection.mode && connection.mode !== "conclusion")
+    return { ok: false, reason: "flow_invalid_delivery" };
+  if (connection.delivery && (kind !== "continuation" || !isContainer(target)))
+    return { ok: false, reason: "flow_invalid_delivery" };
+  if (source.kind === "role" || target.kind === "role") return { ok: false, reason: "flow_staff_only" };
+  if (sourceItemKey !== void 0 && (kind !== "reference" || source.kind !== "board" || !findBoardCard(source.columns ?? [], sourceItemKey))) return { ok: false, reason: "flow_invalid_board_card" };
+  const output = connectionOutput(source, target, connection);
+  const input = connectionPort(target, kind, "in", targetPort);
+  if (!output) return { ok: false, reason: "flow_invalid_output" };
+  if (!input) return { ok: false, reason: "flow_invalid_input" };
+  if (connection.mode === "fork" && (source.kind === "flow" || target.kind !== "agent" || target.sessionId || connection.edges?.some((edge2) => edge2.id !== connection.edgeId && edge2.target === target.id && edge2.mode === "fork")))
+    return { ok: false, reason: "flow_invalid_fork" };
+  if (output.dataType !== input.dataType) {
+    if (kind === "reference") return { ok: true, convert: "text" };
+    if (input.dataType !== "text") return { ok: false, reason: "flow_type_mismatch" };
+  }
+  return { ok: true };
+}
+
+// packages/flowspace/src/core/emission.ts
+function emissionTargets(run, sourceId) {
+  if (!run.graph.nodes.some((node2) => node2.id === sourceId && node2.kind === "agent")) return [];
+  const targets = [];
+  for (const edge2 of run.graph.edges) {
+    if (edge2.source !== sourceId || edge2.kind !== "continuation" || edge2.trigger === "off") continue;
+    const node2 = run.graph.nodes.find((candidate) => candidate.id === edge2.target);
+    if (!node2 || node2.participation === "paused") continue;
+    const type = structuredInput(node2, edge2.targetPort);
+    if (type) targets.push({ edge: edge2, node: node2, type });
+  }
+  return targets;
+}
+function checkEmissionValues(targets, values) {
+  if (targets.some((target) => target.type === "record") && values.some((value) => value === null || typeof value !== "object" || Array.isArray(value))) {
+    throw new Error("\u8BB0\u5F55\u5165\u53E3\u9700\u8981\u6BCF\u4E2A\u6761\u76EE\u90FD\u662F JSON \u5BF9\u8C61");
+  }
+}
+function parseEmission(text) {
+  const { blocks, outsideLines } = parseMarkdownFences(text);
+  for (const block of blocks) {
+    if (!block.closed || !/^(?:json)?$/i.test(block.language)) continue;
+    try {
+      const value = JSON.parse(block.code);
+      if (Array.isArray(value)) return value;
+      if (value && typeof value === "object") return [value];
+    } catch {
+    }
+  }
+  const items = [];
+  for (const line of outsideLines) {
+    const item = /^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$/.exec(line)?.[1].trim();
+    if (item) items.push(item);
+  }
+  if (items.length) return items;
+  throw new Error("\u672A\u6536\u5230 flow_emit \u8F93\u51FA\uFF0C\u7ED3\u8BBA\u4E2D\u4E5F\u6CA1\u6709\u53EF\u7528\u7684 Markdown \u5217\u8868\u6216 JSON \u4EE3\u7801\u5757");
+}
+
+// packages/flowspace/src/core/nodes/input.ts
+function snapshotWithContent(node2, content, capturedAt = Date.now()) {
+  return {
+    id: crypto.randomUUID(),
+    kind: content.dataType === "file" ? "file" : "text",
+    sourceNodeId: node2.id,
+    title: node2.title,
+    text: textOfContent(content),
+    content,
+    capturedAt
+  };
+}
+async function forwardInput(node2, step, contextText) {
+  if (step.sources.length === 1) return step.sources[0];
+  const text = contextText ? await contextText(step.sources) : step.sources.map((source) => source.text).join("\n\n");
+  return snapshotWithContent(node2, { dataType: "text", value: text }, step.createdAt);
 }
 
 // packages/flowspace/src/core/graph.ts
@@ -3485,132 +3704,512 @@ function launchPlan(doc, request, busy, waiting) {
   };
 }
 
-// packages/flowspace/src/core/nodes/input.ts
-function snapshotWithContent(node2, content, capturedAt = Date.now()) {
-  return {
-    id: crypto.randomUUID(),
-    kind: content.dataType === "file" ? "file" : "text",
-    sourceNodeId: node2.id,
-    title: node2.title,
-    text: textOfContent(content),
-    content,
-    capturedAt
+// packages/flowspace/src/core/schedulerTypes.ts
+var isActiveStep = (step) => step.state === "queued" || step.state === "running" || step.state === "settling";
+
+// packages/flowspace/src/core/schedulerTokens.ts
+function consumeToken(token) {
+  if (token.consumed) return;
+  token.consumed = true;
+  token.consumedAt = Date.now();
+}
+function markTokenReady(run, token, at = Date.now()) {
+  token.readyAt = at;
+  if (token.fanoutBatchId) {
+    token.readyOrder = run.fanoutReadyOrder = (run.fanoutReadyOrder ?? 0) + 1;
+  }
+}
+function addNoteOnce(run, note) {
+  if (!run.notes.includes(note)) run.notes.push(note);
+}
+function edgeFires(run, edge2, step, selected) {
+  const logic = edge2.logic;
+  const routed = logic?.negate ? !selected : selected;
+  if (!routed) return false;
+  if (step.iteration < (logic?.fromRound ?? 0)) return false;
+  return logic?.maxTimes === void 0 || run.tokens.filter((token) => token.edgeId === edge2.id && !token.skip).length < logic.maxTimes;
+}
+function pushToken(run, edge2, step, target, source, planGate, armDelay, origin = step) {
+  const now = Date.now();
+  const boundary = !!source && !!run.scope && !run.scope.includes(target.id);
+  const needsRelease = !!source && (planGate || boundary || edge2.trigger === "confirm" || target.participation === "manual");
+  const delayUntil = source && edge2.logic?.delayMs ? now + edge2.logic.delayMs : void 0;
+  const ready2 = !needsRelease && delayUntil === void 0;
+  const token = {
+    id: uid(),
+    edgeId: edge2.id,
+    stepId: step.id,
+    ...origin.streamFrom ? { streamFrom: origin.streamFrom } : {},
+    ...origin.fanoutBatchId && (target.generatedBy || target.flowType === "flowspace/merge-sort") ? { fanoutBatchId: origin.fanoutBatchId } : {},
+    source: source ?? {
+      id: uid(),
+      kind: "text",
+      sourceNodeId: edge2.source,
+      text: "",
+      title: "",
+      capturedAt: now
+    },
+    ...source ? {} : { skip: true },
+    ...source && planGate ? { planGate: true } : {},
+    ...needsRelease ? { needsRelease: true } : {},
+    createdAt: now,
+    delayUntil,
+    readyAt: ready2 ? now : delayUntil,
+    boundary,
+    ready: ready2,
+    consumed: false,
+    dismissed: false
   };
-}
-async function forwardInput(node2, step, contextText) {
-  if (step.sources.length === 1) return step.sources[0];
-  const text = contextText ? await contextText(step.sources) : step.sources.map((source) => source.text).join("\n\n");
-  return snapshotWithContent(node2, { dataType: "text", value: text }, step.createdAt);
-}
-
-// packages/flowspace/src/core/connect.ts
-function connectionPort(node2, role, direction, portId) {
-  const id = portId ?? direction;
-  if (role === "event") {
-    if (direction === "out") return hasStatusPort(node2.kind, node2.flowType, !!node2.fanout) ? { id, role, direction, dataType: "signal" } : void 0;
-    return connectionPort(node2, "continuation", "in", portId);
+  if (ready2) {
+    markTokenReady(
+      run,
+      token,
+      token.fanoutBatchId && step.endedAt ? step.endedAt : now
+    );
   }
-  if (node2.kind === "flow")
-    return portsOf(node2).find((port) => port.id === id && port.role === role && port.direction === direction);
-  if (id !== direction || node2.kind === "role") return void 0;
-  if (role === "continuation" && direction === "in" && isContainer(node2))
-    return { id, role, direction, dataType: "text" };
-  if ((direction === "in" || role === "continuation") && node2.kind !== "agent") return void 0;
-  const dataType2 = node2.kind === "board" ? "list" : node2.kind === "file" ? "file" : "text";
-  return { id, role, direction, dataType: dataType2 };
+  run.tokens.push(token);
+  if (delayUntil !== void 0) armDelay(run, token);
 }
-function structuredInput(target, portId) {
-  const type = connectionPort(target, "continuation", "in", portId)?.dataType;
-  return type === "list" || type === "record" ? type : void 0;
-}
-function canStreamTo(target, portId) {
-  if (!structuredInput(target, portId)) return false;
-  return descriptorOf(target.flowType)?.family === "data" || target.flowType === "flowspace/fanout" || target.flowType === "flowspace/merge-sort";
-}
-function mergeResultPort(config, portId) {
-  if (portId && portId !== "out" && portId !== "pass") return portId;
-  if (config?.sortMode && config.sortMode !== "off") return "pass";
-  return portId === "pass" ? "out" : portId;
-}
-function connectionOutput(source, target, edge2) {
-  const port = connectionPort(source, edge2.kind, "out", edge2.sourcePort);
-  if (!port) return void 0;
-  if (edge2.kind === "reference" && edge2.snapshotContent) return { ...port, dataType: edge2.snapshotContent.dataType };
-  if (edge2.kind === "reference" && source.kind === "file" && (target.flowType === "flowspace/fanout" || descriptorOf(target.flowType)?.family === "data") && connectionPort(target, "reference", "in", edge2.targetPort)?.dataType === "list")
-    return { ...port, dataType: "list" };
-  if (edge2.kind === "reference" && source.kind === "board" && edge2.sourceItemKey !== void 0)
-    return { ...port, dataType: "record" };
-  if (edge2.kind === "continuation" && source.kind === "agent")
-    return { ...port, dataType: structuredInput(target, edge2.targetPort) ?? port.dataType };
-  return port;
-}
-function canConnect(connection) {
-  const { source, target, kind, targetPort, sourceItemKey } = connection;
-  if (!source || !target) return { ok: false, reason: "flow_missing_endpoint" };
-  if (kind === "event") {
-    if (!connectionPort(source, "event", "out", connection.sourcePort) || !connectionPort(target, "event", "in", targetPort) || target.kind !== "agent" && !isContainer(target) && !["flowspace/notice", "flowspace/parse", "flowspace/condition", "flowspace/code", "flowspace/ai-judge", "flowspace/human-choice"].includes(target.flowType ?? ""))
-      return { ok: false, reason: "flow_evt_target" };
-    if (connection.event?.mode === "continuous" && (target.kind === "agent" || target.flowType === "flowspace/ai-judge" || descriptorOf(target.flowType)?.capabilities.callsModel || target.config?.mode === "ai"))
-      return { ok: false, reason: "flow_evt_model" };
-    return { ok: true };
+async function emitDownstreamTokens(runtime, armDelay, run, step, sourceNode, sessionId, seq, output, planGateActive, forwarded, omit) {
+  const outgoing = activeEdges(run.graph.edges).filter(
+    (edge2) => edge2.source === sourceNode.id
+  );
+  if (planGateActive && outgoing.length) {
+    addNoteOnce(
+      run,
+      `${sourceNode.title}\uFF1APlan \u6A21\u5F0F\u5C1A\u672A\u9000\u51FA\u8BA1\u5212\u6001\uFF0C\u5DF2\u6682\u505C\u81EA\u52A8\u63A5\u7EED\u7B49\u5F85\u786E\u8BA4\u8BA1\u5212`
+    );
   }
-  if ((connection.permission || connection.ask) && (kind !== "reference" || !isContainer(source) || target.kind !== "agent" || connection.snapshotContent))
-    return { ok: false, reason: "flow_invalid_permission" };
-  if (kind === "continuation" && isContainer(target) && connection.mode && connection.mode !== "conclusion")
-    return { ok: false, reason: "flow_invalid_delivery" };
-  if (connection.delivery && (kind !== "continuation" || !isContainer(target)))
-    return { ok: false, reason: "flow_invalid_delivery" };
-  if (source.kind === "role" || target.kind === "role") return { ok: false, reason: "flow_staff_only" };
-  if (sourceItemKey !== void 0 && (kind !== "reference" || source.kind !== "board" || !findBoardCard(source.columns ?? [], sourceItemKey))) return { ok: false, reason: "flow_invalid_board_card" };
-  const output = connectionOutput(source, target, connection);
-  const input = connectionPort(target, kind, "in", targetPort);
-  if (!output) return { ok: false, reason: "flow_invalid_output" };
-  if (!input) return { ok: false, reason: "flow_invalid_input" };
-  if (connection.mode === "fork" && (source.kind === "flow" || target.kind !== "agent" || target.sessionId || connection.edges?.some((edge2) => edge2.id !== connection.edgeId && edge2.target === target.id && edge2.mode === "fork")))
-    return { ok: false, reason: "flow_invalid_fork" };
-  if (output.dataType !== input.dataType) {
-    if (kind === "reference") return { ok: true, convert: "text" };
-    if (input.dataType !== "text") return { ok: false, reason: "flow_type_mismatch" };
-  }
-  return { ok: true };
-}
-
-// packages/flowspace/src/core/emission.ts
-function emissionTargets(run, sourceId) {
-  if (!run.graph.nodes.some((node2) => node2.id === sourceId && node2.kind === "agent")) return [];
-  const targets = [];
-  for (const edge2 of run.graph.edges) {
-    if (edge2.source !== sourceId || edge2.kind !== "continuation" || edge2.trigger === "off") continue;
-    const node2 = run.graph.nodes.find((candidate) => candidate.id === edge2.target);
-    if (!node2 || node2.participation === "paused") continue;
-    const type = structuredInput(node2, edge2.targetPort);
-    if (type) targets.push({ edge: edge2, node: node2, type });
-  }
-  return targets;
-}
-function checkEmissionValues(targets, values) {
-  if (targets.some((target) => target.type === "record") && values.some((value) => value === null || typeof value !== "object" || Array.isArray(value))) {
-    throw new Error("\u8BB0\u5F55\u5165\u53E3\u9700\u8981\u6BCF\u4E2A\u6761\u76EE\u90FD\u662F JSON \u5BF9\u8C61");
-  }
-}
-function parseEmission(text) {
-  const { blocks, outsideLines } = parseMarkdownFences(text);
-  for (const block of blocks) {
-    if (!block.closed || !/^(?:json)?$/i.test(block.language)) continue;
+  for (const edge2 of outgoing) {
+    if (omit?.has(edge2.id)) continue;
+    const target = run.graph.nodes.find((node2) => node2.id === edge2.target);
+    if (!target || target.participation === "paused" || !isExecutable(target) && !isContainer(target)) {
+      continue;
+    }
+    const selected = (edge2.sourcePort ?? "out") === (step.route ?? "out");
+    const fires = step.state !== "skipped" && edgeFires(run, edge2, step, selected);
     try {
-      const value = JSON.parse(block.code);
-      if (Array.isArray(value)) return value;
-      if (value && typeof value === "object") return [value];
-    } catch {
+      const mode2 = target.participation === "bypassed" && edge2.mode === "fork" ? "conclusion" : edge2.mode;
+      const source = fires ? forwarded ?? await runtime.capture({ ...sourceNode, sessionId }, mode2, seq, output) : void 0;
+      pushToken(run, edge2, step, target, source, planGateActive, armDelay);
+    } catch (error) {
+      run.notes.push(`${sourceNode.title} \u2192 ${target.title}: ${String(error)}`);
+      run.state = "error";
     }
   }
-  const items = [];
-  for (const line of outsideLines) {
-    const item = /^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$/.exec(line)?.[1].trim();
-    if (item) items.push(item);
+}
+function forwardThroughBypass(run, node2, token, step, cycleEdges, armDelay) {
+  addNoteOnce(run, `${node2.title}\uFF1A\u5DF2\u65C1\u8DEF\u900F\u4F20\u4E0A\u6E38\u4E0A\u4E0B\u6587`);
+  for (const edge2 of activeEdges(run.graph.edges).filter(
+    (candidate) => candidate.source === node2.id
+  )) {
+    const target = run.graph.nodes.find((entry) => entry.id === edge2.target);
+    if (!target || target.participation === "paused" || !isExecutable(target)) {
+      continue;
+    }
+    const fires = !token.skip && edgeFires(run, edge2, step, true);
+    if (cycleEdges.has(edge2.id) && run.tokens.some(
+      (seen) => seen.edgeId === edge2.id && seen.stepId === step.id && Boolean(seen.skip) === !fires
+    )) {
+      continue;
+    }
+    pushToken(
+      run,
+      edge2,
+      step,
+      target,
+      fires ? token.source : void 0,
+      false,
+      armDelay,
+      token
+    );
   }
-  if (items.length) return items;
-  throw new Error("\u672A\u6536\u5230 flow_emit \u8F93\u51FA\uFF0C\u7ED3\u8BBA\u4E2D\u4E5F\u6CA1\u6709\u53EF\u7528\u7684 Markdown \u5217\u8868\u6216 JSON \u4EE3\u7801\u5757");
+}
+function hasDurableWait(run) {
+  return !!run.pendingEvents?.length || !!run.fanouts?.some(
+    (batch) => !batch.mergeStepId || batch.lanes.some(
+      (lane) => lane.state === "queued" || lane.state === "running"
+    )
+  ) || run.steps.some((step) => step.state === "awaiting") || run.tokens.some(
+    (token) => !token.consumed && !token.dismissed && token.delayUntil !== void 0
+  );
+}
+function settleRun(run) {
+  for (const step of run.steps) {
+    if (step.state === "completed" && step.route === "error" && step.error) {
+      step.state = "error";
+    }
+  }
+  if (["paused", "cancelled", "interrupted"].includes(run.state)) return;
+  if (run.steps.some((s) => s.state === "awaiting")) {
+    run.state = "waiting";
+  } else if (run.steps.some(isActiveStep)) {
+    run.state = "running";
+  } else if (run.tokens.some(
+    (t) => !t.skip && !t.consumed && !t.dismissed && !t.ready
+  )) {
+    run.state = "waiting";
+  } else if (run.pendingEvents?.length || run.fanouts?.some(
+    (batch) => batch.lanes.some((lane) => lane.state === "queued")
+  )) {
+    run.state = "waiting";
+  } else if (run.steps.some((step) => {
+    if (step.emission?.reminderStepId) return false;
+    if (step.itemKey && run.fanouts?.some(
+      (batch) => batch.id === step.fanoutBatchId && batch.mergeStepId && batch.lanes.some(
+        (lane) => lane.item.key === step.itemKey && lane.adopted === false
+      )
+    )) {
+      return false;
+    }
+    if (step.state === "error" && step.route === "error") {
+      return !run.tokens.some(
+        (token) => token.stepId === step.id && !token.skip
+      );
+    }
+    return ["error", "aborted", "interrupted"].includes(step.state);
+  }) || run.state === "error") {
+    run.state = "error";
+  } else if (run.tokens.some((t) => !t.skip && !t.consumed && !t.dismissed)) {
+    run.state = "error";
+    addNoteOnce(
+      run,
+      "\u63A5\u7EED\u65E0\u6CD5\u6C47\u5408\uFF1A\u6709\u5206\u652F\u88AB\u8DF3\u8FC7\u6216\u672A\u4EA7\u751F\u672C\u8F6E\u7ED3\u679C\u3002\u53EF\u4ECE\u76EE\u6807\u8282\u70B9\u624B\u52A8\u7EE7\u7EED\u3002"
+    );
+  } else {
+    run.state = "completed";
+  }
+}
+
+// packages/flowspace/src/core/emissionController.ts
+var EmissionController = class {
+  constructor(host) {
+    this.host = host;
+  }
+  owner(sessionId) {
+    const owner = this.host.activeSessionStep(sessionId);
+    if (!owner || owner.step.emission?.closed) return;
+    const targets = emissionTargets(owner.run, owner.step.nodeId);
+    if (targets.length) return { ...owner, targets };
+  }
+  canEmit(sessionId) {
+    return !this.host.isDisposed() && !!this.owner(sessionId);
+  }
+  emissionState(run, step) {
+    return step.emission ?? {
+      items: [],
+      calls: [],
+      total: 0,
+      limit: run.listLimit ?? DEFAULT_LIST_LIMIT,
+      closed: false
+    };
+  }
+  async emissionSnapshot(run, step, content) {
+    const node2 = run.graph.nodes.find((entry) => entry.id === step.nodeId);
+    let source = {
+      ...snapshotWithContent(node2, content),
+      kind: "conclusion",
+      sourceSessionId: step.sessionId,
+      seq: step.endSeq
+    };
+    if (this.host.runtime.hydrateContent && (content.spill || content.items?.some((item) => item.spill))) {
+      source = await this.host.runtime.hydrateContent(source);
+      source = { ...source, text: textOfContent(source.content) };
+    }
+    return this.host.runtime.freezeContent ? this.host.runtime.freezeContent(
+      source,
+      step.emission?.limit ?? run.listLimit,
+      step.sessionId
+    ) : source;
+  }
+  async emissionDeliveries(run, step, targets, list) {
+    const items = list.content.items;
+    const records = [];
+    if (targets.some((target) => target.type === "record")) {
+      for (const item of items) {
+        const content = item.spill ? { dataType: "record", spill: item.spill } : { dataType: "record", value: item.value };
+        records.push(await this.emissionSnapshot(run, step, content));
+      }
+    }
+    return targets.flatMap(
+      ({ edge: edge2, node: node2, type }) => (type === "list" ? [list] : records.length ? records : [void 0]).map(
+        (source) => ({ edge: edge2, node: node2, source })
+      )
+    );
+  }
+  pushEmissionDeliveries(run, step, deliveries, planGate) {
+    for (const { edge: edge2, node: node2, source } of deliveries) {
+      pushToken(
+        run,
+        edge2,
+        step,
+        node2,
+        edgeFires(run, edge2, step, true) ? source : void 0,
+        planGate,
+        this.host.armDelay,
+        {
+          streamFrom: edge2.emitMode === "stream" ? step.id : step.streamFrom,
+          fanoutBatchId: step.fanoutBatchId
+        }
+      );
+    }
+  }
+  async admitEmit(owner, sessionId, callId, values, signal) {
+    signal.throwIfAborted();
+    if (this.host.isDisposed() || !owner || this.owner(sessionId)?.step !== owner.step) {
+      throw new Error("\u5F53\u524D\u539F\u751F\u56DE\u5408\u6CA1\u6709\u53EF\u63A5\u6536\u7ED3\u6784\u5316\u5185\u5BB9\u7684\u6B65\u9AA4");
+    }
+    const { run, step, targets } = owner;
+    const state = this.emissionState(run, step);
+    const previous = state.calls.find((call) => call.id === callId);
+    if (previous) {
+      return { accepted: previous.accepted, total: previous.total };
+    }
+    checkEmissionValues(targets, values);
+    const content = contentList(
+      values,
+      state.limit - state.items.length,
+      [],
+      state.items.map((item) => item.key)
+    );
+    const batch = await this.emissionSnapshot(run, step, content);
+    const items = batch.content.items;
+    const streamTargets = targets.filter(
+      (target) => target.edge.emitMode === "stream" && (items.length || !state.calls.length && !values.length && target.type === "list")
+    );
+    const deliveries = await this.emissionDeliveries(
+      run,
+      step,
+      streamTargets,
+      batch
+    );
+    const planGate = Boolean(
+      await this.host.runtime.isPlanModeActive?.(sessionId)
+    );
+    signal.throwIfAborted();
+    const receipt = {
+      accepted: items.length,
+      total: state.total + values.length
+    };
+    step.emission = {
+      ...state,
+      items: [...state.items, ...items],
+      total: receipt.total,
+      calls: [...state.calls, { id: callId, ...receipt }]
+    };
+    this.pushEmissionDeliveries(run, step, deliveries, planGate);
+    await this.host.store.changed();
+    if (deliveries.length) {
+      await this.host.advance(run);
+      this.host.settle(run);
+      await this.host.store.changed();
+    }
+    return receipt;
+  }
+  async closeEmission(run, step, targets, planGate) {
+    const state = this.emissionState(run, step);
+    if (state.closed) return;
+    let items = state.items;
+    let total = state.total;
+    try {
+      if (!state.calls.length) {
+        const values = parseEmission(step.output ?? "");
+        checkEmissionValues(targets, values);
+        items = contentList(values, state.limit).items;
+        total = values.length;
+      }
+    } catch (error) {
+      step.emission = { ...state, closed: true, missing: true };
+      step.state = "error";
+      step.error = error instanceof Error ? error.message : String(error);
+      addNoteOnce(run, step.error);
+      return;
+    }
+    const endTargets = targets.filter(
+      (target) => target.edge.emitMode !== "stream" || !state.calls.length || !items.length && target.type === "record"
+    );
+    if (endTargets.length) {
+      const content = {
+        dataType: "list",
+        items,
+        ...total > items.length ? { originalCount: total } : {}
+      };
+      const list = await this.emissionSnapshot(run, step, content);
+      const deliveries = await this.emissionDeliveries(
+        run,
+        step,
+        endTargets,
+        list
+      );
+      this.pushEmissionDeliveries(run, step, deliveries, planGate);
+      items = list.content.items;
+    }
+    step.emission = { ...state, items, total, closed: true };
+  }
+  async deliverAgentResult(run, step, node2, planGate) {
+    const targets = emissionTargets(run, step.nodeId);
+    const omit = new Set(targets.map((target) => target.edge.id));
+    if (!step.reminderFor) {
+      for (const token of run.tokens) {
+        if (token.stepId === step.id) omit.add(token.edgeId);
+      }
+      await emitDownstreamTokens(
+        this.host.runtime,
+        this.host.armDelay,
+        run,
+        step,
+        node2,
+        step.sessionId,
+        step.endSeq,
+        step.output ?? "",
+        planGate,
+        void 0,
+        omit
+      );
+    }
+    if (targets.length) {
+      try {
+        await this.closeEmission(run, step, targets, planGate);
+      } catch (error) {
+        step.state = "error";
+        step.error = String(error);
+        addNoteOnce(run, step.error);
+      }
+    }
+  }
+};
+
+// packages/flowspace/src/core/eventRouter.ts
+var EventRouter = class {
+  constructor(host) {
+    this.host = host;
+  }
+  async recordStatus(run, step, kind, summary, reason, seq) {
+    const edges = run.graph.edges.filter(
+      (edge2) => edge2.kind === "event" && edge2.source === step.nodeId
+    );
+    if (!edges.length && ["tool", "output", "usage"].includes(kind)) return;
+    const event = {
+      id: uid(),
+      nodeId: step.nodeId,
+      stepId: step.id,
+      at: Date.now(),
+      round: step.iteration,
+      kind,
+      summary: summary?.slice(0, 512),
+      reason,
+      sessionId: step.sessionId,
+      seq: seq ?? step.endSeq,
+      telemetry: step.telemetry && { ...step.telemetry }
+    };
+    (run.events ??= []).push(event);
+    for (const edge2 of edges) {
+      const policy = edge2.event;
+      const mode2 = policy?.mode ?? "end";
+      if (edge2.trigger === "off" || mode2 === "end" && !["done", "error"].includes(kind) || mode2 === "change" && ["output", "usage", "tool"].includes(kind) || mode2 === "continuous" && !["output", "usage", "tool"].includes(kind) || !(policy?.kinds ?? ["done", "error"]).includes(kind) || policy?.reasons?.length && (!reason || !policy.reasons.includes(reason))) {
+        continue;
+      }
+      const prior = run.tokens.filter(
+        (token) => token.edgeId === edge2.id && !token.skip
+      );
+      if (prior.length >= (policy?.maxTimes ?? Infinity)) continue;
+      const dueAt = (prior.at(-1)?.createdAt ?? 0) + (policy?.cooldownMs ?? 0);
+      const pending2 = run.pendingEvents?.find(
+        (batch) => batch.edgeId === edge2.id && batch.event.kind === kind && batch.event.stepId === step.id
+      );
+      if (mode2 === "continuous" && (pending2 || dueAt > event.at)) {
+        const batch = pending2 ?? {
+          edgeId: edge2.id,
+          event,
+          content: "",
+          dueAt
+        };
+        if (!pending2) (run.pendingEvents ??= []).push(batch);
+        batch.event = event;
+        batch.content += (batch.content && kind !== "output" ? "\n" : "") + (summary ?? "");
+        this.armEvent(run, batch);
+      } else if (dueAt <= event.at) {
+        await this.sendEvent(run, edge2, event, summary);
+      }
+    }
+  }
+  async sendEvent(run, edge2, event, content) {
+    const origin = run.graph.nodes.find((node2) => node2.id === event.nodeId);
+    const target = run.graph.nodes.find((node2) => node2.id === edge2.target);
+    const step = run.steps.find((s) => s.id === event.stepId);
+    if (!origin || !step || !target || target.participation === "paused") return;
+    const value = JSON.parse(
+      JSON.stringify({
+        ...event,
+        ...edge2.event?.full || edge2.event?.mode === "continuous" ? { content } : {}
+      })
+    );
+    const snapshot2 = {
+      ...snapshotWithContent(origin, { dataType: "record", value }),
+      seq: event.seq,
+      sourceSessionId: event.sessionId
+    };
+    const frozen = await this.host.runtime.freezeContent?.(
+      snapshot2,
+      run.listLimit,
+      event.sessionId
+    ) ?? snapshot2;
+    pushToken(run, edge2, step, target, frozen, false, this.host.armDelay);
+  }
+  armEvent(run, batch) {
+    const timer = `event:${run.id}:${batch.edgeId}:${batch.event.stepId}:${batch.event.kind}`;
+    this.host.schedule(timer, batch.dueAt, async () => {
+      if (!run.pendingEvents?.includes(batch) || ["cancelled", "interrupted", "error"].includes(run.state)) {
+        return;
+      }
+      const edge2 = run.graph.edges.find((e) => e.id === batch.edgeId);
+      const prior = run.tokens.filter(
+        (token) => token.edgeId === batch.edgeId && !token.skip
+      );
+      const dueAt = (prior.at(-1)?.createdAt ?? 0) + (edge2?.event?.cooldownMs ?? 0);
+      if (dueAt > Date.now()) {
+        batch.dueAt = dueAt;
+        this.armEvent(run, batch);
+        return;
+      }
+      run.pendingEvents = run.pendingEvents.filter((other) => other !== batch);
+      if (edge2 && prior.length < (edge2.event?.maxTimes ?? Infinity)) {
+        await this.sendEvent(run, edge2, batch.event, batch.content);
+      }
+      await this.host.advance(run);
+      this.host.settle(run);
+      await this.host.store.changed();
+    });
+  }
+  async deliverEvents(run, budgetOnly = false) {
+    const edges = new Map(
+      run.graph.edges.filter((edge2) => edge2.kind === "event").map((edge2) => [edge2.id, edge2])
+    );
+    for (const token of run.tokens) {
+      const edge2 = edges.get(token.edgeId);
+      if (!edge2 || token.consumed || !token.ready || token.dismissed) continue;
+      if (budgetOnly && (!edge2.event?.kinds.includes("budget") || run.graph.nodes.find((node2) => node2.id === edge2.target)?.flowType !== "flowspace/notice")) {
+        continue;
+      }
+      consumeToken(token);
+      if (!token.skip) {
+        await this.host.enqueueEventTarget(run, edge2.target, [token.source], {
+          upstreamStepIds: [token.stepId],
+          sourcePorts: [edge2.targetPort ?? "in"]
+        });
+      }
+    }
+  }
+};
+function isStreamingOutputObserved(owner) {
+  return !!owner?.run.graph.edges.some(
+    (edge2) => edge2.kind === "event" && edge2.source === owner.step.nodeId && edge2.event?.mode === "continuous" && edge2.event.kinds.includes("output")
+  );
+}
+function isNativeEventSubscribed(owner, kind) {
+  return !!owner?.run.graph.edges.some(
+    (edge2) => edge2.kind === "event" && edge2.source === owner.step.nodeId && edge2.event?.mode === "continuous" && edge2.event.kinds.includes(kind)
+  );
 }
 
 // packages/flowspace/src/core/geometry.ts
@@ -3852,177 +4451,96 @@ function bezier(x1, y1, x2, y2) {
 }
 var easeView = bezier(0.32, 0.72, 0, 1);
 
-// packages/flowspace/src/core/nodes/data/index.ts
-var asText = (value) => typeof value === "string" ? value : JSON.stringify(value);
-function itemValue(item) {
-  if (item.value === void 0) throw new Error("\u8BF7\u4ECE spill \u8BFB\u53D6\u5B8C\u6574\u6761\u76EE\u540E\u518D\u6267\u884C\u53D8\u6362");
-  return item.value;
+// packages/flowspace/src/core/nodeFields.ts
+var EPHEMERAL_UI_NODE_FIELDS = ["window", "nudge"];
+var SESSION_IDENTITY_NODE_FIELDS = [
+  "sessionId",
+  "lastSubmittedTask"
+];
+var PORTABLE_STRIP_NODE_FIELDS = [
+  ...SESSION_IDENTITY_NODE_FIELDS,
+  ...EPHEMERAL_UI_NODE_FIELDS,
+  "workspaceId",
+  "cwd",
+  "branch",
+  "worktreePath",
+  "changesSessionId",
+  "changesSeq",
+  "changesTurn",
+  "terminalSessionId",
+  "terminalId"
+];
+var PRESERVED_BOUND_NODE_FIELDS = [
+  "sessionId",
+  "cwd",
+  "workspaceId",
+  "branch",
+  "worktreePath",
+  "lastSubmittedTask"
+];
+var FANOUT_OVERRIDE_NODE_FIELDS = [
+  "title",
+  "task",
+  "draft",
+  "continuationPrompt",
+  "text",
+  "config",
+  "configVersion",
+  "breakpoint",
+  "budget",
+  "canvasToolsOnly",
+  "laneBindings",
+  "lanePersona",
+  "agentPreset",
+  "columns",
+  "boardSettings",
+  "selectedItems",
+  "items",
+  "roleLabel",
+  "planMode",
+  "teamRef",
+  "teamConfig",
+  "teamLayout",
+  "roleRef",
+  "teamModel",
+  "maxInstances",
+  "slotId",
+  "nativeTrigger",
+  "participation",
+  "rerun"
+];
+var FANOUT_OVERRIDE_EDGE_FIELDS = [
+  "kind",
+  "source",
+  "target",
+  "sourcePort",
+  "targetPort",
+  "mode",
+  "trigger",
+  "emitMode",
+  "always",
+  "maxRounds",
+  "logic",
+  "sourceItemKey",
+  "permission",
+  "ask",
+  "delivery",
+  "event"
+];
+function stripFields(target, fields) {
+  for (const field of fields) delete target[field];
+  return target;
 }
-function sourceValue(source) {
-  const content = contentOf(source);
-  if (content.spill) throw new Error("\u8BF7\u4ECE spill \u8BFB\u53D6\u5B8C\u6574\u5185\u5BB9\u540E\u518D\u6267\u884C\u53D8\u6362");
-  if (content.items) return content.items.map(itemValue);
-  return content.value === void 0 ? source.text : content.value;
+function stripForFreshInstance(node2) {
+  stripFields(node2, SESSION_IDENTITY_NODE_FIELDS);
+  stripFields(node2, EPHEMERAL_UI_NODE_FIELDS);
+  return node2;
 }
-function dataText(inputs) {
-  return inputs.map(({ source }) => {
-    if (source.textSpill) throw new Error("\u8BF7\u4ECE spill \u8BFB\u53D6\u5B8C\u6574\u6587\u672C\u540E\u518D\u6267\u884C\u53D8\u6362");
-    return source.text || (source.content ? textOfContent(source.content) : "");
-  }).join("\n");
-}
-function concatenate(parts, limit) {
-  const retained = [];
-  let total = 0;
-  for (const part of parts) {
-    const entries = part.items ?? [];
-    total += part.originalCount ?? entries.length;
-    for (const entry of entries.slice(0, limit - retained.length)) retained.push(entry);
-  }
-  const originalKeys = new Set(retained.map((item) => item.key));
-  const seen = /* @__PURE__ */ new Set(), occurrences = /* @__PURE__ */ new Map();
-  const items = retained.map((item) => {
-    if (!seen.has(item.key)) {
-      seen.add(item.key);
-      return item;
+function copyBoundNodeFields(target, prior) {
+  for (const field of PRESERVED_BOUND_NODE_FIELDS) {
+    if (prior[field] !== void 0) {
+      target[field] = prior[field];
     }
-    let number = occurrences.get(item.key) ?? 1;
-    let key;
-    do {
-      key = "repeat:" + JSON.stringify([item.key, ++number]);
-    } while (originalKeys.has(key) || seen.has(key));
-    occurrences.set(item.key, number);
-    seen.add(key);
-    return { ...item, key };
-  });
-  return { dataType: "list", items, ...total > items.length ? { originalCount: total } : {} };
-}
-function dataItems(inputs, limit = DEFAULT_LIST_LIMIT) {
-  const parts = inputs.map(({ source }) => {
-    const content = contentOf(source);
-    if (content.dataType === "list") return content;
-    if (content.spill) return { dataType: "list", items: [{ key: content.spill.locator, spill: content.spill }] };
-    if (content.dataType === "file" && Array.isArray(content.value)) {
-      const result = contentList(content.value, limit, content.value.map((value) => typeof value === "string" ? value : void 0));
-      if (content.originalCount !== void 0) result.originalCount = content.originalCount;
-      return result;
-    }
-    if (content.value === void 0 && content.dataType === "signal") return { dataType: "list", items: [] };
-    return contentList([sourceValue(source)], limit);
-  });
-  return concatenate(parts, limit);
-}
-function formatTemplate(template2, fields, item) {
-  const names = [...fields.keys()].sort((a, b) => b.length - a.length);
-  return template2.replace(/\{\{([^{}]+)\}\}/g, (_token, field) => {
-    const key = field.trim();
-    if (fields.has(key)) return asText(fields.get(key));
-    const name = names.find((name2) => key.startsWith(name2 + ".") || key.startsWith(name2 + "["));
-    const root = name === void 0 ? item : fields.get(name);
-    if (root === void 0) return "";
-    return pathValues(root, name === void 0 ? key : key.slice(name.length)).map(asText).join(", ");
-  });
-}
-function formatItem(template2, item, index) {
-  const value = itemValue(item);
-  return formatTemplate(template2, /* @__PURE__ */ new Map([
-    ["item", value],
-    ["key", item.key],
-    ["index", index],
-    ["n", index + 1]
-  ]), value);
-}
-function namedText(config, inputs) {
-  const values = /* @__PURE__ */ new Map();
-  for (const input of inputs) {
-    const prior = values.get(input.port);
-    if (prior) prior.push(sourceValue(input.source));
-    else values.set(input.port, [sourceValue(input.source)]);
-  }
-  const fields = /* @__PURE__ */ new Map();
-  for (const name of config.inputs) {
-    const input = values.get(name) ?? [];
-    fields.set(name, input.length === 1 ? input[0] : input.length ? input : "");
-  }
-  return formatTemplate(String(config.template), fields);
-}
-function ruleMatches(config, item) {
-  const selection = config.condition;
-  return conditionRoute({ branches: [{ ...selection, id: "pass", label: "pass" }] }, asText(itemValue(item))) === "pass";
-}
-function compare(a, b) {
-  if (a === b) return 0;
-  if (typeof a === "number" && typeof b === "number") return a - b;
-  if (typeof a === "boolean" && typeof b === "boolean") return Number(a) - Number(b);
-  const ranks = ["boolean", "number", "string", "object"];
-  const rank = ranks.indexOf(typeof a) - ranks.indexOf(typeof b);
-  if (rank) return rank;
-  const left = typeof a === "string" ? a : canonicalJson(a);
-  const right = typeof b === "string" ? b : canonicalJson(b);
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-function sorted(list, config) {
-  const entries = list.items.map((item) => ({ item, key: config.mode === "rule" ? Number(!ruleMatches(config, item)) : pathValues(itemValue(item), String(config.path))[0] }));
-  entries.sort(({ key: a }, { key: b }) => {
-    if (a == null || b == null) return Number(a == null) - Number(b == null);
-    return (config.order === "desc" ? -1 : 1) * compare(a, b);
-  });
-  return { ...list, items: entries.map((entry) => entry.item) };
-}
-function normalizeText(text) {
-  return text.normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
-}
-function transformData(node2, inputs, limit = DEFAULT_LIST_LIMIT, previous) {
-  const config = node2.config ?? {};
-  if (dataMode(node2) !== "rule") throw new Error("\u4EE3\u7801\u6216 AI \u53D8\u6362\u9700\u8981\u7531 Host \u8BD5\u8FD0\u884C");
-  switch (node2.flowType) {
-    case "flowspace/constant":
-      return config.mode === "list" ? contentList(constantValues(String(config.value)), limit) : { dataType: "text", value: config.value };
-    case "flowspace/template":
-      return { dataType: "text", value: namedText(config, inputs) };
-    case "flowspace/split":
-      return contentList(splitValues(config, dataText(inputs)), limit);
-    case "flowspace/extract":
-      if (config.mode === "json-path" && inputs.length === 1 && inputs[0].source.content && inputs[0].source.content.dataType !== "text") {
-        return contentList(pathValues(sourceValue(inputs[0].source), String(config.path)), limit);
-      }
-      return contentList(extractValues(config, dataText(inputs)), limit);
-    case "flowspace/parse":
-      return contentList(parseValues(config, dataText(inputs)), limit);
-  }
-  const list = dataItems(inputs, limit);
-  const items = list.items;
-  switch (node2.flowType) {
-    case "flowspace/join": {
-      const lines2 = items.map((item, index) => {
-        if (config.mode === "template") return formatItem(String(config.template), item, index);
-        const text = asText(itemValue(item));
-        return config.mode === "numbered" ? `${index + 1}. ${text}` : text;
-      });
-      return {
-        dataType: "text",
-        value: lines2.join(config.mode === "numbered" ? "\n" : String(config.delimiter)),
-        ...list.originalCount === void 0 ? {} : { originalCount: list.originalCount }
-      };
-    }
-    case "flowspace/map":
-      return { ...list, items: items.map((item, index) => ({ key: item.key, value: formatItem(String(config.template), item, index) })) };
-    case "flowspace/filter":
-      return { ...list, items: items.filter((item) => ruleMatches(config, item)) };
-    case "flowspace/sort":
-      return sorted(list, config);
-    case "flowspace/dedupe": {
-      const seen = /* @__PURE__ */ new Set();
-      return { ...list, items: items.filter((item) => {
-        const key = canonicalJson(itemValue(item), config.mode === "normalized" ? normalizeText : void 0);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      }) };
-    }
-    case "flowspace/accumulate":
-      return previous ? concatenate([previous, list], limit) : list;
-    default:
-      throw new Error(`\u672A\u77E5\u7684\u6570\u636E\u53D8\u6362\uFF1A${node2.flowType}`);
   }
 }
 
@@ -4515,6 +5033,435 @@ function markFanoutOverrides(previous, next) {
   }
 }
 
+// packages/flowspace/src/core/graphAdvance.ts
+async function collectCompletedUpstreamSources(runtime, run, targetId) {
+  const out = [];
+  const links = activeEdges(run.graph.edges);
+  const seen = /* @__PURE__ */ new Set([targetId]);
+  const walkBack = async (curId, fallbackMode) => {
+    for (const e of links) {
+      if (e.target !== curId || run.roots.includes(e.source)) continue;
+      const src = run.graph.nodes.find((n) => n.id === e.source);
+      if (!src || src.participation === "paused" || seen.has(src.id)) continue;
+      seen.add(src.id);
+      if (src.participation === "bypassed") {
+        await walkBack(src.id, e.mode === "fork" ? "conclusion" : e.mode);
+        continue;
+      }
+      if (src.sessionId) {
+        try {
+          const mode2 = e.mode === "fork" ? fallbackMode : e.mode;
+          const snap = await runtime.capture(src, mode2);
+          if (snap.text.trim()) out.push(snap);
+        } catch {
+        }
+      }
+    }
+  };
+  await walkBack(targetId, "conclusion");
+  return out;
+}
+async function deliverContainers(store, run) {
+  const deliveries = new Map(
+    run.graph.edges.filter(
+      (edge2) => edge2.kind !== "reference" && run.graph.nodes.some(
+        (node2) => node2.id === edge2.target && isContainer(node2)
+      )
+    ).map((edge2) => [edge2.id, edge2])
+  );
+  for (const token of run.tokens) {
+    const edge2 = deliveries.get(token.edgeId);
+    if (!edge2 || !token.ready || token.dismissed || token.consumed) continue;
+    if (!token.skip) {
+      try {
+        await store.deliver?.(run, edge2, token);
+      } catch (error) {
+        run.state = "error";
+        addNoteOnce(run, `\u6295\u9012\u5931\u8D25\uFF1A${String(error)}`);
+      }
+    }
+    consumeToken(token);
+  }
+}
+async function advanceGraph(host, run) {
+  const nodes = new Map(run.graph.nodes.map((node2) => [node2.id, node2]));
+  const links = activeEdges(run.graph.edges).filter((edge2) => {
+    const source = nodes.get(edge2.source), target = nodes.get(edge2.target);
+    return source && target && (isExecutable(source) || source.flowType === triggerNode.flowType) && isExecutable(target) && !source.removed && !target.removed && !isFanoutMaster(run.graph, source) && !isFanoutMaster(run.graph, target) && !(edge2.generatedBy && target.flowType === "flowspace/merge-sort") && source.participation !== "paused" && target.participation !== "paused";
+  });
+  const edges = new Map(links.map((edge2) => [edge2.id, edge2]));
+  const { component, rank, cyclic } = graphOrder(
+    run.graph.nodes,
+    links,
+    run.roots
+  );
+  const bypassNodes = run.graph.nodes.filter(
+    (node2) => node2.participation === "bypassed"
+  );
+  const bypassLinks = links.filter(
+    (edge2) => nodes.get(edge2.source)?.participation === "bypassed" && nodes.get(edge2.target)?.participation === "bypassed"
+  );
+  const bypassOrder = graphOrder(bypassNodes, bypassLinks, []);
+  const bypassCycles = new Set(
+    bypassLinks.filter((edge2) => {
+      const group = bypassOrder.component.get(edge2.source);
+      return bypassOrder.cyclic.has(group) && group === bypassOrder.component.get(edge2.target);
+    }).map((edge2) => edge2.id)
+  );
+  const feedback = /* @__PURE__ */ new Set();
+  const limits = /* @__PURE__ */ new Map();
+  for (const edge2 of links) {
+    const group = component.get(edge2.source);
+    if (!cyclic.has(group) || group !== component.get(edge2.target)) continue;
+    limits.set(group, Math.min(limits.get(group) ?? Infinity, edge2.maxRounds));
+    if (rank.get(edge2.source) >= rank.get(edge2.target)) feedback.add(edge2.id);
+  }
+  let progressed;
+  do {
+    progressed = false;
+    const steps = new Map(run.steps.map((step) => [step.id, step]));
+    const frontier = run.steps.filter(
+      (s) => isActiveStep(s) || ["awaiting", "error", "interrupted", "aborted"].includes(s.state)
+    ).map((s) => s.nodeId);
+    const delivered = /* @__PURE__ */ new Set();
+    for (const token of run.tokens) {
+      const edge2 = edges.get(token.edgeId);
+      if (!edge2) continue;
+      delivered.add(edge2.id);
+      if (token.consumed || token.dismissed) continue;
+      if (token.skip && feedback.has(edge2.id)) {
+        consumeToken(token);
+        progressed = true;
+      } else {
+        frontier.push(edge2.target);
+      }
+    }
+    const producers = new Set(reachable([...new Set(frontier)], links));
+    for (const nodeId of run.participants) {
+      const node2 = nodes.get(nodeId);
+      if (!node2 || !isExecutable(node2) || node2.participation === "paused") {
+        continue;
+      }
+      const incoming = links.filter(
+        (edge2) => edge2.target === nodeId && (delivered.has(edge2.id) || producers.has(edge2.source))
+      );
+      if (!incoming.length) continue;
+      const pending2 = run.tokens.filter(
+        (token) => !token.consumed && !token.dismissed && edges.get(token.edgeId)?.target === nodeId
+      );
+      if (!pending2.length) continue;
+      if (node2.participation === "bypassed") {
+        for (const token of pending2) {
+          if (!token.ready) continue;
+          consumeToken(token);
+          if (!token.skip || !feedback.has(token.edgeId)) {
+            forwardThroughBypass(
+              run,
+              node2,
+              token,
+              steps.get(token.stepId),
+              bypassCycles,
+              host.armDelay
+            );
+          }
+          progressed = true;
+        }
+        continue;
+      }
+      const batchId = node2.generatedBy ? pending2[0]?.fanoutBatchId : void 0;
+      const count = run.steps.filter(
+        (step) => step.nodeId === nodeId && (!batchId || step.fanoutBatchId === batchId)
+      ).length;
+      const group = component.get(nodeId);
+      const limit = limits.get(group) ?? Infinity;
+      if (count >= limit) {
+        for (const token of pending2) {
+          if (token.skip || token.loopCapReached) continue;
+          token.loopCapReached = true;
+          token.ready = false;
+          delete token.readyAt;
+          addNoteOnce(
+            run,
+            `${node2.title}\uFF1A\u5DF2\u8FBE\u5230\u5FAA\u73AF\u4E0A\u9650\uFF08${limit} \u8F6E\uFF09\uFF0C\u53EF\u70B9\u51FB\u300C+1 \u8F6E\u300D\u7EE7\u7EED\u6216\u8DF3\u8FC7\u5B8C\u6210`
+          );
+        }
+      }
+      const chosen = [];
+      let missing = false;
+      for (const edge2 of incoming) {
+        const back = feedback.has(edge2.id);
+        if (back && count === 0) continue;
+        const internal = component.get(edge2.source) === group;
+        const candidates = run.tokens.filter((token2) => {
+          if (token2.edgeId !== edge2.id || token2.dismissed || batchId && token2.fanoutBatchId !== batchId) {
+            return false;
+          }
+          if (!internal) return true;
+          const origin = steps.get(token2.stepId);
+          if (component.get(origin.nodeId) !== group) return true;
+          const sourceFeedsBack = rank.get(origin.nodeId) >= rank.get(nodeId);
+          return origin.iteration === count + (sourceFeedsBack ? 0 : 1);
+        });
+        let token = candidates.find((t) => !t.consumed && (!back || !t.skip));
+        if (back && !token && candidates.some((t) => t.skip)) continue;
+        if (!token && !internal && cyclic.has(group)) token = candidates.at(-1);
+        if (!token?.ready) {
+          missing = true;
+          break;
+        }
+        chosen.push(token);
+      }
+      if (missing || !chosen.some((token) => !token.consumed)) continue;
+      const live = chosen.filter((token) => !token.skip);
+      const fires = live.some((token) => !token.consumed);
+      chosen.forEach(consumeToken);
+      progressed = true;
+      if (fires) {
+        await host.enqueue(
+          run,
+          nodeId,
+          live.map((token) => token.source),
+          true,
+          void 0,
+          {
+            ...node2.kind === "flow" ? {
+              sourcePorts: live.map(
+                (token) => edges.get(token.edgeId)?.targetPort ?? "in"
+              )
+            } : {},
+            fanoutBatchId: batchId,
+            streamFrom: live.find((token) => token.streamFrom)?.streamFrom,
+            upstreamStepIds: [...new Set(live.map((token) => token.stepId))]
+          }
+        );
+      } else {
+        const now = Date.now();
+        const step = {
+          id: uid(),
+          requestId: uid(),
+          nodeId,
+          iteration: count + 1,
+          state: "skipped",
+          sources: [],
+          task: "",
+          createdAt: now,
+          endedAt: now,
+          ...batchId ? {
+            fanoutBatchId: batchId,
+            fanoutId: node2.generatedBy,
+            itemKey: node2.itemKey
+          } : {}
+        };
+        run.steps.push(step);
+        steps.set(step.id, step);
+        const pair = node2.flowType === "flowspace/fanout" && fanoutPair(run.graph, node2.id);
+        if (pair) {
+          const merge = {
+            ...step,
+            id: uid(),
+            requestId: uid(),
+            nodeId: pair.merge.id,
+            fanoutId: node2.id
+          };
+          run.steps.push(merge);
+          await emitDownstreamTokens(
+            host.runtime,
+            host.armDelay,
+            run,
+            merge,
+            pair.merge,
+            void 0,
+            void 0,
+            "",
+            false
+          );
+        } else {
+          await emitDownstreamTokens(
+            host.runtime,
+            host.armDelay,
+            run,
+            step,
+            node2,
+            void 0,
+            void 0,
+            "",
+            false
+          );
+        }
+      }
+    }
+  } while (progressed && run.state !== "error");
+}
+function applyExtendLoop(run, request) {
+  const extra = Math.max(1, Math.trunc(request.extraRounds ?? 1));
+  const order = graphOrder(run.graph.nodes, run.graph.edges, run.roots);
+  const targetComps = /* @__PURE__ */ new Set();
+  if (request.edgeId) {
+    const edge2 = run.graph.edges.find((e) => e.id === request.edgeId);
+    const comp = edge2 ? order.component.get(edge2.target) : void 0;
+    if (comp !== void 0 && order.cyclic.has(comp)) targetComps.add(comp);
+  } else if (request.nodeId) {
+    const comp = order.component.get(request.nodeId);
+    if (comp !== void 0 && order.cyclic.has(comp)) targetComps.add(comp);
+  } else {
+    for (const t of run.tokens) {
+      if (!t.loopCapReached || t.consumed || t.dismissed) continue;
+      const edge2 = run.graph.edges.find((e) => e.id === t.edgeId);
+      const comp = edge2 ? order.component.get(edge2.target) : void 0;
+      if (comp !== void 0 && order.cyclic.has(comp)) targetComps.add(comp);
+    }
+  }
+  if (!targetComps.size) return false;
+  for (const edge2 of activeEdges(run.graph.edges)) {
+    const sc = order.component.get(edge2.source);
+    const tc = order.component.get(edge2.target);
+    if (sc !== void 0 && sc === tc && targetComps.has(sc)) {
+      edge2.maxRounds += extra;
+    }
+  }
+  for (const token of run.tokens) {
+    if (!token.loopCapReached || token.consumed || token.dismissed) continue;
+    const edge2 = run.graph.edges.find((e) => e.id === token.edgeId);
+    const comp = edge2 ? order.component.get(edge2.target) : void 0;
+    if (comp !== void 0 && targetComps.has(comp)) {
+      delete token.loopCapReached;
+      if (!token.boundary && !token.planGate && !token.needsRelease && token.delayUntil === void 0) {
+        token.ready = true;
+        markTokenReady(run, token);
+      }
+    }
+  }
+  if (run.state === "waiting") run.state = "running";
+  return true;
+}
+
+// packages/flowspace/src/core/humanGate.ts
+var HumanGateController = class {
+  constructor(host) {
+    this.host = host;
+  }
+  armHuman(run, step) {
+    const human2 = step.human;
+    if (human2?.deadline === void 0 || !human2.timeoutAction || human2.timeoutAction === "wait") {
+      return;
+    }
+    this.host.schedule(step.id, human2.deadline, async () => {
+      if (this.host.isDisposed() || step.state !== "awaiting" || ["cancelled", "interrupted"].includes(run.state)) {
+        return;
+      }
+      const route = human2.timeoutAction === "default" ? human2.defaultOption : human2.timeoutAction === "skip" ? "skip" : "timeout";
+      await this.resolveHuman(run, step, route, human2.timeoutAction === "skip");
+    });
+  }
+  humanSource(node2, step, values) {
+    if (node2.flowType === "flowspace/human-score") {
+      values = {
+        ...values,
+        reviewed: step.sources[0]?.content?.value ?? step.sources[0]?.text ?? ""
+      };
+    }
+    return snapshotWithContent(
+      node2,
+      node2.flowType === "flowspace/human-review" ? { dataType: "text", value: String(values.text ?? "") } : { dataType: "record", value: values }
+    );
+  }
+  async resolveHuman(run, step, route, skip = false) {
+    this.host.clearTimer(step.id);
+    const node2 = run.graph.nodes.find((n) => n.id === step.nodeId);
+    const source = route === "out" && step.human?.fields && step.human.initial ? this.humanSource(node2, step, step.human.initial) : await forwardInput(
+      node2,
+      step,
+      this.host.runtime.contextText?.bind(this.host.runtime)
+    );
+    await this.host.finishExecStep(
+      run,
+      step,
+      { route, source, output: route, verdict: { branch: route } },
+      skip
+    );
+  }
+  async answer(run, stepId, option, values) {
+    const step = run.steps.find((s) => s.id === stepId);
+    if (step?.state !== "awaiting" || !step.human) {
+      throw new Error("\u8BE5\u6B65\u9AA4\u6CA1\u6709\u7B49\u5F85\u56DE\u7B54\u7684\u95EE\u9898");
+    }
+    if (!step.human.options.includes(option)) {
+      throw new Error("\u65E0\u6548\u7684\u4EBA\u5DE5\u9009\u9879");
+    }
+    if (step.human.operation && option === "execute" && step.operation) {
+      for (const key of step.operation.missing) {
+        if (typeof values?.[key] !== "string" || !values[key].trim()) {
+          throw new Error(`\u8BF7\u586B\u5199 ${key}`);
+        }
+      }
+      for (const key of step.operation.missing) {
+        step.operation.values[key] = values[key];
+      }
+      step.operation.missing = [];
+      step.operation.approved = true;
+      delete step.human;
+      step.state = "running";
+      run.state = "running";
+      await this.host.store.changed();
+      this.host.execute(
+        run,
+        step,
+        run.graph.nodes.find((node2) => node2.id === step.nodeId)
+      );
+      return;
+    }
+    if (step.human.operation && option === "skip") {
+      await this.resolveHuman(run, step, "skip", true);
+      return;
+    }
+    if (step.human.operation && option === "retry" && step.operation?.sessionId) {
+      if (run.steps.some((entry) => entry.parameterRetryFor === step.id)) {
+        throw new Error("\u5DF2\u7ECF\u5411\u4E0A\u6E38\u8FFD\u95EE");
+      }
+      const prior = run.steps.find(
+        (entry) => step.upstreamStepIds?.includes(entry.id) && entry.sessionId === step.operation?.sessionId
+      );
+      if (!prior) throw new Error("\u65E0\u6CD5\u627E\u5230\u4E0A\u6E38\u4F1A\u8BDD");
+      const retry = {
+        id: uid(),
+        requestId: uid(),
+        nodeId: prior.nodeId,
+        sessionId: prior.sessionId,
+        task: "\u8BF7\u8C03\u7528 provide_flow_parameters \u8865\u9F50\u4E0A\u4E00\u8F6E\u672A\u63D0\u4F9B\u7684\u53C2\u6570\u3002\u64CD\u4F5C\u5C06\u7531 FlowSpace \u6267\u884C\u3002",
+        parameterRetryFor: step.id,
+        state: "queued",
+        iteration: prior.iteration,
+        sources: step.sources,
+        createdAt: Date.now(),
+        startedAt: Date.now()
+      };
+      step.human.options = step.human.options.filter((opt) => opt !== "retry");
+      run.steps.push(retry);
+      await this.host.store.changed();
+      await this.host.runtime.send(retry);
+      return;
+    }
+    if (step.human.fields && option === "skip") {
+      await this.resolveHuman(run, step, "skip", true);
+      return;
+    }
+    if (step.human.fields && option === "out") {
+      this.host.clearTimer(step.id);
+      const node2 = run.graph.nodes.find((n) => n.id === step.nodeId);
+      const answer = checkAnswers(step.human.fields, values ?? {});
+      const source = this.humanSource(node2, step, answer);
+      step.human.initial = answer;
+      await this.host.finishExecStep(run, step, {
+        route: "out",
+        source,
+        output: source.text
+      });
+      return;
+    }
+    await this.resolveHuman(run, step, option);
+  }
+};
+
 // packages/flowspace/src/core/generation.ts
 function stampGeneratedBatch(doc, beforeNodes, beforeEdges) {
   const nodes = doc.nodes.filter((node2) => node2.generatedBy && !beforeNodes.has(node2.id));
@@ -4830,59 +5777,61 @@ var FanoutExecution = class {
   }
 };
 
-// packages/flowspace/src/core/budget.ts
-function budgetUsage(steps, start, now) {
-  const active2 = steps.filter((step) => !!step.startedAt || step.state !== "queued" && step.state !== "awaiting");
-  return {
-    tokens: steps.reduce((total, step) => total + (step.telemetry?.inputTokens ?? 0) + (step.telemetry?.outputTokens ?? 0), 0),
-    seconds: Math.max(0, (now - start) / 1e3),
-    rounds: active2.length
-  };
+// packages/flowspace/src/core/team.ts
+var SLOT_ID = /^(?!lead$)[a-z][a-z0-9-]{0,31}$/;
+function staffedIds(nodes) {
+  return new Set(nodes.flatMap((node2) => node2.kind === "role" && node2.staffOf ? [node2.staffOf] : []));
 }
-function budgetHit(run, step, beforeDispatch, now) {
-  const limitForNode = run.graph.nodes.find((node2) => node2.id === step.nodeId)?.budget;
-  const sets = [
-    { key: "run", nodeId: void 0, limits: run.budget, steps: run.steps, start: run.createdAt },
-    {
-      key: step.nodeId,
-      nodeId: step.nodeId,
-      limits: limitForNode,
-      steps: run.steps.filter((entry) => entry.nodeId === step.nodeId),
-      start: step.startedAt ?? now
-    }
-  ];
-  for (const set of sets) {
-    if (!set.limits) continue;
-    const usage = budgetUsage(set.steps, set.start, now);
-    for (const dimension of ["tokens", "seconds", "rounds"]) {
-      const limit = set.limits[dimension];
-      const key = `${set.key}:${dimension}`;
-      const value = usage[dimension] + (beforeDispatch && dimension === "rounds" ? 1 : 0);
-      if (limit !== void 0 && value > limit && !run.budgetAcknowledged?.includes(key))
-        return { key, nodeId: set.nodeId, dimension, value, limit, at: now };
-    }
-  }
+var isTeamNode = (node2, staffed) => !!node2 && node2.kind === "agent" && (!!node2.teamRef || staffed.has(node2.id));
+function teamIdOf(node2, staffed) {
+  if (!node2 || !isTeamNode(node2, staffed)) return;
+  return node2.teamRef?.teamId ?? canvasTeamId(node2.id);
 }
-
-// packages/flowspace/src/core/schedulerTypes.ts
-var isActiveStep = (step) => step.state === "queued" || step.state === "running" || step.state === "settling";
+var canvasTeamId = (nodeId) => `canvas-${nodeId}`;
+function staffNodes(nodes, teamNodeId) {
+  return nodes.filter((node2) => node2.kind === "role" && node2.staffOf === teamNodeId).sort((a, b) => a.x - b.x || a.y - b.y || a.id.localeCompare(b.id));
+}
+function slotIdFor(title, taken) {
+  const base = title.normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^[^a-z]+/, "").replace(/-+$/, "").slice(0, 24) || "member";
+  let id = base;
+  for (let index = 2; taken.has(id) || !SLOT_ID.test(id); index++) id = `${base}-${index}`;
+  return id;
+}
 
 // packages/flowspace/src/core/scheduler.ts
-function consumeToken(token) {
-  if (token.consumed) return;
-  token.consumed = true;
-  token.consumedAt = Date.now();
-}
-function markTokenReady(run, token, at = Date.now()) {
-  token.readyAt = at;
-  if (token.fanoutBatchId) token.readyOrder = run.fanoutReadyOrder = (run.fanoutReadyOrder ?? 0) + 1;
-}
 var Scheduler = class {
   constructor(runtime, store, runs = []) {
     this.runtime = runtime;
     this.store = store;
     this.runs = runs;
     this.fanout = new FanoutExecution(runtime, store, runs);
+    this.events = new EventRouter({
+      runtime,
+      store,
+      schedule: (id, deadline, action) => this.schedule(id, deadline, action),
+      armDelay: (run, token) => this.armDelay(run, token),
+      advance: (run) => this.advance(run),
+      settle: (run) => settleRun(run),
+      enqueueEventTarget: (run, nodeId, sources, origin) => this.enqueue(run, nodeId, sources, true, void 0, origin)
+    });
+    this.emissions = new EmissionController({
+      runtime,
+      store,
+      isDisposed: () => this.disposed,
+      activeSessionStep: (sessionId) => this.activeSessionStep(sessionId),
+      armDelay: (run, token) => this.armDelay(run, token),
+      advance: (run) => this.advance(run),
+      settle: (run) => settleRun(run)
+    });
+    this.humanGate = new HumanGateController({
+      runtime,
+      store,
+      isDisposed: () => this.disposed,
+      schedule: (id, deadline, action) => this.schedule(id, deadline, action),
+      clearTimer: (id) => this.clearTimer(id),
+      execute: (run, step, node2) => this.execute(run, step, node2),
+      finishExecStep: (run, step, result, skipped) => this.finishExecStep(run, step, result, skipped)
+    });
   }
   runs;
   serial = Promise.resolve();
@@ -4891,6 +5840,9 @@ var Scheduler = class {
   executions = /* @__PURE__ */ new Map();
   timers = /* @__PURE__ */ new Map();
   fanout;
+  events;
+  emissions;
+  humanGate;
   transact(action) {
     const next = this.serial.then(action);
     this.serial = next.catch(() => void 0);
@@ -4899,16 +5851,16 @@ var Scheduler = class {
   busy() {
     const sessions = new Set(this.runtime.running?.() ?? []);
     return /* @__PURE__ */ new Set([
-      ...this.runs.flatMap(
-        (r) => r.steps.filter(isActiveStep).map((s) => s.nodeId)
-      ),
+      ...this.runs.flatMap((r) => r.steps.filter(isActiveStep).map((s) => s.nodeId)),
       ...this.store.document().nodes.filter((n) => n.sessionId && sessions.has(n.sessionId)).map((n) => n.id)
     ]);
   }
   waiting() {
     return new Set(
       this.runs.flatMap(
-        (r) => r.tokens.filter((t) => !t.ready && !t.consumed && !t.dismissed && (!t.delayUntil || t.needsRelease)).flatMap((t) => {
+        (r) => r.tokens.filter(
+          (t) => !t.ready && !t.consumed && !t.dismissed && (!t.delayUntil || t.needsRelease)
+        ).flatMap((t) => {
           const edge2 = r.graph.edges.find((e) => e.id === t.edgeId);
           return edge2 ? [edge2.target] : [];
         })
@@ -4963,7 +5915,11 @@ var Scheduler = class {
             continue;
           }
         } else if (request.kind === "from-node" || request.kind === "to-node") {
-          const seeded = await this.collectCompletedUpstreamSources(run, id);
+          const seeded = await collectCompletedUpstreamSources(
+            this.runtime,
+            run,
+            id
+          );
           if (seeded.length) {
             sources = seeded;
             treatAsContinuation = true;
@@ -4972,14 +5928,16 @@ var Scheduler = class {
         await this.enqueue(run, id, sources, treatAsContinuation);
       }
       if (run.fanouts?.length) await this.advance(run);
-      this.settle(run);
+      settleRun(run);
       await this.store.changed();
       return structuredClone(run);
     });
   }
   startTriggered(nodeId, input) {
     return this.transact(async () => {
-      const node2 = this.store.document().nodes.find((node3) => node3.id === nodeId && node3.flowType === triggerNode.flowType);
+      const node2 = this.store.document().nodes.find(
+        (n) => n.id === nodeId && n.flowType === triggerNode.flowType
+      );
       if (!node2) throw new Error("\u89E6\u53D1\u5668\u5DF2\u79FB\u9664");
       const run = this.create([nodeId], null, "trigger", node2.title);
       run.triggerId = nodeId;
@@ -4999,99 +5957,58 @@ var Scheduler = class {
       };
       run.steps.push(step);
       input = await this.runtime.freezeContent?.(input, run.listLimit) ?? input;
-      await this.emitDownstreamTokens(run, step, node2, void 0, void 0, input.text, false, input);
+      await emitDownstreamTokens(
+        this.runtime,
+        (r, t) => this.armDelay(r, t),
+        run,
+        step,
+        node2,
+        void 0,
+        void 0,
+        input.text,
+        false,
+        input
+      );
       await this.advance(run);
-      this.settle(run);
+      settleRun(run);
       await this.store.changed();
       return structuredClone(run);
-    });
-  }
-  async status(run, step, kind, summary, reason, seq) {
-    const edges = run.graph.edges.filter((edge2) => edge2.kind === "event" && edge2.source === step.nodeId);
-    if (!edges.length && ["tool", "output", "usage"].includes(kind)) return;
-    const event = {
-      id: uid(),
-      nodeId: step.nodeId,
-      stepId: step.id,
-      at: Date.now(),
-      round: step.iteration,
-      kind,
-      summary: summary?.slice(0, 512),
-      reason,
-      sessionId: step.sessionId,
-      seq: seq ?? step.endSeq,
-      telemetry: step.telemetry && { ...step.telemetry }
-    };
-    (run.events ??= []).push(event);
-    for (const edge2 of edges) {
-      const policy = edge2.event;
-      const mode2 = policy?.mode ?? "end";
-      if (edge2.trigger === "off" || mode2 === "end" && !["done", "error"].includes(kind) || mode2 === "change" && ["output", "usage", "tool"].includes(kind) || mode2 === "continuous" && !["output", "usage", "tool"].includes(kind) || !(policy?.kinds ?? ["done", "error"]).includes(kind) || policy?.reasons?.length && (!reason || !policy.reasons.includes(reason))) continue;
-      const prior = run.tokens.filter((token) => token.edgeId === edge2.id && !token.skip);
-      if (prior.length >= (policy?.maxTimes ?? Infinity)) continue;
-      const dueAt = (prior.at(-1)?.createdAt ?? 0) + (policy?.cooldownMs ?? 0);
-      const pending2 = run.pendingEvents?.find((batch) => batch.edgeId === edge2.id && batch.event.kind === kind && batch.event.stepId === step.id);
-      if (mode2 === "continuous" && (pending2 || dueAt > event.at)) {
-        const batch = pending2 ?? { edgeId: edge2.id, event, content: "", dueAt };
-        if (!pending2) (run.pendingEvents ??= []).push(batch);
-        batch.event = event;
-        batch.content += (batch.content && kind !== "output" ? "\n" : "") + (summary ?? "");
-        this.armEvent(run, batch);
-      } else if (dueAt <= event.at) await this.sendEvent(run, edge2, event, summary);
-    }
-  }
-  async sendEvent(run, edge2, event, content) {
-    const origin = run.graph.nodes.find((node2) => node2.id === event.nodeId);
-    const target = run.graph.nodes.find((node2) => node2.id === edge2.target);
-    const step = run.steps.find((step2) => step2.id === event.stepId);
-    if (!origin || !step || !target || target.participation === "paused") return;
-    const value = JSON.parse(JSON.stringify({
-      ...event,
-      ...edge2.event?.full || edge2.event?.mode === "continuous" ? { content } : {}
-    }));
-    const snapshot2 = { ...snapshotWithContent(origin, { dataType: "record", value }), seq: event.seq, sourceSessionId: event.sessionId };
-    const frozen = await this.runtime.freezeContent?.(snapshot2, run.listLimit, event.sessionId) ?? snapshot2;
-    this.pushToken(run, edge2, step, target, frozen, false);
-  }
-  armEvent(run, batch) {
-    const timer = `event:${run.id}:${batch.edgeId}:${batch.event.stepId}:${batch.event.kind}`;
-    this.schedule(timer, batch.dueAt, async () => {
-      if (!run.pendingEvents?.includes(batch) || ["cancelled", "interrupted", "error"].includes(run.state)) return;
-      const edge2 = run.graph.edges.find((edge3) => edge3.id === batch.edgeId);
-      const prior = run.tokens.filter((token) => token.edgeId === batch.edgeId && !token.skip);
-      const dueAt = (prior.at(-1)?.createdAt ?? 0) + (edge2?.event?.cooldownMs ?? 0);
-      if (dueAt > Date.now()) {
-        batch.dueAt = dueAt;
-        this.armEvent(run, batch);
-        return;
-      }
-      run.pendingEvents = run.pendingEvents.filter((other) => other !== batch);
-      if (edge2 && prior.length < (edge2.event?.maxTimes ?? Infinity))
-        await this.sendEvent(run, edge2, batch.event, batch.content);
-      await this.advance(run);
-      this.settle(run);
-      await this.store.changed();
     });
   }
   nativeStatus(sessionId, kind, summary, seq) {
     return this.transact(async () => {
       const owner = this.activeSessionStep(sessionId);
-      if (!owner || !owner.run.graph.edges.some((edge2) => edge2.kind === "event" && edge2.source === owner.step.nodeId && edge2.event?.mode === "continuous" && edge2.event.kinds.includes(kind))) return;
-      await this.status(owner.run, owner.step, kind, summary, void 0, seq);
+      if (!owner || !isNativeEventSubscribed(owner, kind)) return;
+      await this.events.recordStatus(
+        owner.run,
+        owner.step,
+        kind,
+        summary,
+        void 0,
+        seq
+      );
       await this.advance(owner.run);
       await this.store.changed();
     });
   }
   observesOutput(sessionId) {
-    const owner = this.activeSessionStep(sessionId);
-    return !!owner?.run.graph.edges.some((edge2) => edge2.kind === "event" && edge2.source === owner.step.nodeId && edge2.event?.mode === "continuous" && edge2.event.kinds.includes("output"));
+    return isStreamingOutputObserved(this.activeSessionStep(sessionId));
   }
   variableChanged(nodeId, summary, runId, stepId) {
     return this.transact(async () => {
       const graph = runId ? this.runs.find((run2) => run2.id === runId)?.graph : this.store.document();
-      if (!graph?.edges.some((edge2) => edge2.source === nodeId && edge2.kind === "event" && edge2.event?.kinds.includes("container"))) return;
+      if (!graph?.edges.some(
+        (edge2) => edge2.source === nodeId && edge2.kind === "event" && edge2.event?.kinds.includes("container")
+      )) {
+        return;
+      }
       const owner = runId && this.runs.find((run2) => run2.id === runId);
-      const run = owner || this.create([nodeId], null, "trigger", graph.nodes.find((node2) => node2.id === nodeId)?.title);
+      const run = owner || this.create(
+        [nodeId],
+        null,
+        "trigger",
+        graph.nodes.find((node2) => node2.id === nodeId)?.title
+      );
       if (!owner) run.triggerId = nodeId;
       const now = Date.now();
       const original = run.steps.find((step2) => step2.id === stepId);
@@ -5108,43 +6025,11 @@ var Scheduler = class {
         output: summary
       };
       if (!original) run.steps.push(step);
-      await this.status(run, step, "container", summary);
+      await this.events.recordStatus(run, step, "container", summary);
       await this.advance(run);
-      this.settle(run);
+      settleRun(run);
       await this.store.changed();
     });
-  }
-  /** Collect latest completed outputs from upstream sessions when starting mid-DAG (`from-node` / `to-node`). */
-  async collectCompletedUpstreamSources(run, targetId) {
-    const out = [];
-    const links = activeEdges(run.graph.edges);
-    const seen = /* @__PURE__ */ new Set([targetId]);
-    const walkBack = async (curId, fallbackMode) => {
-      for (const e of links) {
-        if (e.target !== curId || run.roots.includes(e.source)) continue;
-        const src = run.graph.nodes.find((n) => n.id === e.source);
-        if (!src || src.participation === "paused" || seen.has(src.id))
-          continue;
-        seen.add(src.id);
-        if (src.participation === "bypassed") {
-          await walkBack(
-            src.id,
-            e.mode === "fork" ? "conclusion" : e.mode
-          );
-          continue;
-        }
-        if (src.sessionId) {
-          try {
-            const mode2 = e.mode === "fork" ? fallbackMode : e.mode;
-            const snap = await this.runtime.capture(src, mode2);
-            if (snap.text.trim()) out.push(snap);
-          } catch {
-          }
-        }
-      }
-    };
-    await walkBack(targetId, "conclusion");
-    return out;
   }
   /** Rerun failed/interrupted nodes of a run and their affected downstream while reusing completed upstream snapshots (R5). */
   async rerunFailed(runId) {
@@ -5157,8 +6042,9 @@ var Scheduler = class {
       ).map(([nodeId]) => nodeId).filter(
         (nodeId) => this.store.document().nodes.some((n) => n.id === nodeId && isExecutable(n))
       );
-      if (!failedRoots.length)
+      if (!failedRoots.length) {
         throw new Error("\u8BE5\u6B21\u8FD0\u884C\u6CA1\u6709\u53EF\u91CD\u8DD1\u7684\u5931\u8D25\u6216\u4E2D\u65AD\u8282\u70B9");
+      }
       const doc = this.store.document();
       const scope = prev.scope ? [
         .../* @__PURE__ */ new Set([
@@ -5182,7 +6068,7 @@ var Scheduler = class {
           !!failedStep
         );
       }
-      this.settle(run);
+      settleRun(run);
       await this.store.changed();
       return structuredClone(run);
     });
@@ -5208,12 +6094,21 @@ var Scheduler = class {
     };
     for (const node2 of run.graph.nodes) {
       if (node2.flowType !== "flowspace/fanout") continue;
-      const inputs = run.graph.edges.filter((edge2) => edge2.target === node2.id && edge2.kind === "reference");
+      const inputs = run.graph.edges.filter(
+        (edge2) => edge2.target === node2.id && edge2.kind === "reference"
+      );
       for (const edge2 of inputs) {
-        const frozen = staticFanoutContent({ nodes: run.graph.nodes, edges: [edge2], settings: doc.settings }, node2.id);
+        const frozen = staticFanoutContent(
+          { nodes: run.graph.nodes, edges: [edge2], settings: doc.settings },
+          node2.id
+        );
         if (!frozen) continue;
-        if (inputs.length > 1 && frozen.items)
-          frozen.items = frozen.items.map((item) => ({ ...item, key: JSON.stringify([edge2.id, item.key]) }));
+        if (inputs.length > 1 && frozen.items) {
+          frozen.items = frozen.items.map((item) => ({
+            ...item,
+            key: JSON.stringify([edge2.id, item.key])
+          }));
+        }
         edge2.snapshotContent = frozen;
       }
     }
@@ -5228,8 +6123,9 @@ var Scheduler = class {
       const doc = this.store.document(), node2 = doc.nodes.find(
         (n) => n.kind === "agent" && n.sessionId === sessionId
       );
-      if (!node2 || node2.generatedBy || isFanoutMaster(doc, node2) || node2.participation === "paused" || node2.participation === "bypassed" || !(canvas || (node2.nativeTrigger === "inherit" ? doc.settings.nativeChatTriggers : node2.nativeTrigger === "enabled")))
+      if (!node2 || node2.generatedBy || isFanoutMaster(doc, node2) || node2.participation === "paused" || node2.participation === "bypassed" || !(canvas || (node2.nativeTrigger === "inherit" ? doc.settings.nativeChatTriggers : node2.nativeTrigger === "enabled"))) {
         return;
+      }
       syncUntitledAgentNode(node2);
       const run = this.create([node2.id], null, canvas ? "canvas" : "chat");
       const teamId = teamIdOf(node2, staffedIds(doc.nodes));
@@ -5267,9 +6163,9 @@ var Scheduler = class {
       step.turn = turn;
       if (teamRef) step.teamRef = teamRef;
       step.state = "running";
-      const run = this.runs.find((run2) => run2.steps.includes(step));
+      const run = this.runs.find((r) => r.steps.includes(step));
       if (run) {
-        await this.status(run, step, "running");
+        await this.events.recordStatus(run, step, "running");
         await this.advance(run);
       }
       await this.store.changed();
@@ -5292,21 +6188,29 @@ var Scheduler = class {
       }
       const owner = this.runs.find((run) => run.steps.includes(step));
       if (owner && (owner.budget || owner.graph.nodes.find((node2) => node2.id === step.nodeId)?.budget)) {
-        if (await this.enforceBudget(owner, step, false)) await this.store.changed();
+        if (await this.enforceBudget(owner, step, false)) {
+          await this.store.changed();
+        }
       }
       return true;
     });
   }
   async enforceBudget(run, step, beforeDispatch) {
-    if (["cancelled", "interrupted", "error", "completed"].includes(run.state)) return false;
+    if (["cancelled", "interrupted", "error", "completed"].includes(run.state))
+      return false;
     const hit = budgetHit(run, step, beforeDispatch, Date.now());
     if (!hit) return false;
     if (!run.budgetPause) {
       run.state = "paused";
-      const { key, ...details } = hit;
+      const { key: _key, ...details } = hit;
       run.budgetPause = details;
-      await this.status(run, step, "budget", `${hit.dimension}: ${hit.value} / ${hit.limit}`);
-      await this.deliverEvents(run, true);
+      await this.events.recordStatus(
+        run,
+        step,
+        "budget",
+        `${hit.dimension}: ${hit.value} / ${hit.limit}`
+      );
+      await this.events.deliverEvents(run, true);
     }
     return true;
   }
@@ -5317,9 +6221,15 @@ var Scheduler = class {
       [step.id, limits?.seconds, step.startedAt ?? Date.now()]
     ]) {
       if (duration === void 0) continue;
-      this.schedule(`budget:${run.id}:${scope}`, start + duration * 1e3 + 1, async () => {
-        if (await this.enforceBudget(run, step, false)) await this.store.changed();
-      });
+      this.schedule(
+        `budget:${run.id}:${scope}`,
+        start + duration * 1e3 + 1,
+        async () => {
+          if (await this.enforceBudget(run, step, false)) {
+            await this.store.changed();
+          }
+        }
+      );
     }
   }
   deliverable(sessionId, turn, seq, time, files) {
@@ -5349,203 +6259,23 @@ var Scheduler = class {
       await this.store.changed();
     });
   }
-  addNoteOnce(run, note) {
-    if (!run.notes.includes(note)) run.notes.push(note);
-  }
   activeSessionStep(sessionId) {
     for (const run of this.runs) {
       if (run.state === "cancelled" || run.state === "interrupted") continue;
-      const step = run.steps.find((entry) => entry.sessionId === sessionId && entry.state === "running" && entry.turn !== void 0 && !entry.endedAt);
+      const step = run.steps.find(
+        (entry) => entry.sessionId === sessionId && entry.state === "running" && entry.turn !== void 0 && !entry.endedAt
+      );
       if (step) return { run, step };
     }
   }
-  emissionOwner(sessionId) {
-    const owner = this.activeSessionStep(sessionId);
-    if (!owner || owner.step.emission?.closed) return;
-    const targets = emissionTargets(owner.run, owner.step.nodeId);
-    if (targets.length) return { ...owner, targets };
-  }
   canEmit(sessionId) {
-    return !this.disposed && !!this.emissionOwner(sessionId);
-  }
-  emissionState(run, step) {
-    return step.emission ?? { items: [], calls: [], total: 0, limit: run.listLimit ?? DEFAULT_LIST_LIMIT, closed: false };
-  }
-  async emissionSnapshot(run, step, content) {
-    const node2 = run.graph.nodes.find((entry) => entry.id === step.nodeId);
-    let source = {
-      ...snapshotWithContent(node2, content),
-      kind: "conclusion",
-      sourceSessionId: step.sessionId,
-      seq: step.endSeq
-    };
-    if (this.runtime.hydrateContent && (content.spill || content.items?.some((item) => item.spill))) {
-      source = await this.runtime.hydrateContent(source);
-      source = { ...source, text: textOfContent(source.content) };
-    }
-    return this.runtime.freezeContent ? this.runtime.freezeContent(source, step.emission?.limit ?? run.listLimit, step.sessionId) : source;
-  }
-  async emissionDeliveries(run, step, targets, list) {
-    const items = list.content.items;
-    const records = [];
-    if (targets.some((target) => target.type === "record")) {
-      for (const item of items) {
-        const content = item.spill ? { dataType: "record", spill: item.spill } : { dataType: "record", value: item.value };
-        records.push(await this.emissionSnapshot(run, step, content));
-      }
-    }
-    return targets.flatMap(
-      ({ edge: edge2, node: node2, type }) => (type === "list" ? [list] : records.length ? records : [void 0]).map((source) => ({ edge: edge2, node: node2, source }))
-    );
-  }
-  pushEmissionDeliveries(run, step, deliveries, planGate) {
-    for (const { edge: edge2, node: node2, source } of deliveries) {
-      this.pushToken(
-        run,
-        edge2,
-        step,
-        node2,
-        this.edgeFires(run, edge2, step, true) ? source : void 0,
-        planGate,
-        { streamFrom: edge2.emitMode === "stream" ? step.id : step.streamFrom, fanoutBatchId: step.fanoutBatchId }
-      );
-    }
+    return this.emissions.canEmit(sessionId);
   }
   emit(sessionId, callId, values, signal) {
-    const owner = this.emissionOwner(sessionId);
-    return this.transact(async () => {
-      signal.throwIfAborted();
-      if (this.disposed || !owner || this.emissionOwner(sessionId)?.step !== owner.step) {
-        throw new Error("\u5F53\u524D\u539F\u751F\u56DE\u5408\u6CA1\u6709\u53EF\u63A5\u6536\u7ED3\u6784\u5316\u5185\u5BB9\u7684\u6B65\u9AA4");
-      }
-      const { run, step, targets } = owner;
-      const state = this.emissionState(run, step);
-      const previous = state.calls.find((call) => call.id === callId);
-      if (previous) return { accepted: previous.accepted, total: previous.total };
-      checkEmissionValues(targets, values);
-      const content = contentList(values, state.limit - state.items.length, [], state.items.map((item) => item.key));
-      const batch = await this.emissionSnapshot(run, step, content);
-      const items = batch.content.items;
-      const streamTargets = targets.filter((target) => target.edge.emitMode === "stream" && (items.length || !state.calls.length && !values.length && target.type === "list"));
-      const deliveries = await this.emissionDeliveries(run, step, streamTargets, batch);
-      const planGate = Boolean(await this.runtime.isPlanModeActive?.(sessionId));
-      signal.throwIfAborted();
-      const receipt = { accepted: items.length, total: state.total + values.length };
-      step.emission = {
-        ...state,
-        items: [...state.items, ...items],
-        total: receipt.total,
-        calls: [...state.calls, { id: callId, ...receipt }]
-      };
-      this.pushEmissionDeliveries(run, step, deliveries, planGate);
-      await this.store.changed();
-      if (deliveries.length) {
-        await this.advance(run);
-        this.settle(run);
-        await this.store.changed();
-      }
-      return receipt;
-    });
-  }
-  async closeEmission(run, step, targets, planGate) {
-    const state = this.emissionState(run, step);
-    if (state.closed) return;
-    let items = state.items;
-    let total = state.total;
-    try {
-      if (!state.calls.length) {
-        const values = parseEmission(step.output ?? "");
-        checkEmissionValues(targets, values);
-        items = contentList(values, state.limit).items;
-        total = values.length;
-      }
-    } catch (error) {
-      step.emission = { ...state, closed: true, missing: true };
-      step.state = "error";
-      step.error = error instanceof Error ? error.message : String(error);
-      this.addNoteOnce(run, step.error);
-      return;
-    }
-    const endTargets = targets.filter((target) => target.edge.emitMode !== "stream" || !state.calls.length || !items.length && target.type === "record");
-    if (endTargets.length) {
-      const content = { dataType: "list", items, ...total > items.length ? { originalCount: total } : {} };
-      const list = await this.emissionSnapshot(run, step, content);
-      const deliveries = await this.emissionDeliveries(run, step, endTargets, list);
-      this.pushEmissionDeliveries(run, step, deliveries, planGate);
-      items = list.content.items;
-    }
-    step.emission = { ...state, items, total, closed: true };
-  }
-  /**
-   * Capture upstream snapshots at exact `seq` and route tokens across outgoing active
-   * edges, forwarding transparently through `bypassed` Agents (with cycle guard) and
-   * respecting `paused` stops, `scope` boundaries, `confirm`/`manual` gates, and `R2` Plan gates.
-   */
-  async emitDownstreamTokens(run, step, sourceNode, sessionId, seq, output, planGateActive, forwarded, omit) {
-    const outgoing = activeEdges(run.graph.edges).filter((edge2) => edge2.source === sourceNode.id);
-    if (planGateActive && outgoing.length) {
-      this.addNoteOnce(run, `${sourceNode.title}\uFF1APlan \u6A21\u5F0F\u5C1A\u672A\u9000\u51FA\u8BA1\u5212\u6001\uFF0C\u5DF2\u6682\u505C\u81EA\u52A8\u63A5\u7EED\u7B49\u5F85\u786E\u8BA4\u8BA1\u5212`);
-    }
-    for (const edge2 of outgoing) {
-      if (omit?.has(edge2.id)) continue;
-      const target = run.graph.nodes.find((node2) => node2.id === edge2.target);
-      if (!target || target.participation === "paused" || !isExecutable(target) && !isContainer(target)) continue;
-      const selected = (edge2.sourcePort ?? "out") === (step.route ?? "out");
-      const fires = step.state !== "skipped" && this.edgeFires(run, edge2, step, selected);
-      try {
-        const mode2 = target.participation === "bypassed" && edge2.mode === "fork" ? "conclusion" : edge2.mode;
-        const source = fires ? forwarded ?? await this.runtime.capture({ ...sourceNode, sessionId }, mode2, seq, output) : void 0;
-        this.pushToken(run, edge2, step, target, source, planGateActive);
-      } catch (error) {
-        run.notes.push(`${sourceNode.title} \u2192 ${target.title}: ${String(error)}`);
-        run.state = "error";
-      }
-    }
-  }
-  edgeFires(run, edge2, step, selected) {
-    const logic = edge2.logic;
-    const routed = logic?.negate ? !selected : selected;
-    if (!routed) return false;
-    if (step.iteration < (logic?.fromRound ?? 0)) return false;
-    return logic?.maxTimes === void 0 || run.tokens.filter((token) => token.edgeId === edge2.id && !token.skip).length < logic.maxTimes;
-  }
-  pushToken(run, edge2, step, target, source, planGate, origin = step) {
-    const now = Date.now();
-    const boundary = !!source && !!run.scope && !run.scope.includes(target.id);
-    const needsRelease = !!source && (planGate || boundary || edge2.trigger === "confirm" || target.participation === "manual");
-    const delayUntil = source && edge2.logic?.delayMs ? now + edge2.logic.delayMs : void 0;
-    const ready2 = !needsRelease && delayUntil === void 0;
-    const token = {
-      id: uid(),
-      edgeId: edge2.id,
-      stepId: step.id,
-      ...origin.streamFrom ? { streamFrom: origin.streamFrom } : {},
-      ...origin.fanoutBatchId && (target.generatedBy || target.flowType === "flowspace/merge-sort") ? { fanoutBatchId: origin.fanoutBatchId } : {},
-      source: source ?? { id: uid(), kind: "text", sourceNodeId: edge2.source, text: "", title: "", capturedAt: now },
-      ...source ? {} : { skip: true },
-      ...source && planGate ? { planGate: true } : {},
-      ...needsRelease ? { needsRelease: true } : {},
-      createdAt: now,
-      delayUntil,
-      readyAt: ready2 ? now : delayUntil,
-      boundary,
-      ready: ready2,
-      consumed: false,
-      dismissed: false
-    };
-    if (ready2) markTokenReady(run, token, token.fanoutBatchId && step.endedAt ? step.endedAt : now);
-    run.tokens.push(token);
-    if (delayUntil !== void 0) this.armDelay(run, token);
-  }
-  forwardThroughBypass(run, node2, token, step, cycleEdges) {
-    this.addNoteOnce(run, `${node2.title}\uFF1A\u5DF2\u65C1\u8DEF\u900F\u4F20\u4E0A\u6E38\u4E0A\u4E0B\u6587`);
-    for (const edge2 of activeEdges(run.graph.edges).filter((candidate) => candidate.source === node2.id)) {
-      const target = run.graph.nodes.find((entry) => entry.id === edge2.target);
-      if (!target || target.participation === "paused" || !isExecutable(target)) continue;
-      const fires = !token.skip && this.edgeFires(run, edge2, step, true);
-      if (cycleEdges.has(edge2.id) && run.tokens.some((seen) => seen.edgeId === edge2.id && seen.stepId === step.id && Boolean(seen.skip) === !fires)) continue;
-      this.pushToken(run, edge2, step, target, fires ? token.source : void 0, false, token);
-    }
+    const owner = this.emissions.owner(sessionId);
+    return this.transact(
+      () => this.emissions.admitEmit(owner, sessionId, callId, values, signal)
+    );
   }
   finish(sessionId, turn, ending, seq, output, error, teamFollowup = false) {
     return this.transact(async () => {
@@ -5571,7 +6301,9 @@ var Scheduler = class {
     this.teamSettlements.add(step.id);
     const finish = (ending, error) => this.transact(async () => {
       this.teamSettlements.delete(step.id);
-      if (step.state === "settling") await this.finishStep(run, step, sessionId, ending, error);
+      if (step.state === "settling") {
+        await this.finishStep(run, step, sessionId, ending, error);
+      }
     });
     void this.runtime.waitForTeam(sessionId).then(
       () => finish("completed"),
@@ -5588,76 +6320,73 @@ var Scheduler = class {
     this.clearTimer(`budget:${run.id}:${step.id}`);
     await this.enforceBudget(run, step, false);
     if (step.parameterRetryFor) {
-      const target = run.steps.find((entry) => entry.id === step.parameterRetryFor);
+      const target = run.steps.find(
+        (entry) => entry.id === step.parameterRetryFor
+      );
       if (target?.operation && target.state === "awaiting" && !["cancelled", "interrupted"].includes(run.state)) {
         const data = step.operationParameters?.[target.nodeId] ?? {};
         for (const field of target.operation.missing) {
           if (data[field]?.trim()) target.operation.values[field] = data[field];
         }
-        target.operation.missing = target.operation.missing.filter((field) => !target.operation.values[field]?.trim());
+        target.operation.missing = target.operation.missing.filter(
+          (field) => !target.operation.values[field]?.trim()
+        );
         target.operation.review = true;
         delete target.human;
         target.state = "running";
         await this.store.changed();
-        this.execute(run, target, run.graph.nodes.find((node2) => node2.id === target.nodeId));
+        this.execute(
+          run,
+          target,
+          run.graph.nodes.find((node2) => node2.id === target.nodeId)
+        );
       }
-      if (step.state === "error" || step.state === "interrupted") step.state = "skipped";
-      this.settle(run);
+      if (step.state === "error" || step.state === "interrupted") {
+        step.state = "skipped";
+      }
+      settleRun(run);
       await this.store.changed();
       return;
     }
-    await this.status(run, step, step.state === "completed" ? "done" : "error", step.error ?? step.output, ending);
+    await this.events.recordStatus(
+      run,
+      step,
+      step.state === "completed" ? "done" : "error",
+      step.error ?? step.output,
+      ending
+    );
     if (step.state === "completed" && !["cancelled", "interrupted"].includes(run.state)) {
       step.route = "out";
       const node2 = run.graph.nodes.find((n) => n.id === step.nodeId);
-      const planGateActive = Boolean(await this.runtime.isPlanModeActive?.(sessionId));
-      await this.deliverAgentResult(run, step, node2, planGateActive);
+      const planGateActive = Boolean(
+        await this.runtime.isPlanModeActive?.(sessionId)
+      );
+      await this.emissions.deliverAgentResult(run, step, node2, planGateActive);
       await this.store.changed();
       if (run.state !== "error") await this.advance(run);
     } else {
       if (step.emission) step.emission.closed = true;
-      if (step.fanoutBatchId || run.fanouts?.some((batch) => batch.producerStepId === step.id)) await this.advance(run);
-    }
-    this.settle(run);
-    await this.store.changed();
-  }
-  async deliverAgentResult(run, step, node2, planGate) {
-    const targets = emissionTargets(run, step.nodeId);
-    const omit = new Set(targets.map((target) => target.edge.id));
-    if (!step.reminderFor) {
-      for (const token of run.tokens) if (token.stepId === step.id) omit.add(token.edgeId);
-      await this.emitDownstreamTokens(
-        run,
-        step,
-        node2,
-        step.sessionId,
-        step.endSeq,
-        step.output ?? "",
-        planGate,
-        void 0,
-        omit
-      );
-    }
-    if (targets.length) {
-      try {
-        await this.closeEmission(run, step, targets, planGate);
-      } catch (error) {
-        step.state = "error";
-        step.error = String(error);
-        this.addNoteOnce(run, step.error);
+      if (step.fanoutBatchId || run.fanouts?.some((batch) => batch.producerStepId === step.id)) {
+        await this.advance(run);
       }
     }
+    settleRun(run);
+    await this.store.changed();
   }
   remindEmission(runId, stepId) {
     return this.transact(async () => {
       const run = this.requireRun(runId);
       const prior = run.steps.find((step) => step.id === stepId);
-      if (!prior?.emission?.missing) throw new Error("\u8BE5\u6B65\u9AA4\u6CA1\u6709\u9700\u8981\u8865\u4EA4\u7684\u7ED3\u6784\u5316\u8F93\u51FA");
+      if (!prior?.emission?.missing) {
+        throw new Error("\u8BE5\u6B65\u9AA4\u6CA1\u6709\u9700\u8981\u8865\u4EA4\u7684\u7ED3\u6784\u5316\u8F93\u51FA");
+      }
       if (prior.emission.reminderStepId) return;
-      if (["cancelled", "interrupted", "paused"].includes(run.state)) throw new Error("\u5F53\u524D\u8FD0\u884C\u65E0\u6CD5\u8865\u4EA4\u8F93\u51FA");
+      if (["cancelled", "interrupted", "paused"].includes(run.state)) {
+        throw new Error("\u5F53\u524D\u8FD0\u884C\u65E0\u6CD5\u8865\u4EA4\u8F93\u51FA");
+      }
       run.state = "running";
       await this.enqueue(run, prior.nodeId, prior.sources, true, prior);
-      this.settle(run);
+      settleRun(run);
       await this.store.changed();
     });
   }
@@ -5700,10 +6429,29 @@ var Scheduler = class {
     };
     this.clearTimer(`budget:${run.id}:${step.id}`);
     await this.enforceBudget(run, step, false);
-    if (!skipped) await this.status(run, step, result.route === "error" ? "error" : "done", result.output, result.route);
-    await this.emitDownstreamTokens(run, step, node2, void 0, void 0, result.output, false, result.source);
+    if (!skipped) {
+      await this.events.recordStatus(
+        run,
+        step,
+        result.route === "error" ? "error" : "done",
+        result.output,
+        result.route
+      );
+    }
+    await emitDownstreamTokens(
+      this.runtime,
+      (r, t) => this.armDelay(r, t),
+      run,
+      step,
+      node2,
+      void 0,
+      void 0,
+      result.output,
+      false,
+      result.source
+    );
     await this.advance(run);
-    this.settle(run);
+    settleRun(run);
     await this.store.changed();
   }
   execute(run, step, node2) {
@@ -5712,7 +6460,11 @@ var Scheduler = class {
     const recordCall = (trace) => this.transact(async () => {
       if (this.disposed) return;
       (step.dataCalls ??= []).push(trace);
-      const telemetry = step.telemetry ??= { stepCount: 0, inputTokens: 0, outputTokens: 0 };
+      const telemetry = step.telemetry ??= {
+        stepCount: 0,
+        inputTokens: 0,
+        outputTokens: 0
+      };
       telemetry.stepCount++;
       telemetry.inputTokens += trace.inputTokens;
       telemetry.outputTokens += trace.outputTokens;
@@ -5722,32 +6474,50 @@ var Scheduler = class {
     const dispatch = async (previous) => {
       if (!this.runtime.execute) throw new Error("Host \u672A\u6CE8\u518C\u8282\u70B9\u6267\u884C\u5668");
       const configured = step.resolvedConfig ? { ...node2, config: step.resolvedConfig } : node2;
-      return this.runtime.execute(configured, step, controller.signal, { runId: run.id, listLimit: run.listLimit, previous, recordCall });
+      return this.runtime.execute(configured, step, controller.signal, {
+        runId: run.id,
+        listLimit: run.listLimit,
+        previous,
+        recordCall
+      });
     };
     const complete = async (result, error) => {
       this.executions.delete(step.id);
-      if (controller.signal.aborted || step.state !== "running" || this.disposed) return;
+      if (controller.signal.aborted || step.state !== "running" || this.disposed)
+        return;
       if (!result) {
         step.error = String(error);
-        result = { route: "error", output: step.error, source: await forwardInput(node2, step) };
+        result = {
+          route: "error",
+          output: step.error,
+          source: await forwardInput(node2, step)
+        };
       }
       if (result.operation) step.operation = result.operation;
       if (result.operationResult) step.operationResult = result.operationResult;
       if ("awaiting" in result) {
         step.state = "awaiting";
         step.human = result.awaiting;
-        this.armHuman(run, step);
-        await this.status(run, step, "waiting", step.human.question);
+        this.humanGate.armHuman(run, step);
+        await this.events.recordStatus(
+          run,
+          step,
+          "waiting",
+          step.human.question
+        );
         await this.advance(run);
-        this.settle(run);
+        settleRun(run);
         await this.store.changed();
       } else {
         await this.finishExecStep(run, step, result);
       }
     };
     const work = node2.flowType === "flowspace/accumulate" ? this.transact(async () => {
-      if (controller.signal.aborted || step.state !== "running" || this.disposed) return;
-      const previous = run.accumulators?.find((state) => state.nodeId === node2.id)?.content;
+      if (controller.signal.aborted || step.state !== "running" || this.disposed)
+        return;
+      const previous = run.accumulators?.find(
+        (state) => state.nodeId === node2.id
+      )?.content;
       let result;
       try {
         result = await dispatch(previous);
@@ -5760,7 +6530,9 @@ var Scheduler = class {
       (result) => this.transact(() => complete(result)),
       (error) => this.transact(() => complete(void 0, error))
     );
-    void work.catch((error) => console.error("FlowSpace \u8282\u70B9\u6267\u884C\u6536\u5C3E\u5931\u8D25", error));
+    void work.catch(
+      (error) => console.error("FlowSpace \u8282\u70B9\u6267\u884C\u6536\u5C3E\u5931\u8D25", error)
+    );
   }
   clearTimer(id) {
     clearTimeout(this.timers.get(id));
@@ -5772,7 +6544,10 @@ var Scheduler = class {
     const timer = setTimeout(() => {
       this.timers.delete(id);
       if (Date.now() < deadline) this.schedule(id, deadline, action);
-      else void this.transact(action).catch((error) => console.error("FlowSpace \u8C03\u5EA6\u5B9A\u65F6\u5668", error));
+      else
+        void this.transact(action).catch(
+          (error) => console.error("FlowSpace \u8C03\u5EA6\u5B9A\u65F6\u5668", error)
+        );
     }, Math.min(2147483647, Math.max(0, deadline - Date.now())));
     timer.unref();
     this.timers.set(id, timer);
@@ -5780,156 +6555,72 @@ var Scheduler = class {
   armDelay(run, token) {
     if (token.delayUntil === void 0) return;
     this.schedule(token.id, token.delayUntil, async () => {
-      if (this.disposed || token.consumed || token.dismissed || ["cancelled", "interrupted"].includes(run.state)) return;
+      if (this.disposed || token.consumed || token.dismissed || ["cancelled", "interrupted"].includes(run.state)) {
+        return;
+      }
       delete token.delayUntil;
       token.ready = !token.needsRelease && !token.loopCapReached;
       if (token.ready) markTokenReady(run, token);
       await this.advance(run);
-      this.settle(run);
+      settleRun(run);
       await this.store.changed();
     });
   }
-  armHuman(run, step) {
-    const human2 = step.human;
-    if (human2?.deadline === void 0 || !human2.timeoutAction || human2.timeoutAction === "wait") return;
-    this.schedule(step.id, human2.deadline, async () => {
-      if (this.disposed || step.state !== "awaiting" || ["cancelled", "interrupted"].includes(run.state)) return;
-      const route = human2.timeoutAction === "default" ? human2.defaultOption : human2.timeoutAction === "skip" ? "skip" : "timeout";
-      await this.resolveHuman(run, step, route, human2.timeoutAction === "skip");
-    });
-  }
-  async resolveHuman(run, step, route, skip = false) {
-    this.clearTimer(step.id);
-    const node2 = run.graph.nodes.find((n) => n.id === step.nodeId);
-    const source = route === "out" && step.human?.fields && step.human.initial ? this.humanSource(node2, step, step.human.initial) : await forwardInput(node2, step, this.runtime.contextText?.bind(this.runtime));
-    await this.finishExecStep(run, step, { route, source, output: route, verdict: { branch: route } }, skip);
-  }
-  humanSource(node2, step, values) {
-    if (node2.flowType === "flowspace/human-score")
-      values = { ...values, reviewed: step.sources[0]?.content?.value ?? step.sources[0]?.text ?? "" };
-    return snapshotWithContent(node2, node2.flowType === "flowspace/human-review" ? { dataType: "text", value: String(values.text ?? "") } : { dataType: "record", value: values });
-  }
   answerHuman(runId, stepId, option, values) {
-    return this.transact(async () => {
-      const run = this.requireRun(runId);
-      const step = run.steps.find((s) => s.id === stepId);
-      if (step?.state !== "awaiting" || !step.human) throw new Error("\u8BE5\u6B65\u9AA4\u6CA1\u6709\u7B49\u5F85\u56DE\u7B54\u7684\u95EE\u9898");
-      if (!step.human.options.includes(option)) throw new Error("\u65E0\u6548\u7684\u4EBA\u5DE5\u9009\u9879");
-      if (step.human.operation && option === "execute" && step.operation) {
-        for (const key of step.operation.missing) {
-          if (typeof values?.[key] !== "string" || !values[key].trim()) throw new Error(`\u8BF7\u586B\u5199 ${key}`);
-        }
-        for (const key of step.operation.missing) step.operation.values[key] = values[key];
-        step.operation.missing = [];
-        step.operation.approved = true;
-        delete step.human;
-        step.state = "running";
-        run.state = "running";
-        await this.store.changed();
-        this.execute(run, step, run.graph.nodes.find((node2) => node2.id === step.nodeId));
-        return;
-      }
-      if (step.human.operation && option === "skip") {
-        await this.resolveHuman(run, step, "skip", true);
-        return;
-      }
-      if (step.human.operation && option === "retry" && step.operation?.sessionId) {
-        if (run.steps.some((entry) => entry.parameterRetryFor === step.id)) throw new Error("\u5DF2\u7ECF\u5411\u4E0A\u6E38\u8FFD\u95EE");
-        const prior = run.steps.find((entry) => step.upstreamStepIds?.includes(entry.id) && entry.sessionId === step.operation?.sessionId);
-        if (!prior) throw new Error("\u65E0\u6CD5\u627E\u5230\u4E0A\u6E38\u4F1A\u8BDD");
-        const retry = {
-          id: uid(),
-          requestId: uid(),
-          nodeId: prior.nodeId,
-          sessionId: prior.sessionId,
-          task: "\u8BF7\u8C03\u7528 provide_flow_parameters \u8865\u9F50\u4E0A\u4E00\u8F6E\u672A\u63D0\u4F9B\u7684\u53C2\u6570\u3002\u64CD\u4F5C\u5C06\u7531 FlowSpace \u6267\u884C\u3002",
-          parameterRetryFor: step.id,
-          state: "queued",
-          iteration: prior.iteration,
-          sources: step.sources,
-          createdAt: Date.now(),
-          startedAt: Date.now()
-        };
-        step.human.options = step.human.options.filter((option2) => option2 !== "retry");
-        run.steps.push(retry);
-        await this.store.changed();
-        await this.runtime.send(retry);
-        return;
-      }
-      if (step.human.fields && option === "skip") {
-        await this.resolveHuman(run, step, "skip", true);
-        return;
-      }
-      if (step.human.fields && option === "out") {
-        this.clearTimer(step.id);
-        const node2 = run.graph.nodes.find((node3) => node3.id === step.nodeId);
-        const answer = checkAnswers(step.human.fields, values ?? {});
-        const source = this.humanSource(node2, step, answer);
-        step.human.initial = answer;
-        await this.finishExecStep(run, step, { route: "out", source, output: source.text });
-        return;
-      }
-      await this.resolveHuman(run, step, option);
-    });
+    return this.transact(
+      () => this.humanGate.answer(this.requireRun(runId), stepId, option, values)
+    );
   }
   async advance(run) {
     if (this.disposed) return;
     if (run.state === "paused") await this.fanout.collectCompleted(run);
-    else if (!["cancelled", "interrupted", "error"].includes(run.state)) await this.advanceRun(run);
+    else if (!["cancelled", "interrupted", "error"].includes(run.state)) {
+      await this.advanceRun(run);
+    }
     await this.wakeFanouts(run);
   }
   async wakeFanouts(except) {
     for (const other of this.runs) {
-      if (other === except || !["running", "waiting"].includes(other.state) || !this.fanout.hasAdmission(other)) continue;
+      if (other === except || !["running", "waiting"].includes(other.state) || !this.fanout.hasAdmission(other)) {
+        continue;
+      }
       await this.advanceRun(other);
-      this.settle(other);
+      settleRun(other);
     }
   }
   async advanceRun(run) {
     let expanded;
     do {
-      await this.advanceGraph(run);
-      await this.deliverContainers(run);
-      await this.deliverEvents(run);
+      await advanceGraph(
+        {
+          runtime: this.runtime,
+          store: this.store,
+          armDelay: (r, t) => this.armDelay(r, t),
+          enqueue: (r, nodeId, sources, isCont, rem, origin) => this.enqueue(r, nodeId, sources, isCont, rem, origin)
+        },
+        run
+      );
+      await deliverContainers(this.store, run);
+      await this.events.deliverEvents(run);
       expanded = await this.fanout.pump(
         run,
         (edge2, step, input, batch) => {
           const target = run.graph.nodes.find((node2) => node2.id === edge2.target);
-          this.pushToken(run, edge2, step, target, input, false, { fanoutBatchId: batch.id });
+          pushToken(
+            run,
+            edge2,
+            step,
+            target,
+            input,
+            false,
+            (r, t) => this.armDelay(r, t),
+            { fanoutBatchId: batch.id }
+          );
         },
         (merge, batch, result, error) => this.finishMerge(run, merge, batch, result, error),
         (batch, lane) => this.cancelFanoutLane(run, batch, lane)
       );
     } while (expanded && run.state !== "error");
-  }
-  async deliverContainers(run) {
-    const deliveries = new Map(run.graph.edges.filter((edge2) => edge2.kind !== "reference" && run.graph.nodes.some((node2) => node2.id === edge2.target && isContainer(node2))).map((edge2) => [edge2.id, edge2]));
-    for (const token of run.tokens) {
-      const edge2 = deliveries.get(token.edgeId);
-      if (!edge2 || !token.ready || token.dismissed || token.consumed) continue;
-      if (!token.skip) {
-        try {
-          await this.store.deliver?.(run, edge2, token);
-        } catch (error) {
-          run.state = "error";
-          this.addNoteOnce(run, `\u6295\u9012\u5931\u8D25\uFF1A${String(error)}`);
-        }
-      }
-      consumeToken(token);
-    }
-  }
-  async deliverEvents(run, budgetOnly = false) {
-    const edges = new Map(run.graph.edges.filter((edge2) => edge2.kind === "event").map((edge2) => [edge2.id, edge2]));
-    for (const token of run.tokens) {
-      const edge2 = edges.get(token.edgeId);
-      if (!edge2 || token.consumed || !token.ready || token.dismissed) continue;
-      if (budgetOnly && (!edge2.event?.kinds.includes("budget") || run.graph.nodes.find((node2) => node2.id === edge2.target)?.flowType !== "flowspace/notice")) continue;
-      consumeToken(token);
-      if (!token.skip) await this.enqueue(run, edge2.target, [token.source], true, void 0, {
-        upstreamStepIds: [token.stepId],
-        sourcePorts: [edge2.targetPort ?? "in"]
-      });
-    }
   }
   async finishMerge(run, node2, batch, source, error) {
     const now = Date.now();
@@ -5951,8 +6642,16 @@ var Scheduler = class {
     };
     batch.mergeStepId = step.id;
     run.steps.push(step);
-    if (run.graph.edges.some((edge2) => edge2.source === batch.groupId && edge2.kind === "event"))
-      await this.status(run, { ...step, nodeId: batch.groupId }, error ? "error" : "done", error ?? source.text);
+    if (run.graph.edges.some(
+      (edge2) => edge2.source === batch.groupId && edge2.kind === "event"
+    )) {
+      await this.events.recordStatus(
+        run,
+        { ...step, nodeId: batch.groupId },
+        error ? "error" : "done",
+        error ?? source.text
+      );
+    }
     if (!error && node2.config?.sortMode && node2.config.sortMode !== "off") {
       step.state = "running";
       delete step.route;
@@ -5961,17 +6660,36 @@ var Scheduler = class {
       this.execute(run, step, node2);
       return;
     }
-    await this.emitDownstreamTokens(run, step, node2, void 0, void 0, source.text, false, source);
+    await emitDownstreamTokens(
+      this.runtime,
+      (r, t) => this.armDelay(r, t),
+      run,
+      step,
+      node2,
+      void 0,
+      void 0,
+      source.text,
+      false,
+      source
+    );
   }
   async cancelFanoutLane(run, batch, lane) {
-    for (const step of run.steps.filter((step2) => step2.fanoutBatchId === batch.id && step2.itemKey === lane.item.key && (isActiveStep(step2) || step2.state === "awaiting"))) {
+    for (const step of run.steps.filter(
+      (s) => s.fanoutBatchId === batch.id && s.itemKey === lane.item.key && (isActiveStep(s) || s.state === "awaiting")
+    )) {
       await this.stopStep(step);
       step.state = "aborted";
       step.endedAt = Date.now();
     }
-    const edges = new Set(run.graph.edges.filter((edge2) => edge2.generatedBy === batch.fanId && edge2.itemKey === lane.item.key).map((edge2) => edge2.id));
+    const edges = new Set(
+      run.graph.edges.filter(
+        (edge2) => edge2.generatedBy === batch.fanId && edge2.itemKey === lane.item.key
+      ).map((edge2) => edge2.id)
+    );
     for (const token of run.tokens) {
-      if (token.fanoutBatchId !== batch.id || !edges.has(token.edgeId) || token.consumed) continue;
+      if (token.fanoutBatchId !== batch.id || !edges.has(token.edgeId) || token.consumed) {
+        continue;
+      }
       this.clearTimer(token.id);
       token.dismissed = true;
       consumeToken(token);
@@ -5979,188 +6697,14 @@ var Scheduler = class {
     lane.state = "cancelled";
     lane.endedAt = Date.now();
   }
-  async advanceGraph(run) {
-    const nodes = new Map(run.graph.nodes.map((node2) => [node2.id, node2]));
-    const links = activeEdges(run.graph.edges).filter((edge2) => {
-      const source = nodes.get(edge2.source), target = nodes.get(edge2.target);
-      return source && target && (isExecutable(source) || source.flowType === triggerNode.flowType) && isExecutable(target) && !source.removed && !target.removed && !isFanoutMaster(run.graph, source) && !isFanoutMaster(run.graph, target) && !(edge2.generatedBy && target.flowType === "flowspace/merge-sort") && source.participation !== "paused" && target.participation !== "paused";
-    });
-    const edges = new Map(links.map((edge2) => [edge2.id, edge2]));
-    const { component, rank, cyclic } = graphOrder(run.graph.nodes, links, run.roots);
-    const bypassNodes = run.graph.nodes.filter((node2) => node2.participation === "bypassed");
-    const bypassLinks = links.filter((edge2) => nodes.get(edge2.source)?.participation === "bypassed" && nodes.get(edge2.target)?.participation === "bypassed");
-    const bypassOrder = graphOrder(bypassNodes, bypassLinks, []);
-    const bypassCycles = new Set(bypassLinks.filter((edge2) => {
-      const group = bypassOrder.component.get(edge2.source);
-      return bypassOrder.cyclic.has(group) && group === bypassOrder.component.get(edge2.target);
-    }).map((edge2) => edge2.id));
-    const feedback = /* @__PURE__ */ new Set();
-    const limits = /* @__PURE__ */ new Map();
-    for (const edge2 of links) {
-      const group = component.get(edge2.source);
-      if (!cyclic.has(group) || group !== component.get(edge2.target)) continue;
-      limits.set(group, Math.min(limits.get(group) ?? Infinity, edge2.maxRounds));
-      if (rank.get(edge2.source) >= rank.get(edge2.target)) feedback.add(edge2.id);
-    }
-    let progressed;
-    do {
-      progressed = false;
-      const steps = new Map(run.steps.map((step) => [step.id, step]));
-      const frontier = run.steps.filter((s) => isActiveStep(s) || ["awaiting", "error", "interrupted", "aborted"].includes(s.state)).map((s) => s.nodeId);
-      const delivered = /* @__PURE__ */ new Set();
-      for (const token of run.tokens) {
-        const edge2 = edges.get(token.edgeId);
-        if (!edge2) continue;
-        delivered.add(edge2.id);
-        if (token.consumed || token.dismissed) continue;
-        if (token.skip && feedback.has(edge2.id)) {
-          consumeToken(token);
-          progressed = true;
-        } else {
-          frontier.push(edge2.target);
-        }
-      }
-      const producers = new Set(reachable([...new Set(frontier)], links));
-      for (const nodeId of run.participants) {
-        const node2 = nodes.get(nodeId);
-        if (!node2 || !isExecutable(node2) || node2.participation === "paused") continue;
-        const incoming = links.filter((edge2) => edge2.target === nodeId && (delivered.has(edge2.id) || producers.has(edge2.source)));
-        if (!incoming.length) continue;
-        const pending2 = run.tokens.filter((token) => !token.consumed && !token.dismissed && edges.get(token.edgeId)?.target === nodeId);
-        if (!pending2.length) continue;
-        if (node2.participation === "bypassed") {
-          for (const token of pending2) {
-            if (!token.ready) continue;
-            consumeToken(token);
-            if (!token.skip || !feedback.has(token.edgeId)) {
-              this.forwardThroughBypass(run, node2, token, steps.get(token.stepId), bypassCycles);
-            }
-            progressed = true;
-          }
-          continue;
-        }
-        const batchId = node2.generatedBy ? pending2[0]?.fanoutBatchId : void 0;
-        const count = run.steps.filter((step) => step.nodeId === nodeId && (!batchId || step.fanoutBatchId === batchId)).length;
-        const group = component.get(nodeId);
-        const limit = limits.get(group) ?? Infinity;
-        if (count >= limit) {
-          for (const token of pending2) {
-            if (token.skip || token.loopCapReached) continue;
-            token.loopCapReached = true;
-            token.ready = false;
-            delete token.readyAt;
-            this.addNoteOnce(run, `${node2.title}\uFF1A\u5DF2\u8FBE\u5230\u5FAA\u73AF\u4E0A\u9650\uFF08${limit} \u8F6E\uFF09\uFF0C\u53EF\u70B9\u51FB\u300C+1 \u8F6E\u300D\u7EE7\u7EED\u6216\u8DF3\u8FC7\u5B8C\u6210`);
-          }
-        }
-        const chosen = [];
-        let missing = false;
-        for (const edge2 of incoming) {
-          const back = feedback.has(edge2.id);
-          if (back && count === 0) continue;
-          const internal = component.get(edge2.source) === group;
-          const candidates = run.tokens.filter((token2) => {
-            if (token2.edgeId !== edge2.id || token2.dismissed || batchId && token2.fanoutBatchId !== batchId) return false;
-            if (!internal) return true;
-            const origin = steps.get(token2.stepId);
-            if (component.get(origin.nodeId) !== group) return true;
-            const sourceFeedsBack = rank.get(origin.nodeId) >= rank.get(nodeId);
-            return origin.iteration === count + (sourceFeedsBack ? 0 : 1);
-          });
-          let token = candidates.find((t) => !t.consumed && (!back || !t.skip));
-          if (back && !token && candidates.some((t) => t.skip)) continue;
-          if (!token && !internal && cyclic.has(group)) token = candidates.at(-1);
-          if (!token?.ready) {
-            missing = true;
-            break;
-          }
-          chosen.push(token);
-        }
-        if (missing || !chosen.some((token) => !token.consumed)) continue;
-        const live = chosen.filter((token) => !token.skip);
-        const fires = live.some((token) => !token.consumed);
-        chosen.forEach(consumeToken);
-        progressed = true;
-        if (fires) {
-          await this.enqueue(run, nodeId, live.map((token) => token.source), true, void 0, {
-            ...node2.kind === "flow" ? { sourcePorts: live.map((token) => edges.get(token.edgeId)?.targetPort ?? "in") } : {},
-            fanoutBatchId: batchId,
-            streamFrom: live.find((token) => token.streamFrom)?.streamFrom,
-            upstreamStepIds: [...new Set(live.map((token) => token.stepId))]
-          });
-        } else {
-          const now = Date.now();
-          const step = {
-            id: uid(),
-            requestId: uid(),
-            nodeId,
-            iteration: count + 1,
-            state: "skipped",
-            sources: [],
-            task: "",
-            createdAt: now,
-            endedAt: now,
-            ...batchId ? { fanoutBatchId: batchId, fanoutId: node2.generatedBy, itemKey: node2.itemKey } : {}
-          };
-          run.steps.push(step);
-          steps.set(step.id, step);
-          const pair = node2.flowType === "flowspace/fanout" && fanoutPair(run.graph, node2.id);
-          if (pair) {
-            const merge = { ...step, id: uid(), requestId: uid(), nodeId: pair.merge.id, fanoutId: node2.id };
-            run.steps.push(merge);
-            await this.emitDownstreamTokens(run, merge, pair.merge, void 0, void 0, "", false);
-          } else await this.emitDownstreamTokens(run, step, node2, void 0, void 0, "", false);
-        }
-      }
-    } while (progressed && run.state !== "error");
-  }
   /** Extend bounded-loop round budget (`+1 Round` gate) and immediately advance parked feedback tokens. */
   extendLoop(request) {
     return this.transact(async () => {
       const run = this.requireRun(request.runId);
       if (["cancelled", "interrupted"].includes(run.state)) return;
-      const extra = Math.max(1, Math.trunc(request.extraRounds ?? 1));
-      const order = graphOrder(run.graph.nodes, run.graph.edges, run.roots);
-      const targetComps = /* @__PURE__ */ new Set();
-      if (request.edgeId) {
-        const edge2 = run.graph.edges.find((e) => e.id === request.edgeId);
-        const comp = edge2 ? order.component.get(edge2.target) : void 0;
-        if (comp !== void 0 && order.cyclic.has(comp)) targetComps.add(comp);
-      } else if (request.nodeId) {
-        const comp = order.component.get(request.nodeId);
-        if (comp !== void 0 && order.cyclic.has(comp)) targetComps.add(comp);
-      } else {
-        for (const t of run.tokens) {
-          if (!t.loopCapReached || t.consumed || t.dismissed) continue;
-          const edge2 = run.graph.edges.find((e) => e.id === t.edgeId);
-          const comp = edge2 ? order.component.get(edge2.target) : void 0;
-          if (comp !== void 0 && order.cyclic.has(comp))
-            targetComps.add(comp);
-        }
-      }
-      if (!targetComps.size) return;
-      for (const edge2 of activeEdges(run.graph.edges)) {
-        const sc = order.component.get(edge2.source);
-        const tc = order.component.get(edge2.target);
-        if (sc !== void 0 && sc === tc && targetComps.has(sc)) {
-          edge2.maxRounds += extra;
-        }
-      }
-      for (const token of run.tokens) {
-        if (!token.loopCapReached || token.consumed || token.dismissed)
-          continue;
-        const edge2 = run.graph.edges.find((e) => e.id === token.edgeId);
-        const comp = edge2 ? order.component.get(edge2.target) : void 0;
-        if (comp !== void 0 && targetComps.has(comp)) {
-          delete token.loopCapReached;
-          if (!token.boundary && !token.planGate && !token.needsRelease && token.delayUntil === void 0) {
-            token.ready = true;
-            markTokenReady(run, token);
-          }
-        }
-      }
-      if (run.state === "waiting") run.state = "running";
+      if (!applyExtendLoop(run, request)) return;
       await this.advance(run);
-      this.settle(run);
+      settleRun(run);
       await this.store.changed();
     });
   }
@@ -6198,7 +6742,13 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
       ...reminder ? { reminderFor: reminder.id } : {}
     };
     if (node2.kind === "flow") {
-      step.sourcePorts = [...origin.sourcePorts ?? sources.map((source) => run.graph.edges.find((edge2) => edge2.source === source.sourceNodeId && edge2.target === nodeId)?.targetPort ?? "in")];
+      step.sourcePorts = [
+        ...origin.sourcePorts ?? sources.map(
+          (source) => run.graph.edges.find(
+            (edge2) => edge2.source === source.sourceNodeId && edge2.target === nodeId
+          )?.targetPort ?? "in"
+        )
+      ];
     }
     run.steps.push(step);
     if (reminder?.emission) reminder.emission.reminderStepId = step.id;
@@ -6209,34 +6759,48 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
       )) {
         const source = run.graph.nodes.find((n) => n.id === edge2.source);
         if (!source) continue;
-        if (reuseReferences && sources.some((saved, index) => saved.sourceNodeId === edge2.source && (!origin.sourcePorts || origin.sourcePorts[index] === (edge2.targetPort ?? "in")))) continue;
+        if (reuseReferences && sources.some(
+          (saved, index) => saved.sourceNodeId === edge2.source && (!origin.sourcePorts || origin.sourcePorts[index] === (edge2.targetPort ?? "in"))
+        )) {
+          continue;
+        }
         const variable = source.flowType === "flowspace/variable" && this.store.variableReference?.(run, step, source);
         const captured = variable || (source.kind === "agent" ? await this.runtime.capture(source, edge2.mode) : await this.runtime.reference(source, edge2, node2, run.listLimit));
-        if (captured.referenceKind === "board-card" && captured.missing) continue;
+        if (captured.referenceKind === "board-card" && captured.missing)
+          continue;
         const version = `${captured.sourceSessionId ?? captured.sourceNodeId}:${captured.version ?? captured.seq ?? captured.text}`;
         edge2.currentVersion = version;
         if (source.kind === "display" && source.sourceNodeId) {
           const replaced = source.sourceNodeId;
-          if (step.sourcePorts) step.sourcePorts = step.sourcePorts.filter((_, i) => step.sources[i].sourceNodeId !== replaced);
+          if (step.sourcePorts) {
+            step.sourcePorts = step.sourcePorts.filter(
+              (_, i) => step.sources[i].sourceNodeId !== replaced
+            );
+          }
           step.sources = step.sources.filter(
             (s) => s.sourceNodeId !== source.sourceNodeId
           );
         }
-        if (edge2.kind === "reference" && node2.kind !== "flow" && !edge2.always && edge2.sentVersion === version)
+        if (edge2.kind === "reference" && node2.kind !== "flow" && !edge2.always && edge2.sentVersion === version) {
           continue;
+        }
         step.sources.push(captured);
         step.sourcePorts?.push(edge2.targetPort ?? "in");
         pendingSentUpdates.push({ edge: edge2, version });
       }
       if (new Set(
         step.sources.filter((s) => s.kind === "session").map((s) => s.sourceSessionId)
-      ).size > 3)
+      ).size > 3) {
         throw new Error("\u4E00\u6B21\u4F1A\u8BDD\u5F15\u7528\u6700\u591A\u5305\u542B\u4E09\u4E2A\u6765\u6E90\uFF1B\u66F4\u591A\u6765\u6E90\u53EF\u6539\u7528\u7ED3\u8BBA");
+      }
       await this.store.prepareStep?.(run, step, node2);
       const debug = {
         originalTask: task,
         continuation: isContinuation,
-        references: pendingSentUpdates.map(({ edge: edge2, version }) => ({ edgeId: edge2.id, version })),
+        references: pendingSentUpdates.map(({ edge: edge2, version }) => ({
+          edgeId: edge2.id,
+          version
+        })),
         tools: this.store.toolsFor?.(run, step) ?? []
       };
       const over = node2.flowType !== "flowspace/notice" && await this.enforceBudget(run, step, true);
@@ -6244,7 +6808,7 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
         step.state = "awaiting";
         step.debug = { reason: over ? "budget" : "breakpoint", ...debug };
         run.singleStep = false;
-        if (!over) await this.status(run, step, "waiting");
+        if (!over) await this.events.recordStatus(run, step, "waiting");
         await this.store.changed();
         return;
       }
@@ -6258,7 +6822,7 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
   async admitPrepared(run, step, node2, prepared) {
     const { originalTask, continuation, references } = prepared;
     const pendingSentUpdates = references.flatMap(({ edgeId, version }) => {
-      const edge2 = run.graph.edges.find((edge3) => edge3.id === edgeId);
+      const edge2 = run.graph.edges.find((e) => e.id === edgeId);
       return edge2 ? [{ edge: edge2, version }] : [];
     });
     const liveDoc = this.store.document();
@@ -6268,7 +6832,8 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
     this.armBudget(run, step);
     if (node2.kind === "flow") {
       step.state = "running";
-      for (const { edge: edge2, version } of pendingSentUpdates) edge2.sentVersion = version;
+      for (const { edge: edge2, version } of pendingSentUpdates)
+        edge2.sentVersion = version;
       if (node2.flowType === "flowspace/fanout") {
         await this.fanout.receive(run, node2, step);
         await this.store.changed();
@@ -6287,15 +6852,18 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
     );
     node2.sessionId = step.sessionId;
     const teamId = teamIdOf(node2, staffedIds(liveDoc.nodes));
-    if (teamId) step.teamRef = this.runtime.teamReference?.(step.sessionId) ?? node2.teamRef ?? { teamId };
+    if (teamId) {
+      step.teamRef = this.runtime.teamReference?.(step.sessionId) ?? node2.teamRef ?? { teamId };
+    }
     await this.store.bound(nodeId, step.sessionId, fork);
-    if (fork)
+    if (fork) {
       for (const e of run.graph.edges.filter(
         (e2) => e2.target === nodeId && e2.mode === "fork"
       )) {
         e.originMode = "fork";
         e.mode = "conclusion";
       }
+    }
     await this.store.changed();
     await this.runtime.send(step);
     const currentDoc = this.store.document();
@@ -6307,23 +6875,28 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
         live.currentVersion = version;
       }
     }
-    if (!step.reminderFor) await this.store.submitted(nodeId, originalTask, continuation);
+    if (!step.reminderFor) {
+      await this.store.submitted(nodeId, originalTask, continuation);
+    }
     await this.store.changed();
   }
   debugStep(runId, stepId, action, task) {
     return this.transact(async () => {
       const run = this.requireRun(runId);
       const step = run.steps.find((entry) => entry.id === stepId);
-      if (!step?.debug || step.state !== "awaiting" || run.budgetPause) throw new Error("\u6B64\u6B65\u9AA4\u672A\u5904\u4E8E\u53EF\u653E\u884C\u7684\u65AD\u70B9");
+      if (!step?.debug || step.state !== "awaiting" || run.budgetPause) {
+        throw new Error("\u6B64\u6B65\u9AA4\u672A\u5904\u4E8E\u53EF\u653E\u884C\u7684\u65AD\u70B9");
+      }
       const prepared = step.debug;
       if (task !== void 0) step.task = task;
       delete step.debug;
       run.state = "running";
       run.singleStep = action === "step";
-      if (action === "skip") await this.resolveHuman(run, step, "skip", true);
-      else {
+      if (action === "skip") {
+        await this.humanGate.resolveHuman(run, step, "skip", true);
+      } else {
         step.state = "queued";
-        const node2 = run.graph.nodes.find((node3) => node3.id === step.nodeId);
+        const node2 = run.graph.nodes.find((n) => n.id === step.nodeId);
         try {
           await this.admitPrepared(run, step, node2, prepared);
         } catch (error) {
@@ -6332,15 +6905,16 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
           step.error = String(error);
         }
       }
-      this.settle(run);
+      settleRun(run);
       await this.store.changed();
     });
   }
   release(runId, tokenId, accept) {
     return this.transact(async () => {
       const run = this.requireRun(runId), token = run.tokens.find((t) => t.id === tokenId);
-      if (!token || token.consumed || token.dismissed || ["cancelled", "interrupted"].includes(run.state))
+      if (!token || token.consumed || token.dismissed || ["cancelled", "interrupted"].includes(run.state)) {
         return;
+      }
       if (!accept) {
         this.clearTimer(token.id);
         token.dismissed = true;
@@ -6357,15 +6931,16 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
         delete token.needsRelease;
         token.ready = token.delayUntil === void 0;
         if (token.ready) markTokenReady(run, token);
-        if (token.boundary && run.scope)
+        if (token.boundary && run.scope) {
           run.scope.push(
             run.graph.edges.find((e) => e.id === token.edgeId).target
           );
+        }
         token.boundary = false;
       }
       if (run.state === "waiting") run.state = "running";
       await this.advance(run);
-      this.settle(run);
+      settleRun(run);
       await this.store.changed();
     });
   }
@@ -6379,17 +6954,23 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
         run.state = "running";
         if (run.budgetPause) {
           const { nodeId, dimension } = run.budgetPause;
-          (run.budgetAcknowledged ??= []).push(`${nodeId ?? "run"}:${dimension}`);
+          (run.budgetAcknowledged ??= []).push(
+            `${nodeId ?? "run"}:${dimension}`
+          );
           delete run.budgetPause;
-          for (const step of run.steps) if (step.debug?.reason === "budget") step.debug.reason = "breakpoint";
+          for (const step of run.steps) {
+            if (step.debug?.reason === "budget") step.debug.reason = "breakpoint";
+          }
         }
         this.restoreWaits(run);
         await this.advance(run);
-        this.settle(run);
+        settleRun(run);
       } else {
         run.state = "cancelled";
         delete run.pendingEvents;
-        for (const step of run.steps.filter((s) => isActiveStep(s) || s.state === "awaiting")) {
+        for (const step of run.steps.filter(
+          (s) => isActiveStep(s) || s.state === "awaiting"
+        )) {
           await this.stopStep(step);
           step.state = "aborted";
           step.endedAt = Date.now();
@@ -6400,9 +6981,11 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
         }
         for (const batch of run.fanouts ?? []) {
           batch.closed = true;
-          for (const lane of batch.lanes) if (lane.state === "queued" || lane.state === "running") {
-            lane.state = "cancelled";
-            lane.endedAt = Date.now();
+          for (const lane of batch.lanes) {
+            if (lane.state === "queued" || lane.state === "running") {
+              lane.state = "cancelled";
+              lane.endedAt = Date.now();
+            }
           }
         }
         await this.wakeFanouts(run);
@@ -6410,7 +6993,6 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
       await this.store.changed();
     });
   }
-  /** Safely interrupt all active runs before restoring a canvas snapshot (R10). */
   async stopStep(step) {
     this.clearTimer(step.id);
     if (step.emission) step.emission.closed = true;
@@ -6418,9 +7000,12 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
     if (controller) {
       controller.abort();
       this.executions.delete(step.id);
-    } else if (step.sessionId) await this.runtime.cancel(step).catch(() => {
-    });
+    } else if (step.sessionId) {
+      await this.runtime.cancel(step).catch(() => {
+      });
+    }
   }
+  /** Safely interrupt all active runs before restoring a canvas snapshot (R10). */
   async interruptAllActive(reasonNote) {
     for (const run of this.runs) {
       if (!["running", "waiting", "paused"].includes(run.state)) continue;
@@ -6438,16 +7023,17 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
           token.dismissed = true;
         }
       }
-      this.addNoteOnce(run, reasonNote);
+      addNoteOnce(run, reasonNote);
     }
   }
-  hasDurableWait(run) {
-    return !!run.pendingEvents?.length || !!run.fanouts?.some((batch) => !batch.mergeStepId || batch.lanes.some((lane) => lane.state === "queued" || lane.state === "running")) || run.steps.some((step) => step.state === "awaiting") || run.tokens.some((token) => !token.consumed && !token.dismissed && token.delayUntil !== void 0);
-  }
   restoreWaits(run) {
-    for (const batch of run.pendingEvents ?? []) this.armEvent(run, batch);
-    for (const step of run.steps) if (step.state === "awaiting") this.armHuman(run, step);
-    for (const token of run.tokens) if (!token.consumed && !token.dismissed) this.armDelay(run, token);
+    for (const batch of run.pendingEvents ?? []) this.events.armEvent(run, batch);
+    for (const step of run.steps) {
+      if (step.state === "awaiting") this.humanGate.armHuman(run, step);
+    }
+    for (const token of run.tokens) {
+      if (!token.consumed && !token.dismissed) this.armDelay(run, token);
+    }
   }
   recover() {
     return this.transact(async () => {
@@ -6455,7 +7041,7 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
       for (const run of this.runs) {
         if (!["running", "waiting", "paused"].includes(run.state)) continue;
         const hadActiveSteps = run.steps.some(isActiveStep);
-        const resumable = this.hasDurableWait(run) || run.state === "paused" && !hadActiveSteps;
+        const resumable = hasDurableWait(run) || run.state === "paused" && !hadActiveSteps;
         if (!resumable) run.state = "interrupted";
         for (const step of run.steps) {
           if (isActiveStep(step) || resumable && step.fanoutBatchId && step.sessionId && step.state === "interrupted" && step.endSeq === void 0) {
@@ -6478,29 +7064,38 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
                     await this.runtime.isPlanModeActive?.(step.sessionId)
                   ) : false;
                   step.route ??= "out";
-                  await this.deliverAgentResult(run, step, source, planGateActive);
+                  await this.emissions.deliverAgentResult(
+                    run,
+                    step,
+                    source,
+                    planGateActive
+                  );
                 } catch (err) {
-                  this.addNoteOnce(
+                  addNoteOnce(
                     run,
                     `${source.title}\uFF1A\u6062\u590D\u6355\u83B7\u7ED3\u679C\u5931\u8D25\uFF08${String(err)}\uFF09`
                   );
                 }
               }
-            } else if (step.emission && !isActiveStep(step)) step.emission.closed = true;
+            } else if (step.emission && !isActiveStep(step)) {
+              step.emission.closed = true;
+            }
           }
         }
         if (resumable) {
           this.restoreWaits(run);
           resume.push(run);
         }
-        if (hadActiveSteps || !resumable) this.addNoteOnce(
-          run,
-          "Host \u5DF2\u91CD\u65B0\u542F\u52A8\u3002\u4FDD\u7559\u5DF2\u5B8C\u6210\u7ED3\u679C\uFF1B\u7EE7\u7EED\u53EA\u63A8\u8FDB\u5C1A\u672A\u6295\u9012\u7684\u63A5\u7EED\uFF0C\u4E2D\u65AD\u8282\u70B9\u8BF7\u624B\u52A8\u91CD\u8DD1\u3002"
-        );
+        if (hadActiveSteps || !resumable) {
+          addNoteOnce(
+            run,
+            "Host \u5DF2\u91CD\u65B0\u542F\u52A8\u3002\u4FDD\u7559\u5DF2\u5B8C\u6210\u7ED3\u679C\uFF1B\u7EE7\u7EED\u53EA\u63A8\u8FDB\u5C1A\u672A\u6295\u9012\u7684\u63A5\u7EED\uFF0C\u4E2D\u65AD\u8282\u70B9\u8BF7\u624B\u52A8\u91CD\u8DD1\u3002"
+          );
+        }
       }
       for (const run of resume) {
         await this.advance(run);
-        this.settle(run);
+        settleRun(run);
       }
       await this.store.changed();
     });
@@ -6513,9 +7108,11 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
         (r) => ["running", "waiting", "paused"].includes(r.state)
       )) {
         const active2 = run.steps.filter(isActiveStep);
-        if (this.hasDurableWait(run)) {
+        if (hasDurableWait(run)) {
           if (run.state !== "paused") run.state = "waiting";
-        } else if (run.state !== "paused" || active2.length) run.state = "interrupted";
+        } else if (run.state !== "paused" || active2.length) {
+          run.state = "interrupted";
+        }
         for (const step of active2) {
           await this.stopStep(step);
           step.state = "interrupted";
@@ -6530,40 +7127,538 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
     if (!run) throw new Error("\u8FD0\u884C\u8BB0\u5F55\u4E0D\u5B58\u5728");
     return run;
   }
-  settle(run) {
-    for (const step of run.steps) {
-      if (step.state === "completed" && step.route === "error" && step.error) step.state = "error";
+};
+
+// packages/flowspace/src/host/containers.ts
+import { createHash as createHash2 } from "node:crypto";
+import { z as z13 } from "zod";
+
+// packages/flowspace/src/host/toolPrimitives.ts
+import { z as z12 } from "zod";
+
+// packages/flowspace/src/host/dshServices.ts
+import { createHash } from "node:crypto";
+function optionalService(ctx, key) {
+  return ctx.get?.(key);
+}
+var getWorkspaceChanges = (ctx) => optionalService(ctx, "workspaceChanges");
+var getTerminalController = (ctx) => optionalService(ctx, "terminalController");
+var getWorkingDirectory = (ctx) => optionalService(ctx, "workingDirectory");
+var getPlanMode = (ctx) => optionalService(ctx, "planMode");
+var getSandboxPolicy = (ctx) => optionalService(ctx, "sandboxPolicy");
+var getSubprocess = (ctx) => optionalService(ctx, "subprocess");
+var getShell = (ctx) => optionalService(ctx, "shell");
+var getApproval = (ctx) => optionalService(ctx, "approval");
+var getSpillStore = (ctx) => ctx.get?.("spillStore");
+async function resolveAgentOptional(ctx, sessionId) {
+  if (!sessionId) return void 0;
+  const result = await ctx.sessionController.resolveAgent(sessionId).catch(() => null);
+  return result && !("error" in result) ? result.agent : void 0;
+}
+function formatTurnChangesSummary(sum) {
+  return `Turn #${sum.turn} (${sum.total} files, +${sum.added} / -${sum.deleted})
+` + sum.files.map((f) => `- ${f.display} (+${f.added} / -${f.deleted})`).join("\n");
+}
+function shortHash(value) {
+  return createHash("sha1").update(value).digest("hex").slice(0, 12);
+}
+
+// packages/flowspace/src/host/toolPrimitives.ts
+var jsonToolOutput = {
+  schema: { type: "object", additionalProperties: true },
+  render: (_args, value) => [
+    { type: "text", text: JSON.stringify(value) }
+  ]
+};
+function zodToolSchema(schema5) {
+  return JSON.parse(
+    JSON.stringify(z12.toJSONSchema(schema5, { target: "draft-7" }))
+  );
+}
+async function requestToolApproval(ctx, exec, toolName, reason, deniedMessage = "\u64CD\u4F5C\u672A\u83B7\u6279\u51C6") {
+  const approval = getApproval(ctx);
+  const result = await approval?.request({
+    agent: exec.agent,
+    toolName,
+    callId: exec.callId,
+    signal: exec.signal,
+    reason
+  });
+  if (result !== "allowed-once") throw new Error(deniedMessage);
+}
+async function approveWrite(ctx, exec, toolName, title, deniedMessage = "\u5BB9\u5668\u6539\u52A8\u672A\u83B7\u6279\u51C6") {
+  await requestToolApproval(
+    ctx,
+    exec,
+    toolName,
+    `\u5141\u8BB8 Agent \u4FEE\u6539\u300C${title}\u300D\u4E2D\u7684\u5185\u5BB9\uFF1F`,
+    deniedMessage
+  );
+}
+
+// packages/flowspace/src/host/containers.ts
+var lookup = z13.strictObject({ edgeId: z13.string() });
+var update = lookup.extend({ expectedVersion: z13.string(), text: z13.string() });
+var boardUpdate = lookup.extend({
+  action: z13.enum(["add", "edit", "delete", "move", "toggle", "comment", "check"]),
+  itemId: z13.string().optional(),
+  expectedVersion: z13.string(),
+  text: z13.string().optional(),
+  columnId: z13.string().optional(),
+  checklistId: z13.string().optional()
+});
+var versionOf = (entry) => {
+  if (!entry) return "absent";
+  const value = entry.kind === "board" ? { column: entry.columnId, card: entry.card } : entry;
+  return createHash2("sha256").update(canonicalJson(value)).digest("hex");
+};
+function requireVersion(expected, actual) {
+  if (expected !== actual) throw new Error(`\u6761\u76EE\u7248\u672C\u51B2\u7A81\u3002\u5F53\u524D\u7248\u672C ${actual}\u3002\u8BF7\u8BFB\u53D6\u6700\u65B0\u5185\u5BB9\u540E\u518D\u8BD5\u3002`);
+}
+var ContainerStore = class {
+  constructor(ctx, table, document, persist, publish, workspacePath) {
+    this.ctx = ctx;
+    this.table = table;
+    this.document = document;
+    this.persist = persist;
+    this.publish = publish;
+    this.workspacePath = workspacePath;
+  }
+  changes() {
+    return [...this.table.entries()].map(([, value]) => value).filter((change) => !change.pending).sort((a, b) => a.revision - b.revision);
+  }
+  latest(id) {
+    return this.table.get(id);
+  }
+  mounts(sessionId, kind) {
+    const doc = this.document();
+    const target = doc.nodes.find((node2) => node2.kind === "agent" && node2.sessionId === sessionId);
+    if (!target) return [];
+    const nodes = new Map(doc.nodes.map((node2) => [node2.id, node2]));
+    return doc.edges.flatMap((edge2) => {
+      if (edge2.target !== target.id) return [];
+      const node2 = nodes.get(edge2.source);
+      if (node2?.kind !== kind || kind === "file" && extractFileNodePaths(node2).length !== 1) return [];
+      const permission = containerPermission(node2, edge2);
+      return permission === "read" ? [] : [{ node: node2, edge: edge2, permission }];
+    });
+  }
+  mount(sessionId, kind, edgeId) {
+    const mount = this.mounts(sessionId, kind).find((item) => item.edge.id === edgeId);
+    if (!mount) throw new Error("\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u6B64\u5BB9\u5668\u7684\u5199\u5165\u6388\u6743");
+    return mount;
+  }
+  async read(mount, signal) {
+    const { edge: edge2, node: node2 } = mount;
+    if (node2.kind === "board") {
+      const ids = boardIdsForReference(node2, edge2);
+      const entries = [...ids].map((id) => {
+        const entry2 = canvasEntry(node2, id);
+        return { id, version: versionOf(entry2), entry: entry2 };
+      });
+      const columns = normalizeBoardColumns(node2.columns).map(({ id, name }) => ({ id, name }));
+      return { entries, columns };
     }
-    if (["paused", "cancelled", "interrupted"].includes(run.state)) return;
-    if (run.steps.some((s) => s.state === "awaiting"))
-      run.state = "waiting";
-    else if (run.steps.some(isActiveStep))
-      run.state = "running";
-    else if (run.tokens.some((t) => !t.skip && !t.consumed && !t.dismissed && !t.ready))
-      run.state = "waiting";
-    else if (run.pendingEvents?.length || run.fanouts?.some((batch) => batch.lanes.some((lane) => lane.state === "queued")))
-      run.state = "waiting";
-    else if (run.steps.some((step) => {
-      if (step.emission?.reminderStepId) return false;
-      if (step.itemKey && run.fanouts?.some((batch) => batch.id === step.fanoutBatchId && batch.mergeStepId && batch.lanes.some((lane) => lane.item.key === step.itemKey && lane.adopted === false))) return false;
-      if (step.state === "error" && step.route === "error") {
-        return !run.tokens.some((token) => token.stepId === step.id && !token.skip);
+    if (node2.kind === "file") {
+      const path = extractFileNodePaths(node2)[0];
+      const file = await this.file(path, node2.worktreePath ?? node2.cwd, signal);
+      return { entry: file.entry, version: file.version ?? "absent" };
+    }
+    const entry = canvasEntry(node2);
+    return { entry, version: versionOf(entry) };
+  }
+  async file(path, cwd, signal) {
+    const { base, full, rel } = this.workspacePath({ path, cwd });
+    const root = await this.ctx.fs.resolve(base, { signal });
+    const target = await this.ctx.fs.resolve(full, { signal });
+    if (!this.ctx.fs.contains(root, target)) throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
+    const info = await this.ctx.fs.stat(target, signal);
+    const entry = info ? {
+      kind: "file",
+      path: rel,
+      cwd: base,
+      text: await this.ctx.fs.readText(target, signal)
+    } : null;
+    return { target, version: info?.version, entry };
+  }
+  async record(node2, itemId, id, before, after, owner, file, signal) {
+    const previous = this.latest(id);
+    if (previous && !previous.pending) return previous;
+    if (after?.kind === "board" && owner.sessionId) after.card = { ...after.card, author: owner.sessionId };
+    const document = this.document();
+    const revision = (document.containerRevision ?? 0) + 1;
+    const change = {
+      id,
+      nodeId: node2.id,
+      itemId,
+      before,
+      after,
+      ...owner,
+      revision,
+      at: Date.now(),
+      beforeVersion: file?.version ?? versionOf(before),
+      afterVersion: versionOf(after),
+      pending: true
+    };
+    const edited = { ...node2 };
+    if (!file && !writeCanvasEntry(edited, itemId, after)) throw new Error("\u76EE\u6807\u5BB9\u5668\u6216\u5217\u5DF2\u79FB\u9664");
+    await this.table.put(id, change);
+    if (file) {
+      try {
+        if (after?.kind === "file") {
+          const outcome = await this.ctx.fs.writeText(
+            file.target,
+            after.text,
+            file.version ? { kind: "replaceIfVersion", version: file.version } : { kind: "createIfAbsent" },
+            signal
+          );
+          change.afterVersion = outcome.version;
+          after.text = outcome.after;
+        } else if (file.version) {
+          await this.ctx.fs.deleteFile(file.target, { version: file.version }, signal);
+          change.afterVersion = "absent";
+        }
+      } catch (error) {
+        await this.table.delete(id);
+        throw error;
       }
-      return ["error", "aborted", "interrupted"].includes(step.state);
-    }) || run.state === "error")
-      run.state = "error";
-    else if (run.tokens.some((t) => !t.skip && !t.consumed && !t.dismissed)) {
-      run.state = "error";
-      this.addNoteOnce(
-        run,
-        "\u63A5\u7EED\u65E0\u6CD5\u6C47\u5408\uFF1A\u6709\u5206\u652F\u88AB\u8DF3\u8FC7\u6216\u672A\u4EA7\u751F\u672C\u8F6E\u7ED3\u679C\u3002\u53EF\u4ECE\u76EE\u6807\u8282\u70B9\u624B\u52A8\u7EE7\u7EED\u3002"
-      );
-    } else run.state = "completed";
+    } else {
+      document.nodes = document.nodes.map((current) => current.id === edited.id ? edited : current);
+      if (edited.kind === "board") document.edges = pruneBoardReferences(edited, document.edges);
+    }
+    document.containerRevision = revision;
+    await this.persist();
+    delete change.pending;
+    await this.table.put(id, change);
+    this.publish();
+    return change;
+  }
+  async recover() {
+    for (const [, stored] of this.table.entries()) {
+      if (!stored.pending) continue;
+      const change = structuredClone(stored);
+      const doc = this.document();
+      const node2 = doc.nodes.find((entry) => entry.id === change.nodeId);
+      const file = change.after?.kind === "file" ? change.after : change.before?.kind === "file" ? change.before : void 0;
+      if (file) {
+        const current = await this.file(file.path, file.cwd);
+        if (versionOf(current.entry) !== versionOf(change.after)) {
+          await this.table.delete(change.id);
+          continue;
+        }
+        change.afterVersion = current.version ?? "absent";
+        doc.containerRevision = Math.max(doc.containerRevision ?? 0, change.revision);
+      } else if (!node2 || (doc.containerRevision ?? 0) < change.revision) {
+        await this.table.delete(change.id);
+        continue;
+      }
+      delete change.pending;
+      await this.table.put(change.id, change);
+    }
+  }
+  writeBoard(mount, args, owner, id) {
+    const { edge: edge2, node: node2, permission } = mount;
+    const { itemId, action, expectedVersion, text, columnId, checklistId } = args;
+    const columns = normalizeBoardColumns(node2.columns);
+    const found = itemId === void 0 ? void 0 : findBoardCard(columns, itemId);
+    const before = canvasEntry(node2, itemId);
+    if (action === "add") {
+      if (permission !== "edit" || edge2.sourceItemKey !== void 0 || node2.selectedItems?.length)
+        throw new Error("\u5F53\u524D\u5F15\u7528\u672A\u6388\u6743\u65B0\u589E\u5361\u7247");
+      requireVersion(expectedVersion, "absent");
+      const target = columns.find((column) => column.id === columnId) ?? (!columnId ? columns[0] : void 0);
+      if (!target || !text?.trim()) throw new Error("\u65B0\u589E\u5361\u7247\u9700\u8981\u6587\u5B57\u548C\u6709\u6548\u7684\u5217");
+      const card = newBoardCard(text.trim());
+      return this.record(node2, card.id, id, null, { kind: "board", columnId: target.id, card }, owner);
+    }
+    if (!itemId || !found || !boardIdsForReference(node2, edge2).has(itemId)) throw new Error("\u5F53\u524D\u5F15\u7528\u672A\u6388\u6743\u6B64\u5361\u7247");
+    if ((action === "edit" || action === "delete") && permission !== "edit") throw new Error("\u8BE5\u64CD\u4F5C\u9700\u8981\u7F16\u8F91\u6388\u6743");
+    requireVersion(expectedVersion, versionOf(before));
+    const now = Date.now();
+    let next = columns;
+    switch (action) {
+      case "move":
+        if (!columns.some((column) => column.id === columnId)) throw new Error("\u76EE\u6807\u5217\u4E0D\u5B58\u5728");
+        next = moveBoardCard(columns, itemId, columnId, void 0, now);
+        break;
+      case "toggle":
+        next = toggleBoardCardDone(columns, itemId, node2.boardSettings, now);
+        break;
+      case "check":
+        if (!found.card.checklist?.some((item) => item.id === checklistId)) throw new Error("\u6E05\u5355\u9879\u4E0D\u5B58\u5728");
+        next = updateBoardCard(columns, itemId, (card) => ({
+          ...card,
+          updatedAt: now,
+          checklist: card.checklist.map((item) => item.id === checklistId ? { ...item, done: !item.done } : item)
+        }));
+        break;
+      case "comment":
+        if (!text?.trim()) throw new Error("\u8BF7\u586B\u5199\u8BC4\u8BBA");
+        next = updateBoardCard(columns, itemId, (card) => ({
+          ...card,
+          updatedAt: now,
+          comments: [...card.comments ?? [], { id, by: owner.by, text: text.trim(), createdAt: now }]
+        }));
+        break;
+      case "edit":
+        if (!text?.trim()) throw new Error("\u8BF7\u586B\u5199\u5361\u7247\u6587\u5B57");
+        next = updateBoardCard(columns, itemId, (card) => ({ ...card, text: text.trim(), updatedAt: now }));
+        break;
+      case "delete":
+        next = removeBoardCard(columns, itemId);
+        break;
+    }
+    return this.record(node2, itemId, id, before, canvasEntry({ ...node2, columns: next }, itemId), owner);
+  }
+  async write(mount, args, owner, id, signal) {
+    const previous = this.latest(id);
+    if (previous && !previous.pending) return previous;
+    if ("action" in args) return this.writeBoard(mount, args, owner, id);
+    const { node: node2 } = mount;
+    if (node2.kind === "file") {
+      const path = extractFileNodePaths(node2)[0];
+      const file = await this.file(path, node2.worktreePath ?? node2.cwd, signal);
+      requireVersion(args.expectedVersion, file.version ?? "absent");
+      const { base, rel } = this.workspacePath({ path, cwd: node2.worktreePath ?? node2.cwd });
+      return this.record(node2, void 0, id, file.entry, {
+        kind: "file",
+        path: rel,
+        cwd: base,
+        text: args.text.replaceAll("\r\n", "\n")
+      }, owner, file, signal);
+    }
+    const before = canvasEntry(node2);
+    requireVersion(args.expectedVersion, versionOf(before));
+    return this.record(node2, void 0, id, before, { kind: "note", text: args.text }, owner);
+  }
+  async deliver(run, edge2, token, source) {
+    const node2 = this.document().nodes.find((node3) => node3.id === edge2.target);
+    if (!node2) throw new Error("\u6295\u9012\u76EE\u6807\u5DF2\u79FB\u9664");
+    const step = run.steps.find((step2) => step2.id === token.stepId);
+    const owner = {
+      by: step?.sessionId ?? edge2.source,
+      sessionId: step?.sessionId,
+      runId: run.id,
+      stepId: step?.id,
+      edgeId: edge2.id
+    };
+    const id = JSON.stringify([run.id, token.stepId, edge2.id]);
+    const text = source.content ? textOfContent(source.content) : source.text;
+    if (node2.kind === "board") {
+      const columns = normalizeBoardColumns(node2.columns);
+      const dest = edge2.delivery?.columnId ? columns.find((column) => column.id === edge2.delivery?.columnId) : columns[0];
+      if (!dest) throw new Error("\u6295\u9012\u76EE\u6807\u5217\u5DF2\u79FB\u9664");
+      const mode2 = edge2.delivery?.mode ?? "lines";
+      const values = mode2 === "paragraph" ? [text] : mode2 === "list" ? source.content?.items?.map((item) => item.value) ?? parseEmission(text) : text.split(/\r?\n/);
+      for (const [index, value] of values.slice(0, run.listLimit ?? DEFAULT_LIST_LIMIT).entries()) {
+        const title = typeof value === "string" ? value.trim() : JSON.stringify(value);
+        if (!title) continue;
+        const itemId = `${id}:${index}`;
+        const current = this.document().nodes.find((node3) => node3.id === edge2.target);
+        const card = { ...newBoardCard(title), id: itemId };
+        await this.record(current, itemId, itemId, null, { kind: "board", columnId: dest.id, card }, owner);
+      }
+    } else if (node2.kind === "note") {
+      await this.record(node2, void 0, id, canvasEntry(node2), { kind: "note", text }, owner);
+    } else if (node2.kind === "file") {
+      const paths2 = extractFileNodePaths(node2);
+      if (paths2.length !== 1) throw new Error("\u8BF7\u9009\u62E9\u4E00\u4E2A\u6295\u9012\u6587\u4EF6");
+      const cwd = node2.worktreePath ?? node2.cwd;
+      const file = await this.file(paths2[0], cwd);
+      const path = this.workspacePath({ path: paths2[0], cwd });
+      await this.record(node2, void 0, id, file.entry, {
+        kind: "file",
+        text: text.replaceAll("\r\n", "\n"),
+        path: path.rel,
+        cwd: path.base
+      }, owner, file);
+    }
+  }
+  async revert(id) {
+    const change = this.latest(id);
+    if (!change || change.pending || change.revertedBy) throw new Error("\u6B64\u6539\u52A8\u5DF2\u64A4\u56DE\u6216\u4E0D\u53EF\u7528");
+    const node2 = this.document().nodes.find((node3) => node3.id === change.nodeId);
+    if (!node2) throw new Error("\u5BB9\u5668\u5DF2\u79FB\u9664");
+    const file = change.after?.kind === "file" ? await this.file(change.after.path, change.after.cwd) : void 0;
+    const current = file ? file.entry : canvasEntry(node2, change.itemId);
+    requireVersion(change.afterVersion, file?.version ?? versionOf(current));
+    const undone = await this.record(node2, change.itemId, `undo:${id}`, current, change.before, { by: "\u7528\u6237" }, file);
+    await this.table.put(id, { ...change, revertedBy: undone.id });
+    return undone;
+  }
+};
+function registerContainerTools(ctx, store, scheduler) {
+  for (const kind of ["board", "note", "file"]) {
+    const when = ({ agent }) => store.mounts(agent.id, kind).length > 0;
+    ctx.tools.register({
+      name: `${kind}_read`,
+      description: `List your writable FlowSpace ${kind} references or read one with its current version.`,
+      parameters: { type: "object", properties: { edgeId: { type: "string" } }, additionalProperties: false },
+      output: jsonToolOutput,
+      async execute(raw, exec) {
+        const { edgeId } = lookup.partial().parse(raw);
+        const sessionId = exec.agent?.id;
+        if (!sessionId) throw new Error("\u5BB9\u5668\u5DE5\u5177\u9700\u8981\u753B\u5E03 Agent \u4F1A\u8BDD");
+        return scheduler.transact(async () => edgeId ? store.read(store.mount(sessionId, kind, edgeId), exec.signal) : { references: store.mounts(sessionId, kind).map(({ node: node2, edge: edge2, permission }) => ({
+          edgeId: edge2.id,
+          title: node2.title,
+          permission
+        })) });
+      }
+    }, { when });
+    const schema5 = kind === "board" ? boardUpdate : update;
+    const toolName = `${kind}_write`;
+    ctx.tools.register({
+      name: toolName,
+      description: kind === "board" ? "Change one granted FlowSpace board card. Use board_read first to get its current version. For add, expectedVersion is absent." : `Replace the text of one granted FlowSpace ${kind}. Read it first to get the current version.`,
+      parameters: zodToolSchema(schema5),
+      output: jsonToolOutput,
+      async execute(raw, exec) {
+        const args = schema5.parse(raw);
+        const agent = exec.agent;
+        if (!agent) throw new Error("\u5BB9\u5668\u5DE5\u5177\u9700\u8981\u753B\u5E03 Agent \u4F1A\u8BDD");
+        const before = store.mount(agent.id, kind, args.edgeId);
+        if (before.edge.ask) await approveWrite(ctx, exec, toolName, before.node.title);
+        return scheduler.transact(async () => {
+          exec.signal.throwIfAborted();
+          const current = store.mount(agent.id, kind, args.edgeId);
+          if (before.node.id !== current.node.id || before.edge.sourceItemKey !== current.edge.sourceItemKey || current.edge.ask && !before.edge.ask || kind === "file" && (extractFileNodePaths(before.node)[0] !== extractFileNodePaths(current.node)[0] || (before.node.worktreePath ?? before.node.cwd) !== (current.node.worktreePath ?? current.node.cwd)))
+            throw new Error("\u5BB9\u5668\u6388\u6743\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6");
+          const running = scheduler.activeSessionStep(agent.id);
+          const result = await store.write(current, args, {
+            by: agent.id,
+            sessionId: agent.id,
+            edgeId: current.edge.id,
+            runId: running?.run.id,
+            stepId: running?.step.id
+          }, JSON.stringify([agent.id, running?.step.id, exec.callId]), exec.signal);
+          return { id: result.id, itemId: result.itemId ?? null, version: result.afterVersion };
+        });
+      }
+    }, { when });
+  }
+}
+
+// packages/flowspace/src/host/dataFileWatch.ts
+function fileSelections(doc) {
+  const nodes = new Map(doc.nodes.map((node2) => [node2.id, node2]));
+  const sources = new Set(doc.edges.flatMap((edge2) => {
+    if (edge2.kind !== "reference" || edge2.generatedBy || edge2.snapshotContent || edge2.snapshotText) return [];
+    const source = nodes.get(edge2.source), target = nodes.get(edge2.target);
+    return source?.kind === "file" && !source.generatedBy && target && !target.generatedBy && descriptorOf(target.flowType)?.family === "data" && connectionPort(target, "reference", "in", edge2.targetPort)?.dataType === "text" ? [source] : [];
+  }));
+  const paths2 = /* @__PURE__ */ new Map();
+  for (const source of sources) {
+    const cwd = source.worktreePath ?? source.cwd;
+    for (const item of selectedFileContent(source, doc.settings.listLimit ?? DEFAULT_LIST_LIMIT).items) {
+      const path = item.key, key = JSON.stringify([cwd, path]);
+      const entry = paths2.get(key);
+      if (entry) entry.nodes.add(source.id);
+      else paths2.set(key, { path, cwd, nodes: /* @__PURE__ */ new Set([source.id]) });
+    }
+  }
+  return [...paths2.values()];
+}
+var DataFileWatch = class {
+  constructor(fs, checkedTarget, changed) {
+    this.fs = fs;
+    this.checkedTarget = checkedTarget;
+    this.changed = changed;
+  }
+  watches = /* @__PURE__ */ new Map();
+  dirty = /* @__PURE__ */ new Set();
+  init;
+  pending = Promise.resolve();
+  signature;
+  flushQueued = false;
+  disposed = false;
+  sync(doc) {
+    if (this.disposed) return this.pending;
+    const selected = fileSelections(doc);
+    const signature = JSON.stringify(selected.map((entry) => [entry.cwd, entry.path, [...entry.nodes]]));
+    if (signature === this.signature) return this.pending;
+    this.signature = signature;
+    this.init?.abort();
+    const init = this.init = new AbortController();
+    this.pending = this.pending.then(() => this.reconcile(selected, init.signal)).finally(() => {
+      if (this.init !== init) return;
+      this.init = void 0;
+      this.flush();
+    });
+    return this.pending;
+  }
+  async reconcile(selected, signal) {
+    if (signal.aborted) return;
+    const resolved = await Promise.allSettled(selected.map(async (entry) => this.checkedTarget(entry.path, entry.cwd, signal)));
+    if (signal.aborted) return;
+    const targets = /* @__PURE__ */ new Map();
+    for (const [index, result] of resolved.entries()) {
+      if (result.status === "rejected") continue;
+      const target = result.value, owners = selected[index].nodes;
+      const existing = targets.get(target.targetKey);
+      if (existing) owners.forEach((id) => existing.nodes.add(id));
+      else targets.set(target.targetKey, { target, nodes: owners });
+    }
+    const closing = [];
+    for (const [key, subscription] of this.watches) {
+      const retained = targets.get(key);
+      if (retained) {
+        subscription.nodes = retained.nodes;
+        targets.delete(key);
+      } else {
+        this.watches.delete(key);
+        this.dirty.delete(key);
+        if (subscription.close) closing.push(subscription.close());
+      }
+    }
+    await Promise.allSettled(closing);
+    if (signal.aborted) return;
+    await Promise.allSettled([...targets].map(async ([key, { target, nodes }]) => {
+      const subscription = { nodes };
+      this.watches.set(key, subscription);
+      try {
+        const close = await this.fs.watch(target, (error) => {
+          if (error || this.disposed || this.watches.get(key) !== subscription) return;
+          this.dirty.add(key);
+          this.flush();
+        }, signal);
+        if (signal.aborted) {
+          this.watches.delete(key);
+          await close();
+        } else subscription.close = close;
+      } catch {
+        this.watches.delete(key);
+      }
+    }));
+  }
+  flush() {
+    if (this.disposed || this.init || this.flushQueued || !this.dirty.size) return;
+    this.flushQueued = true;
+    queueMicrotask(() => {
+      this.flushQueued = false;
+      if (this.disposed || this.init) return;
+      const ids = /* @__PURE__ */ new Set();
+      for (const key of this.dirty) this.watches.get(key)?.nodes.forEach((id) => ids.add(id));
+      this.dirty.clear();
+      if (ids.size) this.changed([...ids]);
+    });
+  }
+  dispose() {
+    if (this.disposed) return this.pending;
+    this.disposed = true;
+    this.init?.abort();
+    this.pending = this.pending.then(async () => {
+      const watchers = [...this.watches.values()];
+      this.watches.clear();
+      this.dirty.clear();
+      await Promise.allSettled(watchers.map(async (subscription) => subscription.close?.()));
+    });
+    return this.pending;
   }
 };
 
-// packages/flowspace/src/host/nodes/judge/ai.ts
-import { z as z12 } from "zod";
+// packages/flowspace/src/host/nodes/data.ts
+import { z as z14 } from "zod";
 
 // packages/flowspace/src/host/llm.ts
 async function runLlmStream(llm, req, finalize) {
@@ -6648,54 +7743,6 @@ async function streamLlmJson(llm, req) {
   return { ...result, data: value };
 }
 
-// packages/flowspace/src/host/nodes/judge/ai.ts
-var response = z12.object({
-  branch: z12.string(),
-  reason: z12.string(),
-  confidence: z12.number().min(0).max(1)
-});
-async function aiJudge(llm, config, input, signal) {
-  const { provider, model, branches } = config;
-  if (!provider || !model) throw new Error("\u8BF7\u5148\u9009\u62E9 AI \u5224\u65AD\u7684\u4F9B\u5E94\u5546\u548C\u6A21\u578B");
-  const rawOutputs = [];
-  const telemetry = { stepCount: 0, inputTokens: 0, outputTokens: 0 };
-  const record = { provider, model, inputSummary: input.slice(0, 240), rawOutputs };
-  const system = [
-    config.instruction,
-    JSON.stringify(branches),
-    '\u9009\u62E9\u4E00\u4E2A\u5217\u51FA\u7684\u5206\u652F\u3002\u53EA\u8FD4\u56DE JSON {"branch":"\u5206\u652F id","reason":"\u5224\u65AD\u7406\u7531","confidence":0-1}\u3002'
-  ].join("\n");
-  for (let attempt = 0; attempt < 2; attempt++) {
-    signal.throwIfAborted();
-    telemetry.stepCount++;
-    const res = await streamLlmText(llm, {
-      provider,
-      model,
-      signal,
-      purpose: "flowspace-judge",
-      system: attempt ? system + "\n\u4E0A\u6B21\u54CD\u5E94\u65E0\u6CD5\u89E3\u6790\uFF0C\u8BF7\u4E25\u683C\u4F7F\u7528\u6307\u5B9A\u683C\u5F0F\u548C\u5206\u652F\u3002" : system,
-      userText: input
-    });
-    telemetry.inputTokens += res.inputTokens;
-    telemetry.outputTokens += res.outputTokens;
-    rawOutputs.push(res.text);
-    let parsed2;
-    try {
-      parsed2 = JSON.parse(res.text);
-    } catch {
-      continue;
-    }
-    const result = response.safeParse(parsed2);
-    if (!result.success || !branches.some((b) => b.id === result.data.branch)) continue;
-    const { branch, confidence, reason: reason2 } = result.data;
-    const route = config.lowConfidence && confidence < config.lowConfidence.threshold ? config.lowConfidence.branch : branch;
-    return { route, output: reason2, verdict: { ...record, branch: route, reason: reason2, confidence }, telemetry };
-  }
-  const reason = "\u8FDE\u7EED\u4E24\u6B21\u672A\u6536\u5230\u6709\u6548\u7684\u5224\u65AD\u7ED3\u679C";
-  const verdict = { ...record, branch: "error", reason };
-  return { route: "error", output: reason, verdict, telemetry };
-}
-
 // packages/flowspace/src/host/nodes/judge/code.ts
 import { Worker } from "node:worker_threads";
 var workerUrl = new URL("./src/host/nodes/judge/code-worker.mjs", import.meta.resolve("dsh-flowspace/package.json"));
@@ -6745,120 +7792,11 @@ async function awaitWorkerResult(worker, signal, timeoutMs, startupMs = 1e4) {
   }
 }
 
-// packages/flowspace/src/host/nodes/judge/index.ts
-function judgeExecutors(ctx, contextText) {
-  return {
-    "flowspace/condition": async (node2, step) => {
-      const source = await forwardInput(node2, step, contextText);
-      const config = node2.config;
-      const route = conditionRoute(config, source.text);
-      return { route, source, output: config.branches.find((b) => b.id === route)?.label ?? route, verdict: { branch: route } };
-    },
-    "flowspace/code": async (node2, step, signal) => {
-      const source = await forwardInput(node2, step, contextText);
-      const config = node2.config;
-      const value = await runCode(config.source, source, config.timeoutMs, signal);
-      const route = value === true ? config.branches[0].id : value === false ? "else" : value;
-      if (route !== "else" && !config.branches.some((b) => b.id === route)) throw new Error(`\u4EE3\u7801\u8FD4\u56DE\u4E86\u672A\u77E5\u5206\u652F\uFF1A${route}`);
-      return { route, source, output: config.branches.find((b) => b.id === route)?.label ?? route, verdict: { branch: route } };
-    },
-    "flowspace/ai-judge": async (node2, step, signal) => {
-      const source = await forwardInput(node2, step, contextText);
-      return { ...await aiJudge(ctx.llm, node2.config, source.text, signal), source };
-    },
-    "flowspace/human-choice": async (node2) => {
-      const config = node2.config;
-      const deadline = config.timeoutSec !== void 0 && config.timeoutAction !== "wait" ? Date.now() + config.timeoutSec * 1e3 : void 0;
-      return { awaiting: {
-        question: config.question,
-        options: config.options.map((option) => option.id),
-        timeoutAction: config.timeoutAction,
-        deadline,
-        defaultOption: config.defaultOption
-      } };
-    }
-  };
-}
-
-// packages/flowspace/src/host/nodes/merge.ts
-function mergedInput(node2, step, format, limit) {
-  const first = step.sources[0];
-  if (step.sources.length === 1 && contentOf(first).dataType === format && (first.content?.items?.length ?? 0) <= limit) return first;
-  const values = [];
-  const keys = [];
-  let total = 0;
-  const sourceCounts = /* @__PURE__ */ new Map();
-  for (const source of step.sources) {
-    const content2 = contentOf(source);
-    if (content2.items) {
-      total += content2.originalCount ?? content2.items.length;
-      const occurrence = sourceCounts.get(source.sourceNodeId) ?? 0;
-      sourceCounts.set(source.sourceNodeId, occurrence + 1);
-      for (const item of content2.items.slice(0, limit - values.length)) {
-        values.push(item.value);
-        keys.push(step.sources.length === 1 ? item.key : JSON.stringify([source.sourceNodeId, occurrence, item.key]));
-      }
-    } else {
-      total++;
-      if (values.length < limit) {
-        values.push(content2.value === void 0 ? source.text : content2.value);
-        keys.push(void 0);
-      }
-    }
-  }
-  const content = format === "list" ? contentList(values, limit, keys) : {
-    dataType: "text",
-    value: values.map((value) => typeof value === "string" ? value : JSON.stringify(value)).join("\n")
-  };
-  if (total > values.length) Object.assign(content, { originalCount: total });
-  return snapshotWithContent(node2, content, step.createdAt);
-}
-function mergeExecutor(ctx, getListLimit = () => DEFAULT_LIST_LIMIT) {
-  return async (node2, step, signal) => {
-    signal.throwIfAborted();
-    const config = node2.config;
-    const source = mergedInput(node2, step, config.output, getListLimit(step));
-    if (!config.sortMode || config.sortMode === "off") return { source, route: "out", output: source.text };
-    try {
-      if (config.sortMode === "ai") {
-        const settings = config.ai;
-        const result = await aiJudge(ctx.llm, {
-          provider: settings.provider,
-          model: settings.model,
-          instruction: settings.instruction,
-          branches: [
-            { id: "pass", label: "pass", description: settings.passDescription },
-            { id: "fail", label: "fail", description: settings.failDescription }
-          ],
-          lowConfidence: { threshold: settings.threshold, branch: "fail" }
-        }, source.text, signal);
-        return { ...result, source, output: result.route === "error" ? result.output : source.text };
-      }
-      let route;
-      if (config.sortMode === "condition") {
-        const selected = conditionRoute({ branches: [{ id: "pass", label: "pass", ...config.condition }] }, source.text);
-        route = selected === "pass" ? "pass" : "fail";
-      } else {
-        const value = await runCode(config.code.source, source, config.code.timeoutMs, signal);
-        if (value === true || value === "pass") route = "pass";
-        else if (value === false || value === "fail") route = "fail";
-        else throw new Error("\u5206\u62E3\u811A\u672C\u987B\u8FD4\u56DE\u5E03\u5C14\u503C\u3001pass \u6216 fail");
-      }
-      return { source, route, output: source.text, verdict: { branch: route } };
-    } catch (error) {
-      signal.throwIfAborted();
-      const reason = error instanceof Error ? error.message : String(error);
-      return { source, route: "error", output: reason, verdict: { branch: "error", reason } };
-    }
-  };
-}
-
 // packages/flowspace/src/host/nodes/data.ts
-import { z as z13 } from "zod";
-var mapped = z13.strictObject({ value: z13.json() });
-var filtered = z13.strictObject({ keep: z13.boolean() });
-var parsed = z13.strictObject({ items: z13.array(z13.json()) });
-var ordered = z13.strictObject({ indexes: z13.array(z13.number().int().nonnegative()) });
+var mapped = z14.strictObject({ value: z14.json() });
+var filtered = z14.strictObject({ keep: z14.boolean() });
+var parsed = z14.strictObject({ items: z14.array(z14.json()) });
+var ordered = z14.strictObject({ indexes: z14.array(z14.number().int().nonnegative()) });
 var responseInstructions = {
   map: 'Transform the item. Return only JSON {"value":<JSON value>}.',
   filter: 'Decide whether to keep the item. Return only JSON {"keep":true|false}.',
@@ -7072,155 +8010,1426 @@ async function previewDataNode(ctx, runtime, doc, runs, request, signal) {
   }
 }
 
-// packages/flowspace/src/host/dataFileWatch.ts
-function fileSelections(doc) {
-  const nodes = new Map(doc.nodes.map((node2) => [node2.id, node2]));
-  const sources = new Set(doc.edges.flatMap((edge2) => {
-    if (edge2.kind !== "reference" || edge2.generatedBy || edge2.snapshotContent || edge2.snapshotText) return [];
-    const source = nodes.get(edge2.source), target = nodes.get(edge2.target);
-    return source?.kind === "file" && !source.generatedBy && target && !target.generatedBy && descriptorOf(target.flowType)?.family === "data" && connectionPort(target, "reference", "in", edge2.targetPort)?.dataType === "text" ? [source] : [];
-  }));
-  const paths2 = /* @__PURE__ */ new Map();
-  for (const source of sources) {
-    const cwd = source.worktreePath ?? source.cwd;
-    for (const item of selectedFileContent(source, doc.settings.listLimit ?? DEFAULT_LIST_LIMIT).items) {
-      const path = item.key, key = JSON.stringify([cwd, path]);
-      const entry = paths2.get(key);
-      if (entry) entry.nodes.add(source.id);
-      else paths2.set(key, { path, cwd, nodes: /* @__PURE__ */ new Set([source.id]) });
-    }
-  }
-  return [...paths2.values()];
+// packages/flowspace/src/host/fanoutDrafts.ts
+function motherDefinition(doc, fan) {
+  const nodes = doc.nodes.filter((node2) => node2.masterOf === fan.id);
+  const ids = new Set(nodes.map((node2) => node2.id));
+  const edges = doc.edges.filter((edge2) => !edge2.generatedBy && (ids.has(edge2.source) || ids.has(edge2.target)));
+  return JSON.stringify([fan.config, nodes, edges]);
 }
-var DataFileWatch = class {
-  constructor(fs, checkedTarget, changed) {
-    this.fs = fs;
-    this.checkedTarget = checkedTarget;
-    this.changed = changed;
-  }
-  watches = /* @__PURE__ */ new Map();
-  dirty = /* @__PURE__ */ new Set();
-  init;
-  pending = Promise.resolve();
-  signature;
-  flushQueued = false;
-  disposed = false;
-  sync(doc) {
-    if (this.disposed) return this.pending;
-    const selected = fileSelections(doc);
-    const signature = JSON.stringify(selected.map((entry) => [entry.cwd, entry.path, [...entry.nodes]]));
-    if (signature === this.signature) return this.pending;
-    this.signature = signature;
-    this.init?.abort();
-    const init = this.init = new AbortController();
-    this.pending = this.pending.then(() => this.reconcile(selected, init.signal)).finally(() => {
-      if (this.init !== init) return;
-      this.init = void 0;
-      this.flush();
-    });
-    return this.pending;
-  }
-  async reconcile(selected, signal) {
-    if (signal.aborted) return;
-    const resolved = await Promise.allSettled(selected.map(async (entry) => this.checkedTarget(entry.path, entry.cwd, signal)));
-    if (signal.aborted) return;
-    const targets = /* @__PURE__ */ new Map();
-    for (const [index, result] of resolved.entries()) {
-      if (result.status === "rejected") continue;
-      const target = result.value, owners = selected[index].nodes;
-      const existing = targets.get(target.targetKey);
-      if (existing) owners.forEach((id) => existing.nodes.add(id));
-      else targets.set(target.targetKey, { target, nodes: owners });
+async function reconcileFanoutDrafts(next, previous, runs, resolveDeferred, changedFiles = []) {
+  const fans = next.nodes.filter((node2) => node2.flowType === "flowspace/fanout");
+  if (!fans.length) return false;
+  markFanoutOverrides(previous, next);
+  const oldInputs = createStaticResolver(previous);
+  const newInputs = createStaticResolver(next, {}, Object.fromEntries(changedFiles.map((id) => [id, "changed"])));
+  let changed = false;
+  const needsHost = (state) => state === "needs-file" || state === "needs-code" || state === "needs-spill";
+  const used = new Set(runs.flatMap((run) => run.steps.map((step) => step.nodeId)));
+  for (const run of runs) {
+    if (run.state === "running" || run.state === "waiting" || run.state === "paused") {
+      for (const node2 of run.graph.nodes) if (node2.generatedBy) used.add(node2.id);
     }
-    const closing = [];
-    for (const [key, subscription] of this.watches) {
-      const retained = targets.get(key);
-      if (retained) {
-        subscription.nodes = retained.nodes;
-        targets.delete(key);
-      } else {
-        this.watches.delete(key);
-        this.dirty.delete(key);
-        if (subscription.close) closing.push(subscription.close());
-      }
+  }
+  for (const fan of fans) {
+    const old = previous.nodes.find((node2) => node2.id === fan.id);
+    const motherChanged = !old || motherDefinition(previous, old) !== motherDefinition(next, fan);
+    if (!motherChanged && oldInputs.signature(fan.id) === newInputs.signature(fan.id)) continue;
+    let after = staticFanoutContent(next, fan.id);
+    if (!after && needsHost(newInputs.inputs(fan.id).state)) after = await resolveDeferred(fan.id);
+    if (after || old && (staticFanoutContent(previous, fan.id) || needsHost(oldInputs.inputs(fan.id).state))) {
+      if (reconcileFanout(next, fan.id, after?.items ?? [], used)) changed = true;
+    } else if (motherChanged) {
+      if (syncExistingFanout(next, fan.id, used)) changed = true;
     }
-    await Promise.allSettled(closing);
-    if (signal.aborted) return;
-    await Promise.allSettled([...targets].map(async ([key, { target, nodes }]) => {
-      const subscription = { nodes };
-      this.watches.set(key, subscription);
-      try {
-        const close = await this.fs.watch(target, (error) => {
-          if (error || this.disposed || this.watches.get(key) !== subscription) return;
-          this.dirty.add(key);
-          this.flush();
-        }, signal);
-        if (signal.aborted) {
-          this.watches.delete(key);
-          await close();
-        } else subscription.close = close;
-      } catch {
-        this.watches.delete(key);
+  }
+  return changed;
+}
+
+// packages/flowspace/src/host/nodes/interactions.ts
+import { Cron, RRule } from "@deepseek-ai/dsh-util-time";
+
+// packages/flowspace/src/host/serialQueue.ts
+var SerialQueue = class {
+  constructor(onError) {
+    this.onError = onError;
+  }
+  tail = Promise.resolve();
+  run(action) {
+    const next = this.tail.then(action);
+    this.tail = next.then(
+      () => void 0,
+      (error) => {
+        this.onError?.(error);
       }
-    }));
+    );
+    return next;
   }
-  flush() {
-    if (this.disposed || this.init || this.flushQueued || !this.dirty.size) return;
-    this.flushQueued = true;
-    queueMicrotask(() => {
-      this.flushQueued = false;
-      if (this.disposed || this.init) return;
-      const ids = /* @__PURE__ */ new Set();
-      for (const key of this.dirty) this.watches.get(key)?.nodes.forEach((id) => ids.add(id));
-      this.dirty.clear();
-      if (ids.size) this.changed([...ids]);
-    });
+};
+var KeyedSerialQueue = class {
+  constructor(onError) {
+    this.onError = onError;
   }
-  dispose() {
-    if (this.disposed) return this.pending;
-    this.disposed = true;
-    this.init?.abort();
-    this.pending = this.pending.then(async () => {
-      const watchers = [...this.watches.values()];
-      this.watches.clear();
-      this.dirty.clear();
-      await Promise.allSettled(watchers.map(async (subscription) => subscription.close?.()));
+  queues = /* @__PURE__ */ new Map();
+  run(key, action) {
+    const previous = this.queues.get(key) ?? Promise.resolve();
+    const next = previous.then(action, action);
+    const settled = next.then(
+      () => void 0,
+      (error) => {
+        this.onError?.(error);
+      }
+    );
+    this.queues.set(key, settled);
+    void settled.finally(() => {
+      if (this.queues.get(key) === settled) this.queues.delete(key);
     });
-    return this.pending;
+    return next;
+  }
+  clear() {
+    this.queues.clear();
   }
 };
 
-// packages/flowspace/src/host/content.ts
-import { createHash as createHash2 } from "node:crypto";
+// packages/flowspace/src/host/nodes/interactions.ts
+var humanExecutor = (ctx) => async (node2, step, signal) => {
+  const config = humanConfig.parse(node2.config);
+  const fields = node2.flowType === "flowspace/human-score" ? [
+    { name: "score", label: "flow_human_rating", type: config.rating === "like" ? "like" : "score", required: true },
+    { name: "comment", label: "flow_human_comment", type: "text" }
+  ] : node2.flowType === "flowspace/human-review" ? [
+    { name: "text", label: "flow_human_review", type: "review", required: true }
+  ] : config.fields;
+  let initial = node2.flowType === "flowspace/human-review" ? { text: step.sources.at(-1)?.text ?? "" } : {};
+  if (config.timeoutAction === "default") initial = checkAnswers(fields, JSON.parse(config.defaultAnswer));
+  if (config.aiPrefill && config.provider && config.model) {
+    try {
+      const res = await streamLlmText(ctx.llm, {
+        provider: config.provider,
+        model: config.model,
+        signal,
+        purpose: "flowspace-form-prefill",
+        system: "Suggest form answers in a single JSON object keyed by field name.",
+        userText: JSON.stringify({ question: config.question, fields, source: step.sources.at(-1)?.text })
+      });
+      initial = checkAnswers(fields, JSON.parse(res.text));
+    } catch {
+      signal.throwIfAborted();
+    }
+  }
+  return { awaiting: {
+    question: config.question,
+    fields,
+    initial,
+    options: ["out", "skip"],
+    timeoutAction: config.timeoutAction,
+    defaultOption: "out",
+    ...config.timeoutSec && config.timeoutAction !== "wait" ? { deadline: Date.now() + config.timeoutSec * 1e3 } : {}
+  } };
+};
+var noticeExecutor = (notify) => async (node2, step) => {
+  const config = noticeConfig.parse(node2.config);
+  const source = step.sources.at(-1);
+  const value = source?.content?.value;
+  const summary = value && typeof value === "object" && !Array.isArray(value) && typeof value.summary === "string" ? value.summary : void 0;
+  const text = config.message || summary || source?.text.slice(0, 1e3) || node2.title;
+  notify({ id: step.id, at: Date.now(), title: config.title || node2.title, text, system: config.system, sound: config.sound });
+  return { route: "out", output: text, source: snapshotWithContent(node2, { dataType: "text", value: text }) };
+};
+function triggerNext(config, after) {
+  if (config.mode === "interval") return after + config.intervalSec * 1e3;
+  if (config.mode !== "cron" && config.mode !== "rrule") return void 0;
+  const result = config.mode === "cron" ? Cron.parse(config.schedule, config.timeZone) : RRule.parse(config.schedule);
+  if (result.kind === "rejected") throw new Error(result.detail);
+  const next = result.rule.next(after);
+  return next === void 0 ? void 0 : Date.parse(next);
+}
+function validateTriggers(document) {
+  for (const node2 of document.nodes) {
+    if (node2.flowType !== triggerNode.flowType) continue;
+    const config = triggerConfig.parse(node2.config);
+    if (config.enabled) triggerNext(config, Date.now());
+    if (config.match && config.mode === "terminal") new RegExp(config.match, "u");
+  }
+}
+var TriggerService = class {
+  constructor(ctx, table, scheduler, git, document, runs, publish, path, changes) {
+    this.ctx = ctx;
+    this.table = table;
+    this.scheduler = scheduler;
+    this.git = git;
+    this.document = document;
+    this.runs = runs;
+    this.publish = publish;
+    this.path = path;
+    this.changes = changes;
+    this.serial = new SerialQueue((error) => this.ctx.logger.warn("FlowSpace \u89E6\u53D1\u5668\uFF1A%s", error));
+  }
+  startedAt = Date.now();
+  serial;
+  timer;
+  running = false;
+  observedAtBoot = /* @__PURE__ */ new Set();
+  list() {
+    return [...this.table.entries()].map(([, value]) => value);
+  }
+  start() {
+    this.timer = setInterval(() => {
+      if (this.running) return;
+      this.running = true;
+      void this.queue(() => this.tick(Date.now())).catch(() => void 0).finally(() => {
+        this.running = false;
+      });
+    }, 1e3);
+    this.timer.unref();
+    return () => clearInterval(this.timer);
+  }
+  queue(action) {
+    return this.serial.run(action);
+  }
+  launch(id, values) {
+    return this.queue(async () => {
+      const node2 = this.document().nodes.find((node3) => node3.id === id && node3.flowType === triggerNode.flowType);
+      if (!node2) throw new Error("\u542F\u52A8\u53F0\u5DF2\u79FB\u9664");
+      const config = triggerConfig.parse(node2.config);
+      if (config.mode !== "launchpad") throw new Error("\u6B64\u89E6\u53D1\u5668\u4E0D\u662F\u542F\u52A8\u53F0");
+      const answer = checkAnswers(config.fields, values);
+      const source = snapshotWithContent(node2, config.fields.length ? { dataType: "record", value: answer } : { dataType: "text", value: node2.title });
+      const status = this.table.get(id) ?? { id, hits: 0, missed: 0 };
+      const run = await this.scheduler.startTriggered(id, source);
+      await this.save({ ...status, lastAt: Date.now(), hits: status.hits + 1 });
+      return run;
+    });
+  }
+  async save(status) {
+    await this.table.put(status.id, status);
+    this.publish();
+  }
+  active(id) {
+    return this.runs().findLast((run) => run.triggerId === id && ["running", "waiting", "paused"].includes(run.state));
+  }
+  async fire(node2, config, state, source, now) {
+    const defaults = this.document().settings.triggerGuards;
+    const day = new Intl.DateTimeFormat("sv-SE", { timeZone: config.timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+    if (day !== state.day) Object.assign(state, { day, hits: 0 });
+    if (now - (state.lastAt ?? 0) < (config.cooldownSec ?? defaults?.cooldownSec ?? 0) * 1e3 || state.hits >= (config.dailyLimit ?? defaults?.dailyLimit ?? Infinity)) {
+      state.missed++;
+      return;
+    }
+    const active2 = this.active(node2.id);
+    if (active2) {
+      const strategy = config.busy ?? defaults?.busy ?? "skip";
+      if (strategy === "skip") {
+        state.missed++;
+        return;
+      }
+      if (strategy === "queue") {
+        (state.queued ??= []).push(source);
+        return;
+      }
+      await this.scheduler.command(active2.id, "cancel");
+    }
+    state.lastAt = now;
+    state.hits++;
+    await this.save(state);
+    await this.scheduler.startTriggered(node2.id, source);
+  }
+  async observe(node2, config) {
+    if (config.mode === "file" && config.path.trim()) {
+      const { base, full, rel } = this.path({ path: config.path, cwd: config.cwd || node2.worktreePath || node2.cwd });
+      const root = await this.ctx.fs.resolve(base);
+      const target = await this.ctx.fs.resolve(full);
+      if (!this.ctx.fs.contains(root, target)) throw new Error("\u89E6\u53D1\u8DEF\u5F84\u8D85\u51FA\u5DE5\u4F5C\u533A");
+      const info = await this.ctx.fs.stat(target);
+      if (info?.type === "directory") {
+        const files = (await this.ctx.fs.listDir(target)).filter((entry) => entry.type === "file");
+        return Object.fromEntries(await Promise.all(files.map(async (entry) => [
+          rel === "." || !rel ? entry.name : `${rel.replaceAll("\\", "/")}/${entry.name}`,
+          entry.version ?? (await this.ctx.fs.stat(entry.target))?.version ?? ""
+        ])));
+      }
+      return info ? { [rel]: info.version } : {};
+    }
+    if (config.mode === "git") {
+      const directory = this.path({ path: ".", cwd: config.cwd || node2.worktreePath || node2.cwd }).base;
+      const status = await this.git.inspect(directory);
+      if (config.match === "commit") return { commit: status.commits[0]?.oid ?? "" };
+      if (config.match === "branch") return { branch: status.branch };
+      return { git: status.revision };
+    }
+    if (config.mode === "terminal") {
+      const all = this.runs().flatMap((run) => run.steps.filter((step) => step.operationResult && (!config.sourceNodeId || step.nodeId === config.sourceNodeId)));
+      const found = all.findLast((step) => config.match ? new RegExp(config.match, "u").test(step.output ?? "") : step.operationResult.exitCode !== 0);
+      return found ? { terminal: found.id, output: found.output?.slice(0, 512) ?? "" } : {};
+    }
+    if (config.mode === "container") {
+      const board = this.document().nodes.find((node3) => node3.id === config.sourceNodeId && node3.kind === "board");
+      if (board) return Object.fromEntries((board.columns ?? []).filter((column) => !config.match || config.match === column.id).flatMap((column) => column.cards.map((card) => [card.id, column.id])));
+      const found = this.changes().findLast((change) => (!config.sourceNodeId || change.nodeId === config.sourceNodeId) && (!config.match || change.columnId === config.match));
+      return found ? { container: found.key, at: String(found.at) } : {};
+    }
+  }
+  async tick(now) {
+    const doc = this.document();
+    const nodes = doc.nodes.filter((node2) => node2.flowType === triggerNode.flowType);
+    for (const node2 of nodes) {
+      const config = triggerConfig.parse(node2.config);
+      if (!config.enabled || config.mode === "launchpad") continue;
+      const old = this.table.get(node2.id);
+      const configKey = JSON.stringify([config.mode, config.schedule, config.timeZone, config.intervalSec, config.path, config.cwd, config.sourceNodeId, config.match]);
+      const state = old?.configKey === configKey ? structuredClone(old) : { id: node2.id, hits: old?.hits ?? 0, lastAt: old?.lastAt, missed: old?.missed ?? 0, configKey, nextAt: triggerNext(config, now) };
+      const scheduled = state.nextAt;
+      if (scheduled && scheduled <= now) {
+        let next = scheduled;
+        if (config.mode === "interval") {
+          const period = config.intervalSec * 1e3;
+          const missed = Math.floor((now - scheduled) / period);
+          next = scheduled + (missed + 1) * period;
+          state.missed += missed;
+        } else {
+          for (; ; ) {
+            const occurrence = triggerNext(config, next);
+            if (occurrence === void 0 || occurrence > now) {
+              next = occurrence ?? 0;
+              break;
+            }
+            next = occurrence;
+            state.missed++;
+          }
+        }
+        state.nextAt = next || void 0;
+        if (!doc.settings.automaticTriggers || scheduled < this.startedAt) state.missed++;
+        else await this.fire(node2, config, state, snapshotWithContent(node2, {
+          dataType: "text",
+          value: new Date(scheduled).toISOString()
+        }), now);
+      }
+      const observed = await this.observe(node2, config);
+      const hasBaseline = this.observedAtBoot.has(node2.id);
+      if (observed) this.observedAtBoot.add(node2.id);
+      if (observed && JSON.stringify(observed) !== JSON.stringify(state.observed)) {
+        const before = state.observed;
+        state.observed = observed;
+        if (before && Object.keys(observed).length + Object.keys(before).length) {
+          const diff = [.../* @__PURE__ */ new Set([...Object.keys(observed), ...Object.keys(before)])].filter((key) => observed[key] !== before[key]);
+          if (doc.settings.automaticTriggers && old && hasBaseline) {
+            const entered = diff.filter((key) => observed[key] !== void 0);
+            if (config.mode !== "container" || entered.length) {
+              const source = snapshotWithContent(node2, config.mode === "file" ? contentList(diff) : { dataType: "text", value: JSON.stringify(config.mode === "container" ? Object.fromEntries(entered.map((key) => [key, observed[key]])) : observed) });
+              await this.fire(node2, config, state, source, now);
+            }
+          } else state.missed++;
+        }
+      }
+      if (doc.settings.automaticTriggers && state.queued?.length && !this.active(node2.id)) {
+        const source = state.queued.shift();
+        await this.fire(node2, config, state, source, now);
+      }
+      if (JSON.stringify(state) !== JSON.stringify(old)) await this.save(state);
+    }
+  }
+};
 
-// packages/flowspace/src/host/dshServices.ts
-import { createHash } from "node:crypto";
-function optionalService(ctx, key) {
-  return ctx.get?.(key);
-}
-var getWorkspaceChanges = (ctx) => optionalService(ctx, "workspaceChanges");
-var getTerminalController = (ctx) => optionalService(ctx, "terminalController");
-var getWorkingDirectory = (ctx) => optionalService(ctx, "workingDirectory");
-var getPlanMode = (ctx) => optionalService(ctx, "planMode");
-var getSandboxPolicy = (ctx) => optionalService(ctx, "sandboxPolicy");
-var getSubprocess = (ctx) => optionalService(ctx, "subprocess");
-var getShell = (ctx) => optionalService(ctx, "shell");
-var getApproval = (ctx) => optionalService(ctx, "approval");
-var getSpillStore = (ctx) => ctx.get?.("spillStore");
-async function resolveAgentOptional(ctx, sessionId) {
-  if (!sessionId) return void 0;
-  const result = await ctx.sessionController.resolveAgent(sessionId).catch(() => null);
-  return result && !("error" in result) ? result.agent : void 0;
-}
-function formatTurnChangesSummary(sum) {
-  return `Turn #${sum.turn} (${sum.total} files, +${sum.added} / -${sum.deleted})
-` + sum.files.map((f) => `- ${f.display} (+${f.added} / -${f.deleted})`).join("\n");
-}
-function shortHash(value) {
-  return createHash("sha1").update(value).digest("hex").slice(0, 12);
+// packages/flowspace/src/host/nodes/play.ts
+import { randomInt } from "node:crypto";
+var randomExecutor = (counter) => async (node2, step) => {
+  const config = randomConfig.parse(node2.config);
+  const count = config.branches.length;
+  let index;
+  if (config.mode === "rotation") {
+    const state = counter.get(node2.id);
+    if (state?.lastStep === step.id) index = state.index % count;
+    else {
+      index = (state?.next ?? 0) % count;
+      await counter.put(node2.id, { next: index + 1, lastStep: step.id, index });
+    }
+  } else index = config.seed ? seededIndex(config.seed, step.iteration, count) : randomInt(count);
+  const option = config.branches[index];
+  const source = snapshotWithContent(node2, { dataType: "text", value: option.value || option.label });
+  return { route: option.id, output: source.text, source, verdict: { branch: option.id } };
+};
+var ArenaStore = class {
+  constructor(table) {
+    this.table = table;
+  }
+  list() {
+    return [...this.table.entries()].map(([, result]) => result);
+  }
+  async settle(run) {
+    if (run.state !== "completed") return;
+    for (const batch of run.fanouts ?? []) {
+      const merge = run.graph.nodes.find((node2) => node2.id === batch.mergeId);
+      if (!merge?.config?.arena || !batch.mergeStepId || !batch.lanes.some((lane) => lane.adopted === true)) continue;
+      for (const lane of batch.lanes) {
+        if (!lane.model || lane.adopted === void 0) continue;
+        const id = JSON.stringify([run.id, batch.id, lane.item.key]);
+        if (this.table.get(id)) continue;
+        await this.table.put(id, { id, runId: run.id, tag: String(merge.config.taskTag || ""), model: lane.model, won: lane.adopted });
+      }
+    }
+  }
+};
+async function buildReport(ctx, run, model) {
+  const ended = Math.max(run.createdAt, ...run.steps.map((step) => step.endedAt ?? step.createdAt));
+  const usage = budgetUsage(run.steps, run.createdAt, ended);
+  const scores = run.fanouts?.flatMap((batch) => batch.lanes.filter((lane) => lane.adopted).map((lane) => ({ batch, lane }))) ?? [];
+  const chosen = scores.toSorted((a, b) => (b.lane.score ?? 0) - (a.lane.score ?? 0))[0];
+  const best = chosen && run.graph.nodes.find((node2) => node2.generatedBy === chosen.batch.fanId && node2.itemKey === chosen.lane.item.key);
+  const bestNode = best?.title ?? run.graph.nodes.find((node2) => node2.id === run.steps.findLast((step) => step.state === "completed" && step.sessionId)?.nodeId)?.title;
+  const { text: summary } = await streamLlmText(ctx.llm, {
+    provider: model.provider,
+    model: model.model,
+    purpose: "flowspace-run-report",
+    system: "Summarize this completed FlowSpace run in three short sentences using the provided results.",
+    userText: JSON.stringify({
+      title: run.title,
+      ...usage,
+      bestNode,
+      steps: run.steps.slice(-40).map((step) => ({ state: step.state, task: step.task.slice(0, 180), output: step.output?.slice(0, 480) })),
+      artifacts: run.deliverables?.map((artifact) => artifact.path)
+    })
+  });
+  if (!summary.trim()) throw new Error("\u6A21\u578B\u6CA1\u6709\u8FD4\u56DE\u6218\u62A5");
+  return { summary, ...usage, bestNode, artifacts: run.deliverables ?? [] };
 }
 
+// packages/flowspace/src/host/storage.ts
+import { z as z15 } from "zod";
+import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
+var variableRecordSchema = z15.object({
+  id: z15.string(),
+  key: z15.string(),
+  name: z15.string(),
+  scope: z15.enum(VARIABLE_SCOPES),
+  type: z15.enum(VARIABLE_TYPES),
+  runId: z15.string().optional(),
+  lane: z15.string().optional(),
+  version: z15.number().int().nonnegative(),
+  value: z15.json(),
+  history: z15.array(
+    z15.object({
+      id: z15.string(),
+      writer: z15.string(),
+      at: z15.number(),
+      version: z15.number().int().positive(),
+      from: z15.json(),
+      to: z15.json(),
+      runId: z15.string().optional(),
+      stepId: z15.string().optional()
+    })
+  )
+});
+var assetId = z15.string().trim().min(1);
+var teamModelSchema = z15.object({
+  provider: assetId,
+  model: assetId,
+  reasoningEffort: assetId.optional()
+});
+var saveRoleSchema = z15.object({
+  id: assetId,
+  title: assetId,
+  description: z15.string(),
+  persona: z15.string(),
+  model: teamModelSchema,
+  revision: z15.number().int().nonnegative()
+});
+var maxTeamSlots = 8;
+var saveTeamSchema = z15.object({
+  id: assetId,
+  title: assetId,
+  lead: z15.object({ persona: z15.string(), model: teamModelSchema }),
+  slots: z15.array(z15.object({
+    slotId: z15.string().regex(/^(?!lead$)[a-z][a-z0-9-]{0,31}$/, "Invalid native subagent slot name"),
+    roleId: assetId,
+    label: assetId,
+    model: teamModelSchema.optional(),
+    maxInstances: z15.number().int().positive().optional(),
+    nodeId: assetId.optional()
+  })).min(1).max(maxTeamSlots),
+  norms: z15.string(),
+  revision: z15.number().int().nonnegative()
+}).refine((team) => new Set(team.slots.map((slot) => slot.slotId)).size === team.slots.length, {
+  path: ["slots"],
+  message: "Slot names must be unique"
+});
+var revisionFields = {
+  revision: z15.number().int().positive(),
+  archived: z15.boolean().optional()
+};
+var roleDefinitionSchema = saveRoleSchema.extend(revisionFields);
+var teamBlueprintSchema = saveTeamSchema.safeExtend(revisionFields);
+var archiveTeamAssetSchema = z15.object({
+  id: assetId,
+  revision: revisionFields.revision
+});
+var teamReferenceSchema = z15.object({
+  teamId: assetId,
+  revision: revisionFields.revision.optional()
+});
+var teamDependenciesSchema = z15.object({
+  teams: z15.array(teamBlueprintSchema),
+  roles: z15.array(roleDefinitionSchema)
+}).refine(
+  ({ teams, roles }) => new Set(teams.map((team) => team.id)).size === teams.length && new Set(roles.map((role) => role.id)).size === roles.length,
+  "Team dependency IDs must be unique"
+);
+var teamModelReplacementSchema = z15.array(z15.object({ from: teamModelSchema, to: teamModelSchema }));
+var teamSessionSchema = z15.object({
+  leadSessionId: assetId,
+  nodeId: assetId,
+  roster: z15.object({
+    team: teamBlueprintSchema,
+    roles: z15.array(roleDefinitionSchema)
+  }),
+  delegations: z15.array(z15.object({
+    sessionId: assetId,
+    slotId: assetId,
+    roleId: assetId,
+    model: teamModelSchema,
+    roleRevision: revisionFields.revision,
+    /** The canvas role node the member was delegated through. */
+    nodeId: assetId.optional()
+  })),
+  /** Subagents the session already had when it became a team; they stay plain subagents. */
+  priorChildren: z15.array(assetId).optional(),
+  /** The node lost its roles: the session is a plain agent again, its member record kept. */
+  released: z15.boolean().optional()
+});
+var groupPort = z15.object({
+  id: z15.string(),
+  portId: z15.string().optional(),
+  kind: z15.enum(["reference", "continuation", "event"]),
+  direction: z15.enum(["in", "out"]),
+  name: z15.string(),
+  nodes: z15.array(z15.string()),
+  hidden: z15.boolean()
+});
+var budget = z15.object({
+  tokens: z15.number().int().positive().optional(),
+  seconds: z15.number().positive().optional(),
+  rounds: z15.number().int().positive().optional()
+});
+var boardChecklistItem = z15.object({
+  id: z15.string(),
+  text: z15.string().max(BOARD_LIMITS.checklistText),
+  done: z15.boolean()
+});
+var boardCard = z15.object({
+  id: z15.string(),
+  text: z15.string(),
+  description: z15.string().max(BOARD_LIMITS.description).optional(),
+  done: z15.boolean().optional(),
+  priority: z15.enum(BOARD_PRIORITIES).optional(),
+  tags: z15.array(z15.string().min(1).max(BOARD_LIMITS.tag)).max(BOARD_LIMITS.tags).optional(),
+  dueDate: z15.iso.date().optional(),
+  checklist: z15.array(boardChecklistItem).max(BOARD_LIMITS.checklist).optional(),
+  comments: z15.array(z15.object({ id: z15.string(), by: z15.string(), text: z15.string(), createdAt: z15.number() })).optional(),
+  author: z15.string().optional(),
+  previousColumnId: z15.string().optional(),
+  createdAt: z15.number().int().nonnegative().optional(),
+  updatedAt: z15.number().int().nonnegative().optional()
+});
+var boardColumn = z15.object({
+  id: z15.string(),
+  name: z15.string(),
+  cards: z15.array(boardCard),
+  role: z15.enum(BOARD_ROLES).optional(),
+  color: z15.enum(BOARD_COLORS).optional(),
+  wipLimit: z15.number().int().positive().max(BOARD_LIMITS.wip).optional(),
+  collapsed: z15.boolean().optional()
+});
+var boardSettings = z15.object({
+  view: z15.enum(["board", "list"]).optional(),
+  autoMoveDone: z15.boolean().optional(),
+  showCompleted: z15.boolean().optional(),
+  refScope: z15.enum(BOARD_REF_SCOPES).optional()
+});
+var windowState = z15.object({
+  x: z15.number().finite(),
+  y: z15.number().finite(),
+  w: z15.number().positive(),
+  h: z15.number().positive(),
+  snap: z15.enum(["left", "right", "max"]).nullable().optional(),
+  z: z15.number().optional()
+});
+var fanoutPairIds = z15.object({ fanId: assetId, mergeId: assetId });
+var generationRevision = z15.number().int().nonnegative().optional();
+var node = z15.object({
+  breakpoint: z15.boolean().optional(),
+  budget: budget.optional(),
+  laneBindings: z15.object({
+    provider: z15.string().optional(),
+    model: z15.string().optional(),
+    persona: z15.string().optional(),
+    cwd: z15.string().optional()
+  }).optional(),
+  lanePersona: z15.string().optional(),
+  canvasToolsOnly: z15.boolean().optional(),
+  id: z15.string(),
+  kind: z15.enum([
+    "agent",
+    "note",
+    "file",
+    "display",
+    "group",
+    "board",
+    "detail",
+    "git",
+    "changes",
+    "terminal",
+    "role",
+    "flow"
+  ]),
+  flowType: z15.string().regex(/^[a-z0-9-]+\/[a-z0-9-]+$/).optional(),
+  config: z15.record(z15.string(), z15.json()).optional(),
+  configVersion: z15.number().int().nonnegative().optional(),
+  title: z15.string(),
+  x: z15.number().finite(),
+  y: z15.number().finite(),
+  width: z15.number().positive(),
+  height: z15.number().positive(),
+  expanded: z15.boolean(),
+  parentId: z15.string().optional(),
+  fanout: fanoutPairIds.optional(),
+  masterOf: assetId.optional(),
+  generatedBy: assetId.optional(),
+  itemKey: assetId.optional(),
+  itemTitle: z15.string().optional(),
+  masterNodeId: assetId.optional(),
+  laneIndex: z15.number().int().nonnegative().optional(),
+  overridden: z15.boolean().optional(),
+  removed: z15.boolean().optional(),
+  generatedRevision: generationRevision,
+  sessionId: z15.string().optional(),
+  workspaceId: z15.string().optional(),
+  cwd: z15.string().optional(),
+  branch: z15.string().optional(),
+  worktreePath: z15.string().optional(),
+  agentPreset: z15.string().optional(),
+  teamRef: teamReferenceSchema.optional(),
+  teamConfig: z15.object({
+    persona: z15.string(),
+    norms: z15.string(),
+    model: teamModelSchema.optional()
+  }).optional(),
+  teamLayout: z15.enum(["row", "orbit", "tree"]).optional(),
+  roleRef: assetId.optional(),
+  teamModel: teamModelSchema.optional(),
+  maxInstances: z15.number().int().positive().max(8).optional(),
+  staffOf: z15.string().optional(),
+  slotId: z15.string().regex(SLOT_ID, "Invalid native subagent slot name").optional(),
+  planMode: z15.boolean().optional(),
+  customTitle: z15.boolean().optional(),
+  subAgentsExpanded: z15.boolean().optional(),
+  task: z15.string(),
+  draft: z15.string(),
+  continuationPrompt: z15.string().optional(),
+  continuationCollapsed: z15.boolean().optional(),
+  nativeTrigger: z15.enum(["inherit", "enabled", "disabled"]),
+  participation: z15.enum(["global", "manual", "paused", "bypassed"]),
+  text: z15.string(),
+  sourceNodeId: z15.string().optional(),
+  sourceSeq: z15.number().optional(),
+  fixed: z15.boolean(),
+  collapsed: z15.boolean(),
+  lastSubmittedTask: z15.string().optional(),
+  tab: z15.enum(["task", "conversation", "execution", "crew"]).optional(),
+  pinned: z15.boolean().optional(),
+  roleLabel: z15.string().optional(),
+  rerun: z15.enum(["change", "update", "always"]).optional(),
+  color: z15.enum(["violet", "teal", "blue", "amber"]).optional(),
+  ports: z15.array(groupPort).optional(),
+  templateId: z15.string().optional(),
+  templateRevision: z15.number().int().positive().optional(),
+  templateSlotId: z15.string().optional(),
+  titleKey: z15.string().optional(),
+  window: windowState.nullable().optional(),
+  columns: z15.array(boardColumn).optional(),
+  boardSettings: boardSettings.optional(),
+  items: z15.array(z15.string()).optional(),
+  selectedItems: z15.array(z15.string()).optional(),
+  nudge: z15.object({
+    by: z15.string(),
+    origX: z15.number().finite().optional(),
+    origY: z15.number().finite().optional(),
+    origW: z15.number().positive().optional(),
+    origH: z15.number().positive().optional()
+  }).optional(),
+  gitTab: z15.enum(["changes", "history", "branches"]).optional(),
+  gitCommitOid: z15.string().optional(),
+  changesSessionId: z15.string().optional(),
+  changesSeq: z15.number().optional(),
+  changesTurn: z15.number().optional(),
+  terminalSessionId: z15.string().optional(),
+  terminalId: z15.string().optional()
+});
+var waypoint = z15.object({
+  x: z15.number().finite(),
+  y: z15.number().finite()
+});
+var spill = z15.object({
+  locator: z15.string().min(1),
+  preview: z15.string(),
+  bytes: z15.number().int().nonnegative()
+});
+var contentItem = z15.object({
+  key: z15.string().min(1),
+  value: z15.json().optional(),
+  spill: spill.optional()
+}).refine((item) => item.value !== void 0 !== !!item.spill, "\u6761\u76EE\u5FC5\u987B\u5305\u542B\u4E00\u4E2A\u503C\u6216 spill \u5F15\u7528");
+var flowContentSchema = z15.object({
+  dataType: z15.enum(["text", "record", "list", "signal", "file"]),
+  value: z15.json().optional(),
+  items: z15.array(contentItem).optional(),
+  originalCount: z15.number().int().nonnegative().optional(),
+  spill: spill.optional()
+}).superRefine((content, ctx) => {
+  if (content.dataType === "list") {
+    if (!content.items || content.spill || content.value !== void 0)
+      ctx.addIssue({ code: "custom", message: "\u5217\u8868\u5185\u5BB9\u5FC5\u987B\u4F7F\u7528\u6709\u5E8F\u6761\u76EE" });
+    else if (new Set(content.items.map((item) => item.key)).size !== content.items.length)
+      ctx.addIssue({ code: "custom", path: ["items"], message: "\u5217\u8868\u6761\u76EE\u6807\u8BC6\u91CD\u590D" });
+    else if (content.originalCount !== void 0 && content.originalCount < content.items.length)
+      ctx.addIssue({ code: "custom", path: ["originalCount"], message: "\u539F\u59CB\u9879\u6570\u5C0F\u4E8E\u5DF2\u4FDD\u7559\u9879\u6570" });
+    return;
+  }
+  if (content.items || content.spill && content.value !== void 0) {
+    ctx.addIssue({ code: "custom", message: "\u5185\u5BB9\u503C\u4E0E\u6761\u76EE\u3001spill \u5F15\u7528\u4E0D\u80FD\u6DF7\u7528" });
+  } else if (!content.spill && (content.dataType === "text" && typeof content.value !== "string" || content.dataType === "record" && (!content.value || typeof content.value !== "object" || Array.isArray(content.value)) || content.dataType === "file" && content.value === void 0)) {
+    ctx.addIssue({ code: "custom", path: ["value"], message: "\u5185\u5BB9\u4E0E\u7AEF\u53E3\u7C7B\u578B\u4E0D\u7B26" });
+  }
+});
+var edge = z15.object({
+  id: z15.string(),
+  source: z15.string(),
+  target: z15.string(),
+  generatedBy: assetId.optional(),
+  itemKey: assetId.optional(),
+  masterEdgeId: assetId.optional(),
+  generatedRevision: generationRevision,
+  sourcePort: z15.string().optional(),
+  targetPort: z15.string().optional(),
+  emitMode: z15.enum(["stream", "end"]).optional(),
+  permission: z15.enum(["read", "advance", "edit"]).optional(),
+  ask: z15.boolean().optional(),
+  delivery: z15.object({ mode: z15.enum(["lines", "paragraph", "list"]), columnId: z15.string().optional() }).optional(),
+  logic: z15.object({
+    negate: z15.boolean().optional(),
+    fromRound: z15.number().int().nonnegative().optional(),
+    maxTimes: z15.number().int().nonnegative().optional(),
+    delayMs: z15.number().int().nonnegative().optional()
+  }).optional(),
+  kind: z15.enum(["reference", "continuation", "event"]),
+  event: z15.object({
+    mode: z15.enum(["end", "change", "continuous"]),
+    kinds: z15.array(z15.enum(["running", "waiting", "done", "error", "budget", "output", "tool", "usage", "container"])),
+    reasons: z15.array(z15.string()).optional(),
+    cooldownMs: z15.number().int().nonnegative().optional(),
+    maxTimes: z15.number().int().positive().optional(),
+    full: z15.boolean().optional()
+  }).optional(),
+  mode: z15.enum(["conclusion", "session", "fork"]),
+  trigger: z15.enum(["off", "auto", "confirm"]),
+  maxRounds: z15.number().int().positive(),
+  always: z15.boolean(),
+  sentVersion: z15.string().optional(),
+  currentVersion: z15.string().optional(),
+  sourceItemKey: z15.string().optional(),
+  snapshotTitle: z15.string().optional(),
+  snapshotText: z15.string().optional(),
+  snapshotContent: flowContentSchema.optional(),
+  originMode: z15.enum(["conclusion", "session", "fork"]).optional(),
+  waypoints: z15.array(waypoint).optional(),
+  placedCapsules: z15.array(z15.string()).optional()
+});
+var workflowTemplateSchema = z15.object({
+  id: z15.string(),
+  fanout: fanoutPairIds.optional(),
+  title: z15.string(),
+  description: z15.string(),
+  revision: z15.number().int().positive(),
+  builtin: z15.boolean().optional(),
+  color: z15.enum(["violet", "teal", "blue", "amber"]).optional(),
+  w: z15.number().positive(),
+  h: z15.number().positive(),
+  nodes: z15.array(node),
+  edges: z15.array(edge),
+  ports: z15.array(groupPort)
+});
+var canvasSnapshotSchema = z15.object({
+  id: z15.string(),
+  title: z15.string(),
+  createdAt: z15.number(),
+  nodes: z15.array(node),
+  edges: z15.array(edge),
+  viewport: z15.object({
+    x: z15.number(),
+    y: z15.number(),
+    zoom: z15.number().positive()
+  }),
+  summary: z15.object({
+    drafts: z15.number(),
+    stopping: z15.number(),
+    awaiting: z15.number(),
+    queued: z15.number(),
+    recentOutputs: z15.array(
+      z15.object({
+        title: z15.string(),
+        snippet: z15.string()
+      })
+    )
+  }).optional()
+});
+var documentSchema = z15.object({
+  containerRevision: z15.number().int().nonnegative().optional(),
+  version: z15.literal(1),
+  generationRevision,
+  id: z15.literal("main"),
+  title: z15.string(),
+  nodes: z15.array(node),
+  edges: z15.array(edge),
+  viewport: z15.object({
+    x: z15.number(),
+    y: z15.number(),
+    zoom: z15.number().positive()
+  }),
+  settings: z15.object({
+    nativeChatTriggers: z15.boolean(),
+    reducedMotion: z15.boolean(),
+    automaticTriggers: z15.boolean().optional(),
+    budget: budget.optional(),
+    triggerGuards: z15.object({
+      cooldownSec: z15.number().nonnegative().optional(),
+      dailyLimit: z15.number().int().positive().optional(),
+      busy: z15.enum(["skip", "queue", "interrupt"]).optional()
+    }).optional(),
+    listLimit: z15.number().int().positive().optional()
+  }),
+  prefs: z15.object({
+    theme: z15.enum(["dark", "light", "auto"]).optional(),
+    wheel: z15.enum(["zoom", "pan"]).optional(),
+    wireRouting: z15.enum(["avoid", "overlap"]).optional(),
+    snap: z15.boolean().optional(),
+    filter: z15.enum(["auto", "running", "3d", "7d", "all"]).optional(),
+    hiddenWorkspaces: z15.array(z15.string()).optional(),
+    showBranches: z15.boolean().optional(),
+    showWorktrees: z15.boolean().optional()
+  }).optional(),
+  templates: z15.array(workflowTemplateSchema).optional(),
+  snapshots: z15.array(canvasSnapshotSchema).optional()
+});
+var containerEntrySchema = z15.discriminatedUnion("kind", [
+  z15.object({ kind: z15.literal("board"), columnId: z15.string(), beforeId: z15.string().optional(), card: boardCard }),
+  z15.object({ kind: z15.literal("note"), text: z15.string() }),
+  z15.object({ kind: z15.literal("file"), text: z15.string(), path: z15.string(), cwd: z15.string() })
+]).nullable();
+var flowspaceDomain = defineDomain({
+  name: "flowspace",
+  version: 1,
+  tables: {
+    documents: domainTable(documentSchema),
+    runs: domainTable(
+      z15.custom(
+        (v) => typeof v === "object" && v !== null && "id" in v && "steps" in v
+      ).transform((run) => {
+        for (const token of run.tokens) token.createdAt ??= token.source.capturedAt;
+        return run;
+      })
+    ),
+    templates: domainTable(workflowTemplateSchema),
+    snapshots: domainTable(canvasSnapshotSchema),
+    roles: domainTable(roleDefinitionSchema),
+    teams: domainTable(teamBlueprintSchema),
+    team_sessions: domainTable(teamSessionSchema),
+    variables: domainTable(variableRecordSchema),
+    play_counters: domainTable(z15.object({ next: z15.number().int().nonnegative(), lastStep: z15.string(), index: z15.number().int().nonnegative() })),
+    arena_results: domainTable(z15.object({ id: z15.string(), runId: z15.string(), tag: z15.string(), model: teamModelSchema, won: z15.boolean() })),
+    triggers: domainTable(z15.object({
+      id: z15.string(),
+      nextAt: z15.number().optional(),
+      lastAt: z15.number().optional(),
+      hits: z15.number(),
+      missed: z15.number(),
+      day: z15.string().optional(),
+      configKey: z15.string().optional(),
+      queued: z15.array(z15.custom()).optional(),
+      observed: z15.record(z15.string(), z15.string()).optional()
+    })),
+    content_spills: domainTable(spill.extend({
+      encoding: z15.enum(["text", "json"]),
+      retrievalHint: z15.string()
+    })),
+    container_changes: domainTable(z15.object({
+      id: z15.string(),
+      nodeId: z15.string(),
+      itemId: z15.string().optional(),
+      edgeId: z15.string().optional(),
+      sessionId: z15.string().optional(),
+      runId: z15.string().optional(),
+      stepId: z15.string().optional(),
+      by: z15.string(),
+      at: z15.number(),
+      revision: z15.number().int().positive(),
+      before: containerEntrySchema,
+      after: containerEntrySchema,
+      beforeVersion: z15.string(),
+      afterVersion: z15.string(),
+      pending: z15.boolean().optional(),
+      revertedBy: z15.string().optional()
+    }))
+  }
+});
+function checkGraph(graph) {
+  const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
+  const missingPlugins = /* @__PURE__ */ new Set();
+  for (const n of graph.nodes) {
+    if (n.fanout) {
+      const fan = nodes.get(n.fanout.fanId), merge = nodes.get(n.fanout.mergeId);
+      if (n.kind !== "group" || fan?.flowType !== "flowspace/fanout" || merge?.flowType !== "flowspace/merge-sort" || fan.parentId !== n.id || merge.parentId !== n.id) throw new Error("\u6247\u51FA\u4E0E\u5408\u5E76\u5FC5\u987B\u4F4D\u4E8E\u6240\u5C5E\u7684\u6247\u51FA\u5206\u7EC4\u5185");
+    }
+    if (n.generatedBy && (!n.itemKey || !n.masterNodeId && !n.overridden || n.laneIndex === void 0 || nodes.get(n.generatedBy)?.flowType !== "flowspace/fanout")) throw new Error("\u6CF3\u9053\u8282\u70B9\u7F3A\u5C11\u6761\u76EE\u3001\u6BCD\u7248\u6216\u6247\u51FA\u6765\u6E90");
+    if (n.window === null) {
+      delete n.window;
+    } else if (n.window && n.window.snap === null) {
+      delete n.window.snap;
+    }
+    if (n.kind === "board") graph.edges = pruneBoardReferences(n, graph.edges);
+    if (n.kind !== "flow") continue;
+    const descriptor = descriptorOf(n.flowType);
+    if (!descriptor) {
+      missingPlugins.add(n.id);
+      continue;
+    }
+    const version = n.configVersion ?? 1;
+    if (version > descriptor.version)
+      throw new Error(`${n.title}\uFF1A\u914D\u7F6E\u7248\u672C ${version} \u9AD8\u4E8E\u5DF2\u5B89\u88C5\u7684 ${descriptor.version}`);
+    let config = n.config ?? descriptor.defaultConfig;
+    if (n.config && version < descriptor.version && descriptor.migrate)
+      config = descriptor.migrate(n.config, version);
+    const parsed2 = descriptor.configSchema.safeParse(config);
+    if (!parsed2.success) throw new Error(`${n.title}\uFF1A\u8282\u70B9\u914D\u7F6E\u65E0\u6548\uFF08${z15.prettifyError(parsed2.error)}\uFF09`);
+    n.config = parsed2.data;
+    n.configVersion = descriptor.version;
+  }
+  for (const edge2 of graph.edges) {
+    const source = nodes.get(edge2.source), target = nodes.get(edge2.target);
+    const result = canConnect({
+      ...edge2,
+      source,
+      target,
+      edges: graph.edges,
+      edgeId: edge2.id
+    });
+    if (result.ok) {
+      if (edge2.kind === "event") {
+        const seen = /* @__PURE__ */ new Set([edge2.target]);
+        const pending2 = [edge2.target];
+        while (pending2.length) {
+          const current = pending2.pop();
+          for (const link of graph.edges) {
+            if (link.source !== current || link.kind === "reference" || link.trigger === "off" || seen.has(link.target)) continue;
+            seen.add(link.target);
+            pending2.push(link.target);
+          }
+        }
+        if ((target?.kind === "agent" || seen.has(edge2.source)) && !edge2.event?.cooldownMs)
+          throw new Error("\u53D1\u5F80 Agent \u6216\u6784\u6210\u73AF\u8DEF\u7684\u4E8B\u4EF6\u7EBF\u9700\u8981\u51B7\u5374\u65F6\u95F4");
+        if (seen.has(edge2.source) && !edge2.event?.maxTimes) throw new Error("\u4E8B\u4EF6\u73AF\u8DEF\u9700\u8981\u6B21\u6570\u4E0A\u9650");
+      }
+      if (edge2.emitMode && (source?.kind !== "agent" || edge2.kind !== "continuation" || !target || !structuredInput(target, edge2.targetPort))) throw new Error("\u4EA7\u51FA\u6A21\u5F0F\u9700\u8981 Agent \u63A5\u7EED\u5230\u5217\u8868\u6216\u8BB0\u5F55\u8F93\u5165");
+      if (edge2.emitMode === "stream" && target && !canStreamTo(target, edge2.targetPort))
+        throw new Error("\u968F\u51FA\u968F\u53D1\u9700\u8981\u6247\u51FA\u3001\u5408\u5E76\u5206\u62E3\u6216\u6570\u636E\u8282\u70B9");
+      continue;
+    }
+    if (result.reason === "flow_invalid_output" && missingPlugins.has(edge2.source)) continue;
+    if (result.reason === "flow_invalid_input" && missingPlugins.has(edge2.target)) continue;
+    throw new Error(tFor("zh", result.reason));
+  }
+}
+function checkDocument(doc) {
+  checkGraph(doc);
+  for (const template2 of doc.templates ?? []) checkGraph(template2);
+  for (const snapshot2 of doc.snapshots ?? []) checkGraph(snapshot2);
+  const ids = new Set(doc.nodes.map((n) => n.id));
+  if (ids.size !== doc.nodes.length) throw new Error("\u8282\u70B9\u8EAB\u4EFD\u91CD\u590D");
+  const sessions = doc.nodes.flatMap((n) => n.sessionId ? [n.sessionId] : []);
+  if (sessions.length !== new Set(sessions).size)
+    throw new Error("\u4E00\u4E2A\u4F1A\u8BDD\u53EA\u80FD\u5BF9\u5E94\u4E00\u4E2A Agent \u8282\u70B9");
+  const byId = new Map(doc.nodes.map((n) => [n.id, n]));
+  const staffSlots = /* @__PURE__ */ new Map();
+  for (const n of doc.nodes) {
+    if ((n.teamRef || n.teamConfig) && n.kind !== "agent") throw new Error("\u56E2\u961F\u5FC5\u987B\u4F7F\u7528 Agent \u8282\u70B9");
+    if (n.teamRef && n.teamConfig) throw new Error("\u56E2\u961F\u53EA\u80FD\u5F15\u7528\u7F16\u5236\u5E93\u6216\u5728\u753B\u5E03\u4E0A\u7EC4\u5EFA\uFF0C\u4E0D\u80FD\u540C\u65F6\u4F7F\u7528");
+    if (n.staffOf !== void 0) {
+      if (n.kind !== "role") throw new Error("\u53EA\u6709\u5C97\u4F4D\u8282\u70B9\u53EF\u4EE5\u63A5\u5165\u56E2\u961F");
+      if (byId.get(n.staffOf)?.kind !== "agent") throw new Error("\u5C97\u4F4D\u8282\u70B9\u53EA\u80FD\u63A5\u5165 Agent \u8282\u70B9");
+      const taken = staffSlots.get(n.staffOf) ?? /* @__PURE__ */ new Set();
+      if (n.slotId && taken.has(n.slotId)) throw new Error(`\u540C\u4E00\u56E2\u961F\u7684\u5C97\u4F4D\u540D\u91CD\u590D: ${n.slotId}`);
+      if (n.slotId) taken.add(n.slotId);
+      staffSlots.set(n.staffOf, taken);
+    }
+    if (!n.parentId) continue;
+    const parent = doc.nodes.find((p) => p.id === n.parentId);
+    if (!parent || parent.kind !== "group" || parent.id === n.id)
+      throw new Error("\u65E0\u6548\u5206\u7EC4");
+    const grand = parent.parentId && doc.nodes.find((p) => p.id === parent.parentId);
+    if (grand && (grand.parentId || n.kind === "group"))
+      throw new Error("\u5206\u7EC4\u6700\u591A\u4E24\u5C42");
+  }
+}
+
+// packages/flowspace/src/host/documentService.ts
+async function loadInitialHostState(domain, workspaceFs, state) {
+  const storedDoc = sanitizeDocumentForWire(
+    structuredClone(domain.table("documents").get("main") ?? emptyDocument())
+  );
+  const storedTemplates = [...domain.table("templates").entries()].map(
+    ([, tpl]) => structuredClone(tpl)
+  );
+  const storedSnapshots = [...domain.table("snapshots").entries()].map(([, snap]) => structuredClone(snap)).sort((a, b) => b.createdAt - a.createdAt);
+  if (storedTemplates.length) {
+    storedDoc.templates = storedTemplates;
+  } else if (storedDoc.templates?.length) {
+    for (const tpl of storedDoc.templates) {
+      await domain.table("templates").put(tpl.id, structuredClone(tpl));
+    }
+  }
+  if (storedSnapshots.length) {
+    storedDoc.snapshots = storedSnapshots;
+  } else if (storedDoc.snapshots?.length) {
+    for (const snap of storedDoc.snapshots) {
+      await domain.table("snapshots").put(snap.id, structuredClone(snap));
+    }
+  }
+  checkDocument(storedDoc);
+  validateTriggers(storedDoc);
+  syncUntitledAgentTitles(storedDoc);
+  state.doc = sanitizeDocumentForWire(storedDoc);
+  for (const n of state.doc.nodes) {
+    workspaceFs.trackWorktree(n.worktreePath);
+  }
+  state.runs = [...domain.table("runs").entries()].map(([, r]) => structuredClone(r)).sort((a, b) => a.createdAt - b.createdAt);
+}
+var DocumentService = class {
+  constructor(deps) {
+    this.deps = deps;
+  }
+  deferredPersistTimer;
+  reportRequests = /* @__PURE__ */ new Map();
+  schedulePersist() {
+    clearTimeout(this.deferredPersistTimer);
+    this.deferredPersistTimer = setTimeout(() => {
+      void this.persist().catch(
+        (e) => this.deps.ctx.logger.warn("FlowSpace deferred persist: %s", e)
+      );
+    }, 350);
+  }
+  async persist() {
+    clearTimeout(this.deferredPersistTimer);
+    const { domain, state, arena, getReferences, publish } = this.deps;
+    getReferences().syncLiveReferenceVersions(state.doc);
+    const cleanDoc = sanitizeDocumentForWire(state.doc);
+    state.doc = cleanDoc;
+    await domain.table("documents").put("main", structuredClone(cleanDoc));
+    const retainedTemplates = new Set(
+      (cleanDoc.templates ?? []).map((t) => t.id)
+    );
+    for (const id of domain.table("templates").keys()) {
+      if (!retainedTemplates.has(id)) await domain.table("templates").delete(id);
+    }
+    for (const tpl of cleanDoc.templates ?? []) {
+      await domain.table("templates").put(tpl.id, structuredClone(tpl));
+    }
+    const retainedSnapshots = new Set(
+      (cleanDoc.snapshots ?? []).map((s) => s.id)
+    );
+    for (const id of domain.table("snapshots").keys()) {
+      if (!retainedSnapshots.has(id)) await domain.table("snapshots").delete(id);
+    }
+    for (const snap of cleanDoc.snapshots ?? []) {
+      await domain.table("snapshots").put(snap.id, structuredClone(snap));
+    }
+    const retainedRuns = new Set(state.runs.map((r) => r.id));
+    for (const id of domain.table("runs").keys()) {
+      if (!retainedRuns.has(id)) await domain.table("runs").delete(id);
+    }
+    for (const run of state.runs) {
+      await domain.table("runs").put(run.id, structuredClone(run));
+      await arena.settle(run);
+    }
+    publish();
+  }
+  async availableModel(index) {
+    const models = await this.deps.teamAssets.listModelRoutes();
+    const fixtures = models.filter((model2) => model2.provider === "flowspace-test");
+    const routes = fixtures.length ? fixtures : models;
+    if (!routes.length) throw new Error("\u8BF7\u5148\u914D\u7F6E\u53EF\u7528\u7684\u6A21\u578B");
+    const { provider, model } = routes[(Number(index) || 0) % routes.length];
+    return { provider, model };
+  }
+  async save(document) {
+    return this.deps.getScheduler().transact(
+      () => this.saveDocument(documentSchema.parse(sanitizeDocumentForWire(document)))
+    );
+  }
+  async saveDocument(next, portable = false, importedAssets) {
+    const {
+      ctx,
+      state,
+      teams,
+      teamAssets,
+      runtime,
+      workspaceFs,
+      getContainers,
+      getDataFileWatch,
+      getReferences
+    } = this.deps;
+    const previous = state.doc;
+    if (!portable && next.id === previous.id) {
+      next = rebaseContainerChanges(next, getContainers().changes());
+    }
+    next.containerRevision = previous.containerRevision;
+    if (!portable) next = mergePendingGeneration(next, previous);
+    next.generationRevision = previous.generationRevision;
+    const previousNodes = new Map(state.doc.nodes.map((node2) => [node2.id, node2]));
+    const previousEdges = new Map(state.doc.edges.map((edge2) => [edge2.id, edge2]));
+    for (const node2 of next.nodes) {
+      const prior = previousNodes.get(node2.id);
+      const old = portable && prior?.teamRef?.teamId !== node2.teamRef?.teamId ? void 0 : prior;
+      if (old?.sessionId) {
+        copyBoundNodeFields(node2, old);
+        node2.teamRef = old.teamRef;
+        if (node2.teamRef) delete node2.teamConfig;
+      }
+      if (node2.sessionId && teams.isLead(node2.sessionId) && !teams.ownsNode(node2.sessionId, node2.id)) {
+        throw new Error("\u56E2\u961F\u4E3B\u7BA1\u4F1A\u8BDD\u5FC5\u987B\u7531\u5BF9\u5E94\u7684\u753B\u5E03\u56E2\u961F\u8282\u70B9\u521B\u5EFA");
+      }
+      if (old) node2.lastSubmittedTask = old.lastSubmittedTask;
+      syncUntitledAgentNode(node2);
+      if (node2.worktreePath) workspaceFs.trackWorktree(node2.worktreePath);
+      if (node2.kind === "agent" && node2.sessionId && old && old.planMode !== node2.planMode) {
+        void runtime.ensure(node2).catch(() => {
+        });
+      }
+    }
+    for (const edge2 of next.edges) {
+      const old = previousEdges.get(edge2.id);
+      if (old?.originMode === "fork") {
+        edge2.originMode = "fork";
+        edge2.mode = old.mode;
+      }
+      if (old && edge2.sentVersion === void 0 && old.sentVersion) {
+        edge2.sentVersion = old.sentVersion;
+      } else if (edge2.sentVersion === "") {
+        delete edge2.sentVersion;
+      }
+    }
+    const byId = new Map(next.nodes.map((node2) => [node2.id, node2]));
+    for (const edge2 of next.edges) {
+      const source = byId.get(edge2.source);
+      if (source?.flowType === "flowspace/merge-sort" && edge2.kind === "continuation") {
+        edge2.sourcePort = mergeResultPort(source.config, edge2.sourcePort);
+      }
+    }
+    for (const node2 of next.nodes) {
+      const merge = node2.fanout && byId.get(node2.fanout.mergeId);
+      if (merge) {
+        for (const port of node2.ports ?? []) {
+          if (port.direction === "out" && port.kind === "continuation" && port.nodes.includes(merge.id)) {
+            port.portId = mergeResultPort(merge.config, port.portId);
+          }
+        }
+      }
+      if (node2.staffOf !== void 0 && !byId.has(node2.staffOf)) {
+        delete node2.staffOf;
+      }
+    }
+    checkDocument(next);
+    validateTriggers(next);
+    await reconcileFanoutDrafts(
+      next,
+      portable ? emptyDocument() : previous,
+      state.runs,
+      (fanId) => resolveStaticFanout(ctx, runtime, next, fanId)
+    );
+    if (importedAssets) await teamAssets.addImported(importedAssets);
+    state.doc = sanitizeDocumentForWire(next);
+    getReferences().pruneToolRestrictions(next);
+    await this.persist();
+    await getDataFileWatch().sync(next);
+    await this.renameLaneSessions(previous, next);
+    this.syncTeams();
+    return structuredClone(state.doc);
+  }
+  refreshDataFiles(ids) {
+    const { ctx, state, runtime, getScheduler, publish } = this.deps;
+    return getScheduler().transact(async () => {
+      const previous = state.doc;
+      const next = structuredClone(previous);
+      const changed = await reconcileFanoutDrafts(
+        next,
+        previous,
+        state.runs,
+        (fanId) => resolveStaticFanout(ctx, runtime, next, fanId),
+        ids
+      );
+      if (changed) {
+        stampGeneratedBatch(
+          next,
+          new Set(previous.nodes.map((node2) => node2.id)),
+          new Set(previous.edges.map((edge2) => edge2.id))
+        );
+        state.doc = next;
+        await this.persist();
+        await this.renameLaneSessions(previous, next);
+      } else {
+        publish();
+      }
+    });
+  }
+  async renameLaneSessions(previous, next) {
+    const { ctx } = this.deps;
+    const previousNodes = new Map(previous.nodes.map((node2) => [node2.id, node2]));
+    const laneGroups = (nodes) => new Map(
+      nodes.flatMap(
+        (node2) => node2.fanout ? [[node2.fanout.fanId, node2]] : []
+      )
+    );
+    const priorGroups = laneGroups(previous.nodes), groups = laneGroups(next.nodes);
+    for (const lane of next.nodes) {
+      if (!lane.generatedBy || !lane.sessionId) continue;
+      const prior = previousNodes.get(lane.id);
+      const title = laneTitle(groups.get(lane.generatedBy), lane);
+      if (!title || prior && prior.sessionId === lane.sessionId && title === laneTitle(priorGroups.get(lane.generatedBy), prior)) {
+        continue;
+      }
+      await ctx.sessionController.rename({ sessionId: lane.sessionId, title }).catch(
+        (error) => ctx.logger.warn("FlowSpace \u6CF3\u9053\u4F1A\u8BDD\u91CD\u547D\u540D\u5931\u8D25: %s", error)
+      );
+    }
+  }
+  syncTeams() {
+    const { state, teams } = this.deps;
+    const staffed = staffedIds(state.doc.nodes);
+    for (const node2 of state.doc.nodes) {
+      if (node2.kind !== "agent" || !node2.sessionId) continue;
+      if (isTeamNode(node2, staffed) !== teams.isLead(node2.sessionId)) {
+        void teams.sync(node2.id).catch(() => {
+        });
+      }
+    }
+  }
+  async importWorkflow(request) {
+    const { state, teamAssets, getScheduler } = this.deps;
+    return getScheduler().transact(async () => {
+      if (!!request.document === !!request.template) {
+        throw new Error("Choose one canvas or workflow template to import.");
+      }
+      const template2 = request.template && workflowTemplateSchema.parse(request.template);
+      const next = request.document ? documentSchema.parse(sanitizeDocumentForWire(request.document)) : structuredClone(state.doc);
+      if (template2) {
+        if (next.templates?.some((existing) => existing.id === template2.id)) {
+          template2.id = uid();
+        }
+        delete template2.builtin;
+        next.templates = [...next.templates ?? [], template2];
+      }
+      const nodes = template2?.nodes ?? workflowNodes(next);
+      if (!request.enableTriggers) {
+        for (const node2 of nodes) {
+          if (node2.flowType === triggerNode.flowType) {
+            node2.config = { ...node2.config, enabled: false };
+          }
+        }
+      }
+      const refs = new Set(
+        nodes.flatMap((node2) => node2.teamRef ? [node2.teamRef.teamId] : [])
+      );
+      const plan = await teamAssets.prepareImport(request, refs);
+      if (plan.missing.length) {
+        return { kind: "missing-models", models: plan.missing };
+      }
+      const staffed = staffedIds(nodes);
+      for (const node2 of nodes) {
+        if (node2.roleRef) {
+          node2.roleRef = plan.roleIds.get(node2.roleRef) ?? node2.roleRef;
+        }
+        if (!isTeamNode(node2, staffed)) continue;
+        if (node2.teamRef) {
+          node2.teamRef.teamId = plan.teamIds.get(node2.teamRef.teamId) ?? node2.teamRef.teamId;
+        }
+        delete node2.sessionId;
+        delete node2.lastSubmittedTask;
+      }
+      return {
+        kind: "imported",
+        document: await this.saveDocument(
+          next,
+          !!request.document,
+          plan.additions
+        )
+      };
+    });
+  }
+  async draft(request) {
+    const { domain, state, getScheduler, publish } = this.deps;
+    await getScheduler().transact(async () => {
+      const node2 = this.agentNode(request.nodeId);
+      node2.draft = request.draft;
+      syncUntitledAgentNode(node2);
+      const cleanDoc = sanitizeDocumentForWire(state.doc);
+      state.doc = cleanDoc;
+      await domain.table("documents").put("main", structuredClone(cleanDoc));
+      publish();
+    });
+  }
+  async restoreSnapshot(request) {
+    const { state, getScheduler, getDataFileWatch } = this.deps;
+    return getScheduler().transact(async () => {
+      const snap = (state.doc.snapshots ?? []).find(
+        (s) => s.id === request.snapshotId
+      );
+      if (!snap) throw new Error("\u72B6\u6001\u5FEB\u7167\u4E0D\u5B58\u5728");
+      await getScheduler().interruptAllActive(
+        `\u5DF2\u6062\u590D\u5DE5\u4F5C\u72B6\u6001\u5FEB\u7167\u300C${snap.title}\u300D\uFF0C\u539F\u5728\u9014\u8C03\u5EA6\u5DF2\u5B89\u5168\u4E2D\u65AD`
+      );
+      const liveNodes = state.doc.nodes;
+      const restoredNodes = structuredClone(snap.nodes).map((n) => {
+        const cur = liveNodes.find((x) => x.id === n.id);
+        if (cur?.sessionId && cur.teamRef?.teamId === n.teamRef?.teamId) {
+          copyBoundNodeFields(n, cur);
+        }
+        return n;
+      });
+      const nextDoc = sanitizeDocumentForWire({
+        ...state.doc,
+        nodes: restoredNodes,
+        edges: structuredClone(snap.edges),
+        viewport: structuredClone(snap.viewport)
+      });
+      checkDocument(nextDoc);
+      validateTriggers(nextDoc);
+      state.doc = nextDoc;
+      await this.persist();
+      await getDataFileWatch().sync(nextDoc);
+      this.syncTeams();
+      return structuredClone(state.doc);
+    });
+  }
+  async bind(request) {
+    const { ctx, state, teams, runtime, workspaceFs, getScheduler, getIngestor } = this.deps;
+    return getScheduler().transact(async () => {
+      const node2 = this.agentNode(request.nodeId);
+      if (node2.sessionId) {
+        return structuredClone(
+          sanitizeDocumentForWire(state.doc).nodes.find(
+            (n) => n.id === node2.id
+          )
+        );
+      }
+      if (state.doc.edges.some((e) => e.target === node2.id && e.mode === "fork")) {
+        throw new Error("\u5206\u53C9\u8349\u7A3F\u5C06\u5728\u63A5\u7EED\u65F6\u521B\u5EFA\u4F1A\u8BDD");
+      }
+      if (request.sessionId && state.doc.nodes.some((n) => n.sessionId === request.sessionId)) {
+        throw new Error("\u8BE5\u4F1A\u8BDD\u5DF2\u5728\u753B\u5E03\u4E2D");
+      }
+      node2.workspaceId = request.workspaceId ?? node2.workspaceId;
+      node2.cwd = request.cwd ?? node2.cwd;
+      node2.branch = request.branch ?? node2.branch;
+      node2.worktreePath = request.worktreePath ?? node2.worktreePath;
+      if (node2.worktreePath) {
+        workspaceFs.trackWorktree(node2.worktreePath);
+      }
+      if (request.sessionId) {
+        var _stack = [];
+        try {
+          if (node2.teamRef || teams.isLead(request.sessionId)) {
+            throw new Error("\u56E2\u961F\u4E3B\u7BA1\u4F1A\u8BDD\u5FC5\u987B\u7531\u5BF9\u5E94\u7684\u753B\u5E03\u56E2\u961F\u8282\u70B9\u521B\u5EFA");
+          }
+          const observation = __using(_stack, await ctx.sessionQuery.observeSession(
+            request.sessionId
+          ));
+          node2.sessionId = request.sessionId;
+          node2.cwd = observation.header.cwd;
+          for (const ev of observation.events) {
+            getIngestor().recordNativeMessage(request.sessionId, ev);
+          }
+        } catch (_) {
+          var _error = _, _hasError = true;
+        } finally {
+          __callDispose(_stack, _error, _hasError);
+        }
+      } else {
+        node2.sessionId = await runtime.ensure(node2);
+      }
+      syncUntitledAgentNode(node2);
+      if (node2.continuationPrompt === void 0 && node2.task.trim()) {
+        node2.continuationPrompt = node2.task;
+      }
+      await this.persist();
+      if (request.sessionId) this.syncTeams();
+      return structuredClone(state.doc.nodes.find((n) => n.id === node2.id));
+    });
+  }
+  async display(request) {
+    const { state, runtime, getScheduler } = this.deps;
+    return getScheduler().transact(async () => {
+      const source = state.doc.nodes.find((n) => n.id === request.nodeId);
+      if (!source) throw new Error("\u6765\u6E90\u8282\u70B9\u4E0D\u5B58\u5728");
+      const captured = request.text === void 0 ? source.kind === "agent" ? await runtime.capture(source, "conclusion", request.seq) : await runtime.reference(source) : void 0;
+      const node2 = {
+        ...newNode(
+          "display",
+          source.x + source.width + 60,
+          source.y + 40,
+          source.title + " \xB7 \u7ED3\u679C"
+        ),
+        text: request.text ?? captured?.text ?? "",
+        sourceNodeId: source.id,
+        sourceSeq: request.seq ?? captured?.seq,
+        fixed: request.fixed
+      };
+      state.doc.nodes.push(node2);
+      await this.persist();
+      return structuredClone(node2);
+    });
+  }
+  async generateReport(request) {
+    const { ctx, state, getScheduler } = this.deps;
+    const run = state.runs.find((r) => r.id === request.runId);
+    if (!run || !["completed", "cancelled", "error", "interrupted"].includes(run.state)) {
+      throw new Error("\u8FD0\u884C\u7ED3\u675F\u540E\u624D\u80FD\u751F\u6210\u6218\u62A5");
+    }
+    if (run.report) return run.report;
+    const existing = this.reportRequests.get(run.id);
+    if (existing) return existing;
+    const job = buildReport(ctx, structuredClone(run), request.model).then(
+      (report) => getScheduler().transact(async () => {
+        run.report = report;
+        await this.persist();
+        return report;
+      })
+    ).finally(() => this.reportRequests.delete(run.id));
+    this.reportRequests.set(run.id, job);
+    return job;
+  }
+  agentNode(id) {
+    const n = this.deps.state.doc.nodes.find((item) => item.id === id);
+    if (!n || n.kind !== "agent") throw new Error("Agent \u8282\u70B9\u4E0D\u5B58\u5728");
+    return n;
+  }
+  dispose() {
+    clearTimeout(this.deferredPersistTimer);
+    this.reportRequests.clear();
+  }
+};
+
+// packages/flowspace/src/host/edgeInspector.ts
+import { statSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
+
 // packages/flowspace/src/host/content.ts
+import { createHash as createHash3 } from "node:crypto";
 var MAX_INLINE_CONTEXT_BYTES = 64 * 1024;
 var ContentSpills = class {
   constructor(ctx, records) {
@@ -7233,7 +9442,7 @@ var ContentSpills = class {
     const raw = typeof value === "string" ? value : JSON.stringify(value);
     if (Buffer.byteLength(raw, "utf8") <= MAX_INLINE_CONTEXT_BYTES) return void 0;
     const encoding = typeof value === "string" ? "text" : "json";
-    const key = createHash2("sha256").update(JSON.stringify([owner, encoding])).update(raw).digest("hex");
+    const key = createHash3("sha256").update(JSON.stringify([owner, encoding])).update(raw).digest("hex");
     let record = this.records.get(key);
     if (!record) {
       const backend = getSpillStore(this.ctx);
@@ -7323,7 +9532,7 @@ ${saved.retrievalHint}`;
   async saveInlineContext(body, source, sessionId) {
     const backend = getSpillStore(this.ctx);
     if (!backend) throw new Error("\u957F\u5F15\u7528\u9700\u8981 DSH spill \u5B58\u50A8");
-    const key = createHash2("sha256").update(JSON.stringify([sessionId, "context-md"])).update(body).digest("hex");
+    const key = createHash3("sha256").update(JSON.stringify([sessionId, "context-md"])).update(body).digest("hex");
     let record = this.records.get(key);
     if (!record) {
       const saved = await backend.saveText({
@@ -7347,69 +9556,190 @@ ${record.retrievalHint}`;
   }
 };
 
-// packages/flowspace/src/host/runtime.ts
-import { statSync } from "node:fs";
-import { resolve as resolve2 } from "node:path";
-import { foldSurface } from "@deepseek-ai/dsh-session";
-import { isCompactCheckpointSource } from "@deepseek-ai/dsh-compaction";
+// packages/flowspace/src/host/edgeInspector.ts
+async function inspectEdgePayload(deps, request) {
+  const { ctx, state, runtime, references, workspaceFs } = deps;
+  const run = request.runId ? state.runs.find((r) => r.id === request.runId) : [...state.runs].reverse().find((r) => r.tokens.some((t) => t.edgeId === request.edgeId));
+  const edge2 = state.doc.edges.find((e) => e.id === request.edgeId) ?? run?.graph.edges.find((e) => e.id === request.edgeId);
+  if (!edge2) throw new Error("\u8FDE\u7EBF\u4E0D\u5B58\u5728");
+  const source = state.doc.nodes.find((n) => n.id === edge2.source) ?? run?.graph.nodes.find((n) => n.id === edge2.source);
+  const target = state.doc.nodes.find((n) => n.id === edge2.target) ?? run?.graph.nodes.find((n) => n.id === edge2.target);
+  if (!source || !target) throw new Error("\u8FDE\u7EBF\u7AEF\u70B9\u4E0D\u5B58\u5728");
+  const sourceVersions = references.computeSourceVersions();
+  let freshness = "live";
+  if (edge2.kind === "reference") {
+    if (edge2.always) {
+      freshness = "always";
+    } else if (!edge2.sentVersion) {
+      freshness = "pending";
+    } else {
+      const currentVer = references.referenceVersion(edge2, source, sourceVersions);
+      freshness = currentVer && currentVer !== edge2.sentVersion ? "updated" : "sent";
+    }
+  }
+  const runToken = run?.tokens.findLast(
+    (token) => token.edgeId === edge2.id && (request.runId !== void 0 || !token.skip && token.source.content !== void 0)
+  );
+  let content = "";
+  let structured = runToken?.source.content ?? edge2.snapshotContent;
+  let sessionId;
+  let seq;
+  let totalDiskBytes = 0;
+  if (runToken) {
+    content = runToken.source.text;
+    sessionId = runToken.source.sourceSessionId;
+    seq = runToken.source.seq;
+  } else if (source.kind === "agent") {
+    sessionId = source.sessionId;
+    if (source.sessionId) {
+      if (edge2.mode === "fork") {
+        try {
+          var _stack = [];
+          try {
+            const obs = __using(_stack, await ctx.sessionQuery.observeSession(
+              source.sessionId,
+              { projectionMode: "none" }
+            ));
+            const completedTurns = obs.events.filter(
+              (e) => e.type === "turn/end" && e.data.reason.kind === "completed"
+            );
+            const lastEnd = completedTurns.at(-1);
+            seq = lastEnd?.seq ?? obs.cursor;
+            const latestSnap = await runtime.capture(source, "conclusion", seq).catch(() => null);
+            content = `[Fork \u5B8C\u6574\u5386\u53F2\u5206\u652F \xB7 ${completedTurns.length} \u4E2A\u5DF2\u5B8C\u6210\u56DE\u5408 \xB7 \u622A\u81F3\u4E8B\u4EF6 #${seq}]
+
+` + (latestSnap?.text || "(\u6682\u65E0\u52A9\u624B\u6587\u672C\u8F93\u51FA)");
+          } catch (_) {
+            var _error = _, _hasError = true;
+          } finally {
+            __callDispose(_stack, _error, _hasError);
+          }
+        } catch {
+          content = "(\u4F1A\u8BDD\u5386\u53F2\u6682\u4E0D\u53EF\u8BFB)";
+        }
+      } else {
+        try {
+          const cap = await runtime.capture(source, edge2.mode);
+          content = cap.text;
+          seq = cap.seq;
+        } catch {
+          content = source.draft || source.task || "(\u4F1A\u8BDD\u6682\u65E0\u8F93\u51FA)";
+        }
+      }
+    } else {
+      content = source.draft.trim() || source.task.trim() || "(\u5C1A\u672A\u542F\u52A8\u8349\u7A3F \u2014 \u542F\u52A8\u8FD0\u884C\u540E\u5C06\u5728\u6B64\u4F20\u9012\u8F93\u51FA)";
+    }
+  } else if (source.kind === "file" && !edge2.snapshotText && !edge2.snapshotContent) {
+    const cap = await runtime.reference(source, edge2);
+    structured = cap.content;
+    const paths2 = extractFileNodePaths(source);
+    const baseCwd = workspaceFs.resolveWorkspaceRoot(
+      source.worktreePath ?? source.cwd
+    );
+    const previews = [cap.text];
+    for (const p of paths2.slice(0, 4)) {
+      try {
+        const full = resolve(baseCwd, p);
+        const rel = relative(baseCwd, full);
+        if (rel.startsWith("..") || isAbsolute(rel)) continue;
+        const st = statSync(full);
+        if (st.isFile()) {
+          totalDiskBytes += st.size;
+          const preview = await workspaceFs.readBoundedText({
+            path: p,
+            cwd: baseCwd
+          });
+          previews.push(
+            `
+--- ${preview.path} (${st.size} bytes) ---
+${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 4e3 ? "\n\u2026[\u9884\u89C8\u5DF2\u622A\u65AD]" : ""}`
+          );
+        }
+      } catch {
+      }
+    }
+    content = previews.join("\n");
+  } else {
+    const cap = await runtime.reference(source, edge2);
+    structured = cap.content;
+    content = cap.text;
+    sessionId = cap.sourceSessionId;
+    seq = cap.seq;
+  }
+  const byteLength = Math.max(
+    totalDiskBytes,
+    Buffer.byteLength(content, "utf8")
+  );
+  const firstLine = content.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? "";
+  const summary = firstLine.length > 100 ? `${firstLine.slice(0, 100)}\u2026` : firstLine || `${source.title} \u2192 ${target.title}`;
+  const itemCount = structured?.items?.length ?? (structured?.dataType === "file" && Array.isArray(structured.value) ? structured.value.length : void 0);
+  return {
+    edgeId: edge2.id,
+    kind: edge2.kind,
+    mode: edge2.kind === "reference" ? source.kind : edge2.mode,
+    sourceTitle: source.kind === "board" ? runToken?.source.title ?? referenceTitle(source, edge2) : source.title,
+    targetTitle: target.title,
+    ...sessionId ? { sessionId } : {},
+    ...seq !== void 0 ? { seq } : {},
+    byteLength,
+    ...itemCount !== void 0 ? { itemCount, originalCount: structured?.originalCount } : {},
+    willSpill: byteLength > MAX_INLINE_CONTEXT_BYTES,
+    freshness,
+    summary,
+    content
+  };
+}
+
+// packages/flowspace/src/host/flowEmit.ts
+import { z as z16 } from "zod";
+var emission = z16.strictObject({ items: z16.array(z16.json()) });
+function registerFlowEmit(ctx, scheduler) {
+  return ctx.tools.register({
+    name: "flow_emit",
+    description: "Emit ordered JSON items to this FlowSpace step's downstream structured inputs. Call again to append another batch. For a record output, put the JSON object in items.",
+    parameters: {
+      type: "object",
+      properties: { items: { type: "array", items: {} } },
+      required: ["items"],
+      additionalProperties: false
+    },
+    output: {
+      schema: {
+        type: "object",
+        properties: { accepted: { type: "integer" }, total: { type: "integer" } },
+        required: ["accepted", "total"],
+        additionalProperties: false
+      },
+      render: (_args, result) => [{ type: "text", text: JSON.stringify(result) }]
+    },
+    async execute(args, exec) {
+      if (!exec.agent) throw new Error("flow_emit \u9700\u8981\u6B63\u5728\u6267\u884C\u7684 Agent \u6B65\u9AA4");
+      const { items } = emission.parse(args);
+      return scheduler.emit(exec.agent.id, exec.callId, items, exec.signal);
+    }
+  }, {
+    // rc.3 resolves tools immediately after emitting inbox/claimed. Observe the
+    // serialized claim before deciding which step owns this native turn.
+    when: ({ agent, signal }) => scheduler.transact(async () => {
+      signal.throwIfAborted();
+      return scheduler.canEmit(agent.id);
+    })
+  });
+}
 
 // packages/flowspace/src/host/git.ts
 import { execFile as execFileCb } from "node:child_process";
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import {
   basename,
   dirname,
-  isAbsolute,
+  isAbsolute as isAbsolute2,
   join as join2,
-  relative,
-  resolve
+  relative as relative2,
+  resolve as resolve2
 } from "node:path";
 import { promisify } from "node:util";
-
-// packages/flowspace/src/host/serialQueue.ts
-var SerialQueue = class {
-  constructor(onError) {
-    this.onError = onError;
-  }
-  tail = Promise.resolve();
-  run(action) {
-    const next = this.tail.then(action);
-    this.tail = next.then(
-      () => void 0,
-      (error) => {
-        this.onError?.(error);
-      }
-    );
-    return next;
-  }
-};
-var KeyedSerialQueue = class {
-  constructor(onError) {
-    this.onError = onError;
-  }
-  queues = /* @__PURE__ */ new Map();
-  run(key, action) {
-    const previous = this.queues.get(key) ?? Promise.resolve();
-    const next = previous.then(action, action);
-    const settled = next.then(
-      () => void 0,
-      (error) => {
-        this.onError?.(error);
-      }
-    );
-    this.queues.set(key, settled);
-    void settled.finally(() => {
-      if (this.queues.get(key) === settled) this.queues.delete(key);
-    });
-    return next;
-  }
-  clear() {
-    this.queues.clear();
-  }
-};
-
-// packages/flowspace/src/host/git.ts
 var execFile = promisify(execFileCb);
 var SENSITIVE_ENV_KEY_RE = /(?:^dsh_|api[_-]?key|secret|token|password|passwd|credential|private[_-]?key|auth[_-]?header)/i;
 function sanitizedGitEnv(write = false, baseEnv = process.env) {
@@ -7424,7 +9754,7 @@ function sanitizedGitEnv(write = false, baseEnv = process.env) {
   return clean;
 }
 function normPath(p) {
-  const resolved = resolve(p).replaceAll("\\", "/").replace(/\/+$/, "");
+  const resolved = resolve2(p).replaceAll("\\", "/").replace(/\/+$/, "");
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 function sameFsPath(a, b) {
@@ -7432,10 +9762,10 @@ function sameFsPath(a, b) {
   return normPath(a) === normPath(b);
 }
 function isSubPath(root, target) {
-  const r = resolve(root);
-  const t = resolve(target);
-  const rel = relative(r, t);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute(rel);
+  const r = resolve2(root);
+  const t = resolve2(target);
+  const rel = relative2(r, t);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute2(rel);
 }
 function parseUnifiedDiff(raw) {
   const hunks = [];
@@ -7492,7 +9822,7 @@ var HostGitService = class {
     return this.queues.run(repoKey, fn);
   }
   async inspect(cwd) {
-    const targetCwd = resolve(cwd);
+    const targetCwd = resolve2(cwd);
     const revRes = await this.runGit(
       ["rev-parse", "--show-toplevel", "--git-common-dir", "HEAD"],
       { cwd: targetCwd, allowNonZero: true }
@@ -7534,8 +9864,8 @@ var HostGitService = class {
       };
     }
     const [rawTop, rawCommon] = topRes.stdout.trim().split(/\r?\n/);
-    const topLevel = resolve(targetCwd, rawTop.trim());
-    const commonDir = resolve(targetCwd, (rawCommon ?? ".git").trim());
+    const topLevel = resolve2(targetCwd, rawTop.trim());
+    const commonDir = resolve2(targetCwd, (rawCommon ?? ".git").trim());
     const [statusRes, wtRes, branchRes, logRes] = await Promise.all([
       this.runGit(["status", "--porcelain=v1", "-b"], {
         cwd: topLevel,
@@ -7668,7 +9998,7 @@ var HostGitService = class {
         subject: subjectParts.join("	")
       };
     }) : [];
-    const revision = createHash3("sha1").update(
+    const revision = createHash4("sha1").update(
       JSON.stringify({
         topLevel,
         branch,
@@ -7696,7 +10026,7 @@ var HostGitService = class {
     };
   }
   async diff(cwd, req) {
-    const targetCwd = resolve(cwd);
+    const targetCwd = resolve2(cwd);
     let args;
     let title;
     if (req.target === "commit" && req.commitOid) {
@@ -7732,7 +10062,7 @@ var HostGitService = class {
     };
   }
   async act(cwd, req) {
-    const targetCwd = resolve(cwd);
+    const targetCwd = resolve2(cwd);
     const initial = await this.inspect(targetCwd);
     if (req.action === "init") {
       if (initial.isGitRepo && initial.topLevel) {
@@ -7870,7 +10200,7 @@ var HostGitService = class {
             dirname(mainWorktreeRoot),
             `${basename(mainWorktreeRoot)}-worktrees`
           );
-          const wtPath = req.worktreePath?.trim() ? resolve(worktreeRoot, req.worktreePath.trim()) : join2(defaultWtRoot, slug);
+          const wtPath = req.worktreePath?.trim() ? resolve2(worktreeRoot, req.worktreePath.trim()) : join2(defaultWtRoot, slug);
           await mkdir(dirname(wtPath), { recursive: true });
           const existsBranch = fresh.branches.some((b) => b.name === branch);
           const args = existsBranch ? ["worktree", "add", wtPath, branch] : [
@@ -7887,7 +10217,7 @@ var HostGitService = class {
         case "removeWorktree": {
           const target = req.worktreePath?.trim();
           if (!target) throw new Error("\u672A\u6307\u5B9A\u8981\u79FB\u9664\u7684 worktree \u8DEF\u5F84");
-          const resolvedWt = resolve(worktreeRoot, target);
+          const resolvedWt = resolve2(worktreeRoot, target);
           if (sameFsPath(resolvedWt, mainWorktreeRoot)) {
             throw new Error("\u4E0D\u80FD\u79FB\u9664\u4E3B\u5DE5\u4F5C\u6811\u76EE\u5F55");
           }
@@ -7920,7 +10250,7 @@ function parsePorcelainWorktrees(stdout) {
     let locked = false;
     for (const line of block.split(/\r?\n/)) {
       if (line.startsWith("worktree ")) {
-        path = resolve(line.slice("worktree ".length).trim());
+        path = resolve2(line.slice("worktree ".length).trim());
       } else if (line.startsWith("HEAD ")) {
         head = line.slice(5).trim();
       } else if (line.startsWith("branch ")) {
@@ -7946,19 +10276,513 @@ function parsePorcelainWorktrees(stdout) {
   });
 }
 
+// packages/flowspace/src/host/nodes/judge/ai.ts
+import { z as z17 } from "zod";
+var response = z17.object({
+  branch: z17.string(),
+  reason: z17.string(),
+  confidence: z17.number().min(0).max(1)
+});
+async function aiJudge(llm, config, input, signal) {
+  const { provider, model, branches } = config;
+  if (!provider || !model) throw new Error("\u8BF7\u5148\u9009\u62E9 AI \u5224\u65AD\u7684\u4F9B\u5E94\u5546\u548C\u6A21\u578B");
+  const rawOutputs = [];
+  const telemetry = { stepCount: 0, inputTokens: 0, outputTokens: 0 };
+  const record = { provider, model, inputSummary: input.slice(0, 240), rawOutputs };
+  const system = [
+    config.instruction,
+    JSON.stringify(branches),
+    '\u9009\u62E9\u4E00\u4E2A\u5217\u51FA\u7684\u5206\u652F\u3002\u53EA\u8FD4\u56DE JSON {"branch":"\u5206\u652F id","reason":"\u5224\u65AD\u7406\u7531","confidence":0-1}\u3002'
+  ].join("\n");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    signal.throwIfAborted();
+    telemetry.stepCount++;
+    const res = await streamLlmText(llm, {
+      provider,
+      model,
+      signal,
+      purpose: "flowspace-judge",
+      system: attempt ? system + "\n\u4E0A\u6B21\u54CD\u5E94\u65E0\u6CD5\u89E3\u6790\uFF0C\u8BF7\u4E25\u683C\u4F7F\u7528\u6307\u5B9A\u683C\u5F0F\u548C\u5206\u652F\u3002" : system,
+      userText: input
+    });
+    telemetry.inputTokens += res.inputTokens;
+    telemetry.outputTokens += res.outputTokens;
+    rawOutputs.push(res.text);
+    let parsed2;
+    try {
+      parsed2 = JSON.parse(res.text);
+    } catch {
+      continue;
+    }
+    const result = response.safeParse(parsed2);
+    if (!result.success || !branches.some((b) => b.id === result.data.branch)) continue;
+    const { branch, confidence, reason: reason2 } = result.data;
+    const route = config.lowConfidence && confidence < config.lowConfidence.threshold ? config.lowConfidence.branch : branch;
+    return { route, output: reason2, verdict: { ...record, branch: route, reason: reason2, confidence }, telemetry };
+  }
+  const reason = "\u8FDE\u7EED\u4E24\u6B21\u672A\u6536\u5230\u6709\u6548\u7684\u5224\u65AD\u7ED3\u679C";
+  const verdict = { ...record, branch: "error", reason };
+  return { route: "error", output: reason, verdict, telemetry };
+}
+
+// packages/flowspace/src/host/nodes/judge/index.ts
+function judgeExecutors(ctx, contextText) {
+  return {
+    "flowspace/condition": async (node2, step) => {
+      const source = await forwardInput(node2, step, contextText);
+      const config = node2.config;
+      const route = conditionRoute(config, source.text);
+      return { route, source, output: config.branches.find((b) => b.id === route)?.label ?? route, verdict: { branch: route } };
+    },
+    "flowspace/code": async (node2, step, signal) => {
+      const source = await forwardInput(node2, step, contextText);
+      const config = node2.config;
+      const value = await runCode(config.source, source, config.timeoutMs, signal);
+      const route = value === true ? config.branches[0].id : value === false ? "else" : value;
+      if (route !== "else" && !config.branches.some((b) => b.id === route)) throw new Error(`\u4EE3\u7801\u8FD4\u56DE\u4E86\u672A\u77E5\u5206\u652F\uFF1A${route}`);
+      return { route, source, output: config.branches.find((b) => b.id === route)?.label ?? route, verdict: { branch: route } };
+    },
+    "flowspace/ai-judge": async (node2, step, signal) => {
+      const source = await forwardInput(node2, step, contextText);
+      return { ...await aiJudge(ctx.llm, node2.config, source.text, signal), source };
+    },
+    "flowspace/human-choice": async (node2) => {
+      const config = node2.config;
+      const deadline = config.timeoutSec !== void 0 && config.timeoutAction !== "wait" ? Date.now() + config.timeoutSec * 1e3 : void 0;
+      return { awaiting: {
+        question: config.question,
+        options: config.options.map((option) => option.id),
+        timeoutAction: config.timeoutAction,
+        deadline,
+        defaultOption: config.defaultOption
+      } };
+    }
+  };
+}
+
+// packages/flowspace/src/host/nodes/merge.ts
+function mergedInput(node2, step, format, limit) {
+  const first = step.sources[0];
+  if (step.sources.length === 1 && contentOf(first).dataType === format && (first.content?.items?.length ?? 0) <= limit) return first;
+  const values = [];
+  const keys = [];
+  let total = 0;
+  const sourceCounts = /* @__PURE__ */ new Map();
+  for (const source of step.sources) {
+    const content2 = contentOf(source);
+    if (content2.items) {
+      total += content2.originalCount ?? content2.items.length;
+      const occurrence = sourceCounts.get(source.sourceNodeId) ?? 0;
+      sourceCounts.set(source.sourceNodeId, occurrence + 1);
+      for (const item of content2.items.slice(0, limit - values.length)) {
+        values.push(item.value);
+        keys.push(step.sources.length === 1 ? item.key : JSON.stringify([source.sourceNodeId, occurrence, item.key]));
+      }
+    } else {
+      total++;
+      if (values.length < limit) {
+        values.push(content2.value === void 0 ? source.text : content2.value);
+        keys.push(void 0);
+      }
+    }
+  }
+  const content = format === "list" ? contentList(values, limit, keys) : {
+    dataType: "text",
+    value: values.map((value) => typeof value === "string" ? value : JSON.stringify(value)).join("\n")
+  };
+  if (total > values.length) Object.assign(content, { originalCount: total });
+  return snapshotWithContent(node2, content, step.createdAt);
+}
+function mergeExecutor(ctx, getListLimit = () => DEFAULT_LIST_LIMIT) {
+  return async (node2, step, signal) => {
+    signal.throwIfAborted();
+    const config = node2.config;
+    const source = mergedInput(node2, step, config.output, getListLimit(step));
+    if (!config.sortMode || config.sortMode === "off") return { source, route: "out", output: source.text };
+    try {
+      if (config.sortMode === "ai") {
+        const settings = config.ai;
+        const result = await aiJudge(ctx.llm, {
+          provider: settings.provider,
+          model: settings.model,
+          instruction: settings.instruction,
+          branches: [
+            { id: "pass", label: "pass", description: settings.passDescription },
+            { id: "fail", label: "fail", description: settings.failDescription }
+          ],
+          lowConfidence: { threshold: settings.threshold, branch: "fail" }
+        }, source.text, signal);
+        return { ...result, source, output: result.route === "error" ? result.output : source.text };
+      }
+      let route;
+      if (config.sortMode === "condition") {
+        const selected = conditionRoute({ branches: [{ id: "pass", label: "pass", ...config.condition }] }, source.text);
+        route = selected === "pass" ? "pass" : "fail";
+      } else {
+        const value = await runCode(config.code.source, source, config.code.timeoutMs, signal);
+        if (value === true || value === "pass") route = "pass";
+        else if (value === false || value === "fail") route = "fail";
+        else throw new Error("\u5206\u62E3\u811A\u672C\u987B\u8FD4\u56DE\u5E03\u5C14\u503C\u3001pass \u6216 fail");
+      }
+      return { source, route, output: source.text, verdict: { branch: route } };
+    } catch (error) {
+      signal.throwIfAborted();
+      const reason = error instanceof Error ? error.message : String(error);
+      return { source, route: "error", output: reason, verdict: { branch: "error", reason } };
+    }
+  };
+}
+
+// packages/flowspace/src/host/nodes/operations.ts
+import { readFile } from "node:fs/promises";
+import { z as z18 } from "zod";
+var stringValues = z18.record(z18.string(), z18.string());
+var operationRequest = z18.strictObject({ nodeId: z18.string(), values: stringValues.default({}) });
+var softActions = /* @__PURE__ */ new Set(["discard", "push", "removeWorktree"]);
+var requiredFields = {
+  commit: ["message"],
+  stage: ["paths"],
+  unstage: ["paths"],
+  discard: ["paths"],
+  createBranch: ["branch"],
+  checkoutBranch: ["branch"],
+  createWorktree: ["branch"],
+  removeWorktree: ["worktreePath"]
+};
+var shellQuote = (value, windows) => "'" + value.replaceAll("'", windows ? "''" : "'\\''") + "'";
+var stdio = { maxBytes: 65536, spill: { maxBytes: 16 * 1024 * 1024 } };
+function configOf(node2) {
+  return node2.flowType === gitExec.flowType ? gitOperation.parse(node2.config) : terminalOperation.parse(node2.config);
+}
+function directSource(run, step) {
+  const matches2 = run?.steps.filter((entry) => step.upstreamStepIds?.includes(entry.id)) ?? [];
+  return matches2.length === 1 ? matches2[0].sessionId : void 0;
+}
+function interpolate(text, step) {
+  const expand = (value) => value.replace(variableTemplate, (_match, name) => {
+    const variable = step.variables?.find((item) => item.name === name);
+    if (!variable) throw new Error(`\u53D8\u91CF\u4E0D\u5B58\u5728\uFF1A${name}`);
+    return typeof variable.value === "string" ? variable.value : JSON.stringify(variable.value);
+  });
+  return expand(text).replace(/\{\{\s*(input|task)\s*\}\}/g, (_match, key) => key === "task" ? step.task : step.sources.at(-1)?.text ?? "");
+}
+var fullOutput = (output) => output.spillPath ? readFile(output.spillPath, "utf8") : Promise.resolve(output.text);
+var OperationService = class {
+  constructor(ctx, git, document, runs, workdir, sessionDirectory) {
+    this.ctx = ctx;
+    this.git = git;
+    this.document = document;
+    this.runs = runs;
+    this.workdir = workdir;
+    this.sessionDirectory = sessionDirectory;
+  }
+  terminals = /* @__PURE__ */ new Map();
+  terminalQueue = new KeyedSerialQueue();
+  dispose() {
+    this.terminals.clear();
+    this.terminalQueue.clear();
+  }
+  agent(sessionId) {
+    return resolveAgentOptional(this.ctx, sessionId);
+  }
+  async fullAccess(id) {
+    const agent = await this.agent(id);
+    const policy = getSandboxPolicy(this.ctx);
+    return !!agent && policy?.resolve({ session: agent.session }).mode === "danger-full-access";
+  }
+  async generate(config, node2, step, name, signal, record) {
+    if (!config.provider || !config.model) return void 0;
+    const { text } = await streamLlmText(this.ctx.llm, {
+      provider: config.provider,
+      model: config.model,
+      purpose: "flowspace-parameters",
+      system: 'Give the requested operation parameter as a JSON object {"value":"..."}.',
+      userText: JSON.stringify({ operation: node2.title, parameter: name, sources: step.sources.map((source) => source.text) }),
+      signal,
+      trace: { operation: "execution parameter", inputSummary: name, record }
+    });
+    try {
+      return z18.object({ value: z18.string().min(1) }).parse(JSON.parse(text)).value;
+    } catch {
+      return void 0;
+    }
+  }
+  preview(config, values, cwd) {
+    return "program" in config ? `${cwd}
+${JSON.stringify([config.program, ...config.parameters.map((parameter) => values[parameter.name] ?? "\u2026")])}` : `${cwd}
+${JSON.stringify({ action: config.action, ...values }, null, 2)}`;
+  }
+  async prepare(node2, config, step, run, signal, sessionId = directSource(run, step), supplied = {}, record) {
+    const directory = config.cwd || node2.worktreePath || node2.cwd || (sessionId ? this.sessionDirectory(sessionId) : void 0);
+    const cwd = this.workdir(directory);
+    if (directory && !sameFsPath(directory, cwd)) throw new Error("\u6267\u884C\u76EE\u5F55\u4E0D\u5728\u53EF\u7528\u7684\u5DE5\u4F5C\u533A\u5185");
+    const values = {};
+    const parent = run?.steps.findLast((entry) => step.upstreamStepIds?.includes(entry.id) && entry.sessionId === sessionId);
+    const prefetched = parent?.operationParameters?.[node2.id] ?? {};
+    const missing = [];
+    for (const parameter of config.parameters) {
+      const { name, source, value } = parameter;
+      let resolved = source === "fixed" ? value : source === "template" ? interpolate(value, step) : void 0;
+      if (source === "upstream") {
+        const input = step.sources.at(-1)?.content?.value;
+        const entry = input && typeof input === "object" && !Array.isArray(input) ? input[name] : void 0;
+        resolved = supplied[name] ?? prefetched[name] ?? (typeof entry === "string" ? entry : void 0) ?? (value === "" ? void 0 : interpolate(value, step)) ?? await this.generate(config, node2, step, name, signal, record);
+      }
+      if (source === "model") resolved = await this.generate(config, node2, step, name, signal, record);
+      if (source === "human") resolved = supplied[name];
+      if (resolved === void 0 || source !== "fixed" && !resolved.trim()) missing.push(name);
+      else values[name] = resolved;
+    }
+    if ("action" in config) {
+      const required = requiredFields[config.action] ?? [];
+      for (const field of required) if (!values[field]?.trim() && !missing.includes(field)) missing.push(field);
+    }
+    const revision = "action" in config ? (await this.git.inspect(cwd)).revision : void 0;
+    return { cwd, sessionId, values, missing, preview: this.preview(config, values, cwd), revision };
+  }
+  async requiresApproval(config, operation) {
+    if (await this.fullAccess(operation.sessionId)) return false;
+    if ("action" in config && (softActions.has(config.action) || config.action === "checkoutBranch" && this.document().nodes.filter((node2) => node2.sessionId && sameFsPath(
+      this.sessionDirectory(node2.sessionId) ?? node2.worktreePath ?? node2.cwd,
+      operation.cwd
+    )).length > 1)) return true;
+    if (config.approved.includes(operation.preview)) return false;
+    return config.parameters.some((parameter) => parameter.source === "model" || parameter.source === "upstream");
+  }
+  execute = async (node2, step, signal, options) => {
+    const config = configOf(node2);
+    const run = this.runs().find((run2) => run2.id === options?.runId);
+    const operation = step.operation ?? await this.prepare(node2, config, step, run, signal, void 0, {}, options?.recordCall);
+    operation.preview = this.preview(config, operation.values, operation.cwd);
+    const followup = config.retryUpstream && operation.sessionId && operation.missing.length && !run?.steps.some((entry) => entry.parameterRetryFor === step.id) && config.parameters.some((parameter) => parameter.source === "upstream" && operation.missing.includes(parameter.name));
+    if (operation.missing.length || !operation.approved && (operation.review || await this.requiresApproval(config, operation))) {
+      return { operation, awaiting: {
+        question: operation.preview,
+        options: ["execute", "skip", ...followup ? ["retry"] : []],
+        operation: true,
+        fields: operation.missing.map((name) => ({ name, label: name, type: "text", required: true }))
+      } };
+    }
+    const result = await this.perform(node2, config, operation, signal);
+    const failed = result.exitCode !== 0 || result.timedOut;
+    const output = [result.stdout, result.stderr].filter(Boolean).join("\n") || (result.timedOut ? "\u6267\u884C\u8D85\u65F6" : failed ? `\u6267\u884C\u5931\u8D25\uFF08\u9000\u51FA\u7801 ${result.exitCode ?? "\u672A\u77E5"}\uFF09` : "");
+    const content = "outputMode" in config && config.outputMode === "lines" && result.exitCode === 0 ? contentList(output.split(/\r?\n/).filter(Boolean), options?.listLimit ?? DEFAULT_LIST_LIMIT) : { dataType: "text", value: output };
+    return {
+      operation,
+      operationResult: { ...result, stdout: result.stdout.slice(0, 4096), stderr: result.stderr.slice(0, 4096) },
+      route: failed ? "error" : "out",
+      output,
+      source: snapshotWithContent(node2, content)
+    };
+  };
+  async perform(node2, config, operation, signal) {
+    signal.throwIfAborted();
+    if ("action" in config) {
+      const fields = operation.values;
+      const request = {
+        action: config.action,
+        expectedRevision: operation.revision,
+        paths: fields.paths?.split(/\r?\n/).filter(Boolean),
+        branch: fields.branch,
+        message: fields.message,
+        baseRef: fields.baseRef,
+        worktreePath: fields.worktreePath
+      };
+      const result = await this.git.act(operation.cwd, request);
+      return { exitCode: 0, timedOut: false, stdout: result.commits[0]?.oid ?? result.branch ?? config.action, stderr: "" };
+    }
+    if (!config.program.trim()) throw new Error("\u8BF7\u5148\u6307\u5B9A\u53EF\u6267\u884C\u7A0B\u5E8F");
+    const subprocess = getSubprocess(this.ctx);
+    if (!subprocess) throw new Error("\u6B64 DSH \u914D\u7F6E\u6CA1\u6709\u5B50\u8FDB\u7A0B\u670D\u52A1");
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), Math.round(config.timeoutSec * 1e3));
+    timer.unref();
+    const timeout = deadline.signal;
+    const combined = AbortSignal.any([signal, timeout]);
+    const args = config.parameters.map((parameter) => operation.values[parameter.name]);
+    try {
+      if (config.mode === "interactive") return await this.interactive(node2, config, operation, args, combined);
+      if (config.sandbox) {
+        const shell = getShell(this.ctx);
+        if (!shell?.sandboxMode || shell.sandboxMode === "danger-full-access") throw new Error("\u6B64 DSH \u914D\u7F6E\u6CA1\u6709\u542F\u7528\u53D7\u9650 Shell \u6267\u884C\u5668");
+        const pwsh = /pwsh/i.test(shell.constructor.name);
+        const command = (pwsh ? "& " : "") + [config.program, ...args].map((arg) => shellQuote(arg, pwsh)).join(" ");
+        const result = await shell.execute(shell.resolve({
+          command,
+          workdir: operation.cwd,
+          signal: combined,
+          timeoutMs: Math.round(config.timeoutSec * 1e3)
+        })).result();
+        const [stdout2, stderr2] = await Promise.all([fullOutput(result.stdout), fullOutput(result.stderr)]);
+        return { exitCode: result.exitCode, timedOut: result.timedOut || timeout.aborted, stdout: stdout2, stderr: stderr2 };
+      }
+      const exe = await subprocess.resolveExecutable(config.program, void 0, combined);
+      const handle = subprocess.spawn({
+        argv: [exe, ...args],
+        cwd: operation.cwd,
+        stdio: { stdin: "ignore", stdout: stdio, stderr: stdio },
+        graceMs: 500,
+        signal: combined
+      });
+      const { exitCode } = await handle.done;
+      const [stdout, stderr] = await Promise.all([fullOutput(handle.collected.stdout.readFrom(0)), fullOutput(handle.collected.stderr.readFrom(0))]);
+      return { exitCode, timedOut: timeout.aborted, stdout, stderr };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async interactive(node2, config, operation, args, signal) {
+    const controller = getTerminalController(this.ctx);
+    const sessionId = operation.sessionId ?? node2.terminalSessionId;
+    const owner = await this.agent(sessionId);
+    if (!controller || !owner) throw new Error("\u4EA4\u4E92\u6267\u884C\u9700\u8981\u7ED1\u5B9A\u5E26\u539F\u751F\u7EC8\u7AEF\u670D\u52A1\u7684\u4F1A\u8BDD");
+    const key = JSON.stringify([sessionId, node2.id, operation.cwd]);
+    const execute = async () => {
+      signal.throwIfAborted();
+      let terminal = this.terminals.get(key);
+      if (config.terminalId && config.terminalId !== terminal?.id) throw new Error("\u8BE5\u7EC8\u7AEF\u4E0D\u5C5E\u4E8E\u6B64\u6267\u884C\u8282\u70B9");
+      if (terminal?.info.control === "user") throw new Error("\u6B64\u7EC8\u7AEF\u5DF2\u7531\u7528\u6237\u63A5\u7BA1");
+      if (!terminal || terminal.info.state !== "running") {
+        const policy = getSandboxPolicy(this.ctx);
+        terminal = await controller.openForAgent(owner, {
+          title: node2.title,
+          cwd: operation.cwd,
+          cols: 100,
+          rows: 28,
+          preferredShells: process.platform === "win32" ? ["pwsh.exe", "powershell.exe"] : ["bash", "sh"],
+          policy: policy?.resolve({ session: owner.session }) ?? { mode: "danger-full-access", workspaceRoot: operation.cwd }
+        }, signal);
+        this.terminals.set(key, terminal);
+      }
+      const windows = /(?:^|[\\/])(?:powershell|pwsh)(?:\.exe)?$/i.test(terminal.info.shell.path);
+      const marker = `FLOWSPACE_${crypto.randomUUID().replaceAll("-", "")}`;
+      const invocation = [config.program, ...args].map((arg) => shellQuote(arg, windows)).join(" ");
+      const begin = `${marker}=start`;
+      const wrapped = windows ? `[Console]::WriteLine('${begin}'); & ${invocation}; if ($?) { [Console]::WriteLine('${marker}=0') } else { [Console]::WriteLine("${marker}=$LASTEXITCODE") }` : `printf '\\n%s\\n' '${begin}'; ${invocation}; printf '\\n${marker}=%s\\n' "$?"`;
+      const ready2 = config.readyPattern ? new RegExp(config.readyPattern, "u") : void 0;
+      const completion = new RegExp(`${marker}=(-?\\d+)[ \\t\\r]*$`, "m");
+      await terminal.drain();
+      const mark = terminal.mark();
+      let output = "";
+      try {
+        await terminal.write(wrapped + "\r");
+        for (; ; ) {
+          const revision = terminal.revision;
+          const lines2 = mark.lines().lines;
+          const start = lines2.findIndex((line) => line.trimEnd().endsWith(begin));
+          output = start < 0 ? "" : lines2.slice(start + 1).join("\n");
+          const end = completion.exec(output);
+          if (end || ready2?.test(output) || terminal.info.state !== "running")
+            return {
+              exitCode: end ? Number(end[1]) : ready2?.test(output) ? 0 : null,
+              timedOut: false,
+              stdout: output.replace(completion, "").trim(),
+              stderr: ""
+            };
+          await terminal.changed(revision, signal);
+        }
+      } catch (error) {
+        if (!signal.aborted) throw error;
+        return { exitCode: null, timedOut: true, stdout: output, stderr: "" };
+      } finally {
+        mark.dispose();
+      }
+    };
+    return this.terminalQueue.run(key, execute);
+  }
+  prefetch(run, step) {
+    if (step.parameterRetryFor) {
+      const target = run.steps.find((entry) => entry.id === step.parameterRetryFor);
+      const node2 = run.graph.nodes.find((node3) => node3.id === target?.nodeId);
+      return target?.operation && node2 ? [{ id: node2.id, title: node2.title, fields: target.operation.missing.filter((name) => configOf(node2).parameters.some((parameter) => parameter.name === name && parameter.source === "upstream")) }] : [];
+    }
+    return run.graph.edges.flatMap((edge2) => {
+      if (edge2.kind !== "continuation" || edge2.trigger === "off" || edge2.source !== step.nodeId) return [];
+      const node2 = run.graph.nodes.find((node3) => node3.id === edge2.target);
+      if (!node2 || !isOperation(node2.flowType)) return [];
+      const fields = configOf(node2).parameters.filter((parameter) => parameter.source === "upstream").map((parameter) => parameter.name);
+      return fields.length ? [{ id: node2.id, title: node2.title, fields }] : [];
+    });
+  }
+  registerTools(scheduler) {
+    const lookup2 = (id) => {
+      const target = this.document().nodes.find((node2) => node2.sessionId === id);
+      const ids = new Set(this.document().edges.filter((edge2) => edge2.kind === "reference" && edge2.target === target?.id).map((edge2) => edge2.source));
+      return this.document().nodes.filter((node2) => ids.has(node2.id) && isOperation(node2.flowType));
+    };
+    const schema5 = zodToolSchema(operationRequest);
+    this.ctx.tools.register({
+      name: "provide_flow_parameters",
+      description: "Supply parameters to a downstream FlowSpace operation before ending this turn.",
+      parameters: schema5,
+      output: jsonToolOutput,
+      execute: async (input, exec) => scheduler.transact(async () => {
+        const { nodeId, values } = operationRequest.parse(input);
+        exec.signal.throwIfAborted();
+        const owner = exec.agent && scheduler.activeSessionStep(exec.agent.id);
+        const downstream = owner && this.prefetch(owner.run, owner.step).find((node2) => node2.id === nodeId);
+        if (!owner || !downstream || Object.keys(values).some((field) => !downstream.fields.includes(field)))
+          throw new Error("\u5F53\u524D\u6B65\u9AA4\u672A\u8BF7\u6C42\u8FD9\u4E9B\u53C2\u6570");
+        (owner.step.operationParameters ??= {})[nodeId] = values;
+        return { accepted: Object.keys(values) };
+      })
+    }, { when: ({ agent }) => scheduler.transact(async () => {
+      const owner = scheduler.activeSessionStep(agent.id);
+      return !!owner && this.prefetch(owner.run, owner.step).length > 0;
+    }) });
+    this.ctx.tools.register({
+      name: "flow_execute",
+      description: "Execute a preconfigured FlowSpace operation. The operation ID and allowed parameters are defined by a reference wire.",
+      parameters: schema5,
+      output: jsonToolOutput,
+      execute: async (input, exec) => {
+        const { nodeId, values } = operationRequest.parse(input);
+        const id = exec.agent.id;
+        const node2 = lookup2(id).find((node3) => node3.id === nodeId);
+        if (!node2) throw new Error("\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u6B64\u6267\u884C\u8282\u70B9\u7684\u5DE5\u5177\u5F15\u7528");
+        const config = configOf(node2);
+        const owner = scheduler.activeSessionStep(id);
+        const step = owner?.step ?? {
+          id: exec.callId,
+          nodeId: node2.id,
+          requestId: exec.callId,
+          state: "running",
+          iteration: 0,
+          sources: [],
+          task: "",
+          createdAt: Date.now()
+        };
+        const operation = await this.prepare(node2, config, step, owner?.run, exec.signal, id, values);
+        if (operation.missing.length) throw new Error(`\u9700\u8981\u8865\u9F50\u53C2\u6570\uFF1A${operation.missing.join(", ")}`);
+        if (await this.requiresApproval(config, operation)) await approveWrite(this.ctx, exec, "flow_execute", operation.preview, "\u6267\u884C\u64CD\u4F5C\u672A\u83B7\u6279\u51C6");
+        if (!lookup2(id).some((candidate) => candidate.id === node2.id && JSON.stringify(candidate.config) === JSON.stringify(node2.config)))
+          throw new Error("\u6267\u884C\u8282\u70B9\u5B9A\u4E49\u6216\u6388\u6743\u5DF2\u53D8\u5316");
+        return this.perform(node2, config, operation, exec.signal);
+      }
+    }, { when: ({ agent }) => lookup2(agent.id).length > 0 });
+  }
+};
+
+// packages/flowspace/src/host/referenceService.ts
+import { randomUUID } from "node:crypto";
+
 // packages/flowspace/src/host/runtime.ts
+import { statSync as statSync2 } from "node:fs";
+import { resolve as resolve3 } from "node:path";
+import { foldSurface } from "@deepseek-ai/dsh-session";
+import { isCompactCheckpointSource } from "@deepseek-ai/dsh-compaction";
 var escapeXmlAttr = (value) => value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 var plainText = (blocks) => blocks.filter((b) => b.type === "text").map((b) => b.text).join("\n");
 function computeFileNodeFingerprint(node2, baseCwd) {
   const paths2 = extractFileNodePaths(node2);
   if (!paths2.length) return "missing:empty";
-  const root = resolve2(
+  const root = resolve3(
     baseCwd || node2.worktreePath || node2.cwd || process.cwd()
   );
   const parts = paths2.map((p) => {
     try {
-      const full = resolve2(root, p);
-      const st = statSync(full);
+      const full = resolve3(root, p);
+      const st = statSync2(full);
       if (!st.isFile()) return `${p}:missing`;
       return `${p}:${Math.trunc(st.mtimeMs)}:${st.size}`;
     } catch {
@@ -8559,2073 +11383,660 @@ ${body}
   }
 };
 
-// packages/flowspace/src/host/workspaceFs.ts
-import { open, readdir, readFile, realpath, stat } from "node:fs/promises";
-import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, relative as relative2, resolve as resolve3 } from "node:path";
-var SKIP_DIRS = /* @__PURE__ */ new Set([
-  "node_modules",
-  ".git",
-  ".local",
-  ".backups",
-  "dist",
-  "lib",
-  ".next",
-  "coverage"
-]);
-var WorkspaceFs = class {
-  constructor(ctx) {
-    this.ctx = ctx;
-  }
-  knownWorktrees = /* @__PURE__ */ new Set();
-  trackWorktree(path) {
-    if (path) this.knownWorktrees.add(resolve3(path));
-  }
-  /**
-   * Confine `cwd` strictly to registered DSH workspaces, `<repo>-worktrees/*` managed directories,
-   * or verified Git worktrees discovered from those workspaces.
-   */
-  resolveWorkspaceRoot(cwd) {
-    const list = this.ctx.workspaceRegistry.list();
-    if (cwd) {
-      const candidate = resolve3(cwd);
-      const inRegisteredWorkspace = list.some((w) => isSubPath(w.path, candidate));
-      const inManagedWorktreesDir = list.some(
-        (w) => isSubPath(
-          resolve3(w.path, "..", `${basename2(w.path)}-worktrees`),
-          candidate
-        )
-      );
-      const inVerifiedWorktree = [...this.knownWorktrees].some(
-        (wt) => isSubPath(wt, candidate)
-      );
-      if (inRegisteredWorkspace || inManagedWorktreesDir || inVerifiedWorktree || isSubPath(resolve3(process.cwd()), candidate)) {
-        return candidate;
-      }
+// packages/flowspace/src/host/referenceService.ts
+function teamBriefMessage(text) {
+  return Object.freeze({
+    id: randomUUID(),
+    role: "user",
+    content: [{ type: "text", text }],
+    source: {
+      kind: "flowspace-team",
+      form: "snapshot",
+      sections: [{ name: "flowspace-team", text }]
     }
-    return resolve3(list[0]?.path ?? process.cwd());
-  }
-  workspacePath(request) {
-    const base = this.resolveWorkspaceRoot(request.cwd);
-    const raw = request.path.trim();
-    if (!raw) throw new Error("\u672A\u6307\u5B9A\u6587\u4EF6\u8DEF\u5F84");
-    const full = resolve3(base, raw);
-    const rel = relative2(base, full);
-    if (rel.startsWith("..") || isAbsolute2(rel)) {
-      throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
-    }
-    return { base, raw, full, rel };
-  }
-  async workspaceFile(request) {
-    const { base, raw, full, rel } = this.workspacePath(request);
-    const info = await stat(full).catch(() => null);
-    if (!info || !info.isFile()) throw new Error(`\u6587\u4EF6\u4E0D\u5B58\u5728\uFF1A${raw}`);
-    if (!isSubPath(await realpath(base), await realpath(full))) {
-      throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
-    }
-    return { full, rel, info, raw };
-  }
-  async checkedTarget(path, cwd, signal) {
-    const { base, full } = this.workspacePath({ path, cwd });
-    const root = await this.ctx.fs.resolve(base, { signal });
-    const target = await this.ctx.fs.resolve(full, { signal });
-    if (!this.ctx.fs.contains(root, target)) {
-      throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
-    }
-    return target;
-  }
-  async checkedWatchTarget(path, cwd, signal) {
-    const { base, full } = this.workspacePath({ path, cwd });
-    const physical = await realpath(full).catch((error) => {
-      if (error.code !== "ENOENT") throw error;
-      return realpath(dirname2(full));
-    });
-    if (!isSubPath(await realpath(base), physical)) {
-      throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
-    }
-    return this.ctx.fs.resolve(full, { signal });
-  }
-  async readFullText(path, cwd, signal) {
-    const { full } = await this.workspaceFile({ path, cwd });
-    const body = await readFile(full, { signal });
-    if (body.includes(0)) throw new Error(`\u4E8C\u8FDB\u5236\u6587\u4EF6\u4E0D\u80FD\u4F5C\u4E3A\u6587\u672C\u8F93\u5165\uFF1A${path}`);
-    return new TextDecoder().decode(body);
-  }
-  async readBoundedText(request, maxReadBytes = MAX_INLINE_CONTEXT_BYTES, maxChars = 24e3) {
-    const { full, rel, info, raw } = await this.workspaceFile(request);
-    const toRead = Math.min(info.size, maxReadBytes);
-    if (toRead === 0) {
-      return {
-        path: rel.replaceAll("\\", "/"),
-        content: "",
-        truncated: false
-      };
-    }
-    const fh = await open(full, "r");
-    try {
-      const buf = Buffer.allocUnsafe(toRead);
-      const { bytesRead } = await fh.read(buf, 0, toRead, 0);
-      const slice = buf.subarray(0, bytesRead);
-      if (slice.includes(0)) {
-        throw new Error(`\u4E8C\u8FDB\u5236\u6587\u4EF6\u4E0D\u652F\u6301\u6587\u672C\u9884\u89C8\uFF1A${raw}`);
-      }
-      const decoded = new TextDecoder("utf-8", { fatal: false }).decode(slice);
-      const truncated = bytesRead < info.size || decoded.length > maxChars;
-      return {
-        path: rel.replaceAll("\\", "/"),
-        content: decoded.length > maxChars ? decoded.slice(0, maxChars) : decoded,
-        truncated
-      };
-    } finally {
-      await fh.close();
-    }
-  }
-  async listFiles(request) {
-    const base = this.resolveWorkspaceRoot(request.cwd);
-    const out = [];
-    const walk = async (dir, depth) => {
-      if (depth > 3 || out.length >= 80) return;
-      let entries;
-      try {
-        entries = await readdir(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries) {
-        if (out.length >= 80) break;
-        if (SKIP_DIRS.has(entry.name)) continue;
-        const full = resolve3(dir, entry.name);
-        if (entry.isDirectory()) await walk(full, depth + 1);
-        else if (entry.isFile()) {
-          out.push(relative2(base, full).replaceAll("\\", "/"));
-        }
-      }
-    };
-    await walk(base, 0);
-    return out;
-  }
-};
-
-// packages/flowspace/src/host/flowEmit.ts
-import { z as z14 } from "zod";
-var emission = z14.strictObject({ items: z14.array(z14.json()) });
-function registerFlowEmit(ctx, scheduler) {
-  return ctx.tools.register({
-    name: "flow_emit",
-    description: "Emit ordered JSON items to this FlowSpace step's downstream structured inputs. Call again to append another batch. For a record output, put the JSON object in items.",
-    parameters: {
-      type: "object",
-      properties: { items: { type: "array", items: {} } },
-      required: ["items"],
-      additionalProperties: false
-    },
-    output: {
-      schema: {
-        type: "object",
-        properties: { accepted: { type: "integer" }, total: { type: "integer" } },
-        required: ["accepted", "total"],
-        additionalProperties: false
-      },
-      render: (_args, result) => [{ type: "text", text: JSON.stringify(result) }]
-    },
-    async execute(args, exec) {
-      if (!exec.agent) throw new Error("flow_emit \u9700\u8981\u6B63\u5728\u6267\u884C\u7684 Agent \u6B65\u9AA4");
-      const { items } = emission.parse(args);
-      return scheduler.emit(exec.agent.id, exec.callId, items, exec.signal);
-    }
-  }, {
-    // rc.3 resolves tools immediately after emitting inbox/claimed. Observe the
-    // serialized claim before deciding which step owns this native turn.
-    when: ({ agent, signal }) => scheduler.transact(async () => {
-      signal.throwIfAborted();
-      return scheduler.canEmit(agent.id);
-    })
   });
 }
-
-// packages/flowspace/src/host/containers.ts
-import { createHash as createHash4 } from "node:crypto";
-import { z as z16 } from "zod";
-
-// packages/flowspace/src/host/toolPrimitives.ts
-import { z as z15 } from "zod";
-var jsonToolOutput = {
-  schema: { type: "object", additionalProperties: true },
-  render: (_args, value) => [
-    { type: "text", text: JSON.stringify(value) }
-  ]
-};
-function zodToolSchema(schema5) {
-  return JSON.parse(
-    JSON.stringify(z15.toJSONSchema(schema5, { target: "draft-7" }))
-  );
-}
-async function requestToolApproval(ctx, exec, toolName, reason, deniedMessage = "\u64CD\u4F5C\u672A\u83B7\u6279\u51C6") {
-  const approval = getApproval(ctx);
-  const result = await approval?.request({
-    agent: exec.agent,
-    toolName,
-    callId: exec.callId,
-    signal: exec.signal,
-    reason
-  });
-  if (result !== "allowed-once") throw new Error(deniedMessage);
-}
-async function approveWrite(ctx, exec, toolName, title, deniedMessage = "\u5BB9\u5668\u6539\u52A8\u672A\u83B7\u6279\u51C6") {
-  await requestToolApproval(
-    ctx,
-    exec,
-    toolName,
-    `\u5141\u8BB8 Agent \u4FEE\u6539\u300C${title}\u300D\u4E2D\u7684\u5185\u5BB9\uFF1F`,
-    deniedMessage
-  );
-}
-
-// packages/flowspace/src/host/containers.ts
-var lookup = z16.strictObject({ edgeId: z16.string() });
-var update = lookup.extend({ expectedVersion: z16.string(), text: z16.string() });
-var boardUpdate = lookup.extend({
-  action: z16.enum(["add", "edit", "delete", "move", "toggle", "comment", "check"]),
-  itemId: z16.string().optional(),
-  expectedVersion: z16.string(),
-  text: z16.string().optional(),
-  columnId: z16.string().optional(),
-  checklistId: z16.string().optional()
-});
-var versionOf = (entry) => {
-  if (!entry) return "absent";
-  const value = entry.kind === "board" ? { column: entry.columnId, card: entry.card } : entry;
-  return createHash4("sha256").update(canonicalJson(value)).digest("hex");
-};
-function requireVersion(expected, actual) {
-  if (expected !== actual) throw new Error(`\u6761\u76EE\u7248\u672C\u51B2\u7A81\u3002\u5F53\u524D\u7248\u672C ${actual}\u3002\u8BF7\u8BFB\u53D6\u6700\u65B0\u5185\u5BB9\u540E\u518D\u8BD5\u3002`);
-}
-var ContainerStore = class {
-  constructor(ctx, table, document, persist, publish, workspacePath) {
-    this.ctx = ctx;
-    this.table = table;
-    this.document = document;
-    this.persist = persist;
-    this.publish = publish;
-    this.workspacePath = workspacePath;
+var ReferenceService = class {
+  constructor(deps) {
+    this.deps = deps;
   }
-  changes() {
-    return [...this.table.entries()].map(([, value]) => value).filter((change) => !change.pending).sort((a, b) => a.revision - b.revision);
-  }
-  latest(id) {
-    return this.table.get(id);
-  }
-  mounts(sessionId, kind) {
-    const doc = this.document();
-    const target = doc.nodes.find((node2) => node2.kind === "agent" && node2.sessionId === sessionId);
-    if (!target) return [];
-    const nodes = new Map(doc.nodes.map((node2) => [node2.id, node2]));
-    return doc.edges.flatMap((edge2) => {
-      if (edge2.target !== target.id) return [];
-      const node2 = nodes.get(edge2.source);
-      if (node2?.kind !== kind || kind === "file" && extractFileNodePaths(node2).length !== 1) return [];
-      const permission = containerPermission(node2, edge2);
-      return permission === "read" ? [] : [{ node: node2, edge: edge2, permission }];
-    });
-  }
-  mount(sessionId, kind, edgeId) {
-    const mount = this.mounts(sessionId, kind).find((item) => item.edge.id === edgeId);
-    if (!mount) throw new Error("\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u6B64\u5BB9\u5668\u7684\u5199\u5165\u6388\u6743");
-    return mount;
-  }
-  async read(mount, signal) {
-    const { edge: edge2, node: node2 } = mount;
-    if (node2.kind === "board") {
-      const ids = boardIdsForReference(node2, edge2);
-      const entries = [...ids].map((id) => {
-        const entry2 = canvasEntry(node2, id);
-        return { id, version: versionOf(entry2), entry: entry2 };
-      });
-      const columns = normalizeBoardColumns(node2.columns).map(({ id, name }) => ({ id, name }));
-      return { entries, columns };
-    }
-    if (node2.kind === "file") {
-      const path = extractFileNodePaths(node2)[0];
-      const file = await this.file(path, node2.worktreePath ?? node2.cwd, signal);
-      return { entry: file.entry, version: file.version ?? "absent" };
-    }
-    const entry = canvasEntry(node2);
-    return { entry, version: versionOf(entry) };
-  }
-  async file(path, cwd, signal) {
-    const { base, full, rel } = this.workspacePath({ path, cwd });
-    const root = await this.ctx.fs.resolve(base, { signal });
-    const target = await this.ctx.fs.resolve(full, { signal });
-    if (!this.ctx.fs.contains(root, target)) throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
-    const info = await this.ctx.fs.stat(target, signal);
-    const entry = info ? {
-      kind: "file",
-      path: rel,
-      cwd: base,
-      text: await this.ctx.fs.readText(target, signal)
-    } : null;
-    return { target, version: info?.version, entry };
-  }
-  async record(node2, itemId, id, before, after, owner, file, signal) {
-    const previous = this.latest(id);
-    if (previous && !previous.pending) return previous;
-    if (after?.kind === "board" && owner.sessionId) after.card = { ...after.card, author: owner.sessionId };
-    const document = this.document();
-    const revision = (document.containerRevision ?? 0) + 1;
-    const change = {
-      id,
-      nodeId: node2.id,
-      itemId,
-      before,
-      after,
-      ...owner,
-      revision,
-      at: Date.now(),
-      beforeVersion: file?.version ?? versionOf(before),
-      afterVersion: versionOf(after),
-      pending: true
-    };
-    const edited = { ...node2 };
-    if (!file && !writeCanvasEntry(edited, itemId, after)) throw new Error("\u76EE\u6807\u5BB9\u5668\u6216\u5217\u5DF2\u79FB\u9664");
-    await this.table.put(id, change);
-    if (file) {
-      try {
-        if (after?.kind === "file") {
-          const outcome = await this.ctx.fs.writeText(
-            file.target,
-            after.text,
-            file.version ? { kind: "replaceIfVersion", version: file.version } : { kind: "createIfAbsent" },
-            signal
-          );
-          change.afterVersion = outcome.version;
-          after.text = outcome.after;
-        } else if (file.version) {
-          await this.ctx.fs.deleteFile(file.target, { version: file.version }, signal);
-          change.afterVersion = "absent";
-        }
-      } catch (error) {
-        await this.table.delete(id);
-        throw error;
-      }
-    } else {
-      document.nodes = document.nodes.map((current) => current.id === edited.id ? edited : current);
-      if (edited.kind === "board") document.edges = pruneBoardReferences(edited, document.edges);
-    }
-    document.containerRevision = revision;
-    await this.persist();
-    delete change.pending;
-    await this.table.put(id, change);
-    this.publish();
-    return change;
-  }
-  async recover() {
-    for (const [, stored] of this.table.entries()) {
-      if (!stored.pending) continue;
-      const change = structuredClone(stored);
-      const doc = this.document();
-      const node2 = doc.nodes.find((entry) => entry.id === change.nodeId);
-      const file = change.after?.kind === "file" ? change.after : change.before?.kind === "file" ? change.before : void 0;
-      if (file) {
-        const current = await this.file(file.path, file.cwd);
-        if (versionOf(current.entry) !== versionOf(change.after)) {
-          await this.table.delete(change.id);
-          continue;
-        }
-        change.afterVersion = current.version ?? "absent";
-        doc.containerRevision = Math.max(doc.containerRevision ?? 0, change.revision);
-      } else if (!node2 || (doc.containerRevision ?? 0) < change.revision) {
-        await this.table.delete(change.id);
+  inputContexts = /* @__PURE__ */ new Map();
+  teamBriefs = /* @__PURE__ */ new Map();
+  canvasToolRestrictions = /* @__PURE__ */ new Map();
+  computeSourceVersions() {
+    const { state, variables, resolveWorkspaceRoot } = this.deps;
+    const out = {};
+    for (const n of state.doc.nodes) {
+      if (n.flowType === variableNode.flowType) {
+        out[n.id] = `${n.id}:${variables.read(n, {}).version}`;
         continue;
       }
-      delete change.pending;
-      await this.table.put(change.id, change);
-    }
-  }
-  writeBoard(mount, args, owner, id) {
-    const { edge: edge2, node: node2, permission } = mount;
-    const { itemId, action, expectedVersion, text, columnId, checklistId } = args;
-    const columns = normalizeBoardColumns(node2.columns);
-    const found = itemId === void 0 ? void 0 : findBoardCard(columns, itemId);
-    const before = canvasEntry(node2, itemId);
-    if (action === "add") {
-      if (permission !== "edit" || edge2.sourceItemKey !== void 0 || node2.selectedItems?.length)
-        throw new Error("\u5F53\u524D\u5F15\u7528\u672A\u6388\u6743\u65B0\u589E\u5361\u7247");
-      requireVersion(expectedVersion, "absent");
-      const target = columns.find((column) => column.id === columnId) ?? (!columnId ? columns[0] : void 0);
-      if (!target || !text?.trim()) throw new Error("\u65B0\u589E\u5361\u7247\u9700\u8981\u6587\u5B57\u548C\u6709\u6548\u7684\u5217");
-      const card = newBoardCard(text.trim());
-      return this.record(node2, card.id, id, null, { kind: "board", columnId: target.id, card }, owner);
-    }
-    if (!itemId || !found || !boardIdsForReference(node2, edge2).has(itemId)) throw new Error("\u5F53\u524D\u5F15\u7528\u672A\u6388\u6743\u6B64\u5361\u7247");
-    if ((action === "edit" || action === "delete") && permission !== "edit") throw new Error("\u8BE5\u64CD\u4F5C\u9700\u8981\u7F16\u8F91\u6388\u6743");
-    requireVersion(expectedVersion, versionOf(before));
-    const now = Date.now();
-    let next = columns;
-    switch (action) {
-      case "move":
-        if (!columns.some((column) => column.id === columnId)) throw new Error("\u76EE\u6807\u5217\u4E0D\u5B58\u5728");
-        next = moveBoardCard(columns, itemId, columnId, void 0, now);
-        break;
-      case "toggle":
-        next = toggleBoardCardDone(columns, itemId, node2.boardSettings, now);
-        break;
-      case "check":
-        if (!found.card.checklist?.some((item) => item.id === checklistId)) throw new Error("\u6E05\u5355\u9879\u4E0D\u5B58\u5728");
-        next = updateBoardCard(columns, itemId, (card) => ({
-          ...card,
-          updatedAt: now,
-          checklist: card.checklist.map((item) => item.id === checklistId ? { ...item, done: !item.done } : item)
-        }));
-        break;
-      case "comment":
-        if (!text?.trim()) throw new Error("\u8BF7\u586B\u5199\u8BC4\u8BBA");
-        next = updateBoardCard(columns, itemId, (card) => ({
-          ...card,
-          updatedAt: now,
-          comments: [...card.comments ?? [], { id, by: owner.by, text: text.trim(), createdAt: now }]
-        }));
-        break;
-      case "edit":
-        if (!text?.trim()) throw new Error("\u8BF7\u586B\u5199\u5361\u7247\u6587\u5B57");
-        next = updateBoardCard(columns, itemId, (card) => ({ ...card, text: text.trim(), updatedAt: now }));
-        break;
-      case "delete":
-        next = removeBoardCard(columns, itemId);
-        break;
-    }
-    return this.record(node2, itemId, id, before, canvasEntry({ ...node2, columns: next }, itemId), owner);
-  }
-  async write(mount, args, owner, id, signal) {
-    const previous = this.latest(id);
-    if (previous && !previous.pending) return previous;
-    if ("action" in args) return this.writeBoard(mount, args, owner, id);
-    const { node: node2 } = mount;
-    if (node2.kind === "file") {
-      const path = extractFileNodePaths(node2)[0];
-      const file = await this.file(path, node2.worktreePath ?? node2.cwd, signal);
-      requireVersion(args.expectedVersion, file.version ?? "absent");
-      const { base, rel } = this.workspacePath({ path, cwd: node2.worktreePath ?? node2.cwd });
-      return this.record(node2, void 0, id, file.entry, {
-        kind: "file",
-        path: rel,
-        cwd: base,
-        text: args.text.replaceAll("\r\n", "\n")
-      }, owner, file, signal);
-    }
-    const before = canvasEntry(node2);
-    requireVersion(args.expectedVersion, versionOf(before));
-    return this.record(node2, void 0, id, before, { kind: "note", text: args.text }, owner);
-  }
-  async deliver(run, edge2, token, source) {
-    const node2 = this.document().nodes.find((node3) => node3.id === edge2.target);
-    if (!node2) throw new Error("\u6295\u9012\u76EE\u6807\u5DF2\u79FB\u9664");
-    const step = run.steps.find((step2) => step2.id === token.stepId);
-    const owner = {
-      by: step?.sessionId ?? edge2.source,
-      sessionId: step?.sessionId,
-      runId: run.id,
-      stepId: step?.id,
-      edgeId: edge2.id
-    };
-    const id = JSON.stringify([run.id, token.stepId, edge2.id]);
-    const text = source.content ? textOfContent(source.content) : source.text;
-    if (node2.kind === "board") {
-      const columns = normalizeBoardColumns(node2.columns);
-      const dest = edge2.delivery?.columnId ? columns.find((column) => column.id === edge2.delivery?.columnId) : columns[0];
-      if (!dest) throw new Error("\u6295\u9012\u76EE\u6807\u5217\u5DF2\u79FB\u9664");
-      const mode2 = edge2.delivery?.mode ?? "lines";
-      const values = mode2 === "paragraph" ? [text] : mode2 === "list" ? source.content?.items?.map((item) => item.value) ?? parseEmission(text) : text.split(/\r?\n/);
-      for (const [index, value] of values.slice(0, run.listLimit ?? DEFAULT_LIST_LIMIT).entries()) {
-        const title = typeof value === "string" ? value.trim() : JSON.stringify(value);
-        if (!title) continue;
-        const itemId = `${id}:${index}`;
-        const current = this.document().nodes.find((node3) => node3.id === edge2.target);
-        const card = { ...newBoardCard(title), id: itemId };
-        await this.record(current, itemId, itemId, null, { kind: "board", columnId: dest.id, card }, owner);
+      if (n.flowType === "flowspace/constant") {
+        out[n.id] = `${n.id}:${shortHash(JSON.stringify(n.config))}`;
+        continue;
       }
-    } else if (node2.kind === "note") {
-      await this.record(node2, void 0, id, canvasEntry(node2), { kind: "note", text }, owner);
-    } else if (node2.kind === "file") {
-      const paths2 = extractFileNodePaths(node2);
-      if (paths2.length !== 1) throw new Error("\u8BF7\u9009\u62E9\u4E00\u4E2A\u6295\u9012\u6587\u4EF6");
-      const cwd = node2.worktreePath ?? node2.cwd;
-      const file = await this.file(paths2[0], cwd);
-      const path = this.workspacePath({ path: paths2[0], cwd });
-      await this.record(node2, void 0, id, file.entry, {
-        kind: "file",
-        text: text.replaceAll("\r\n", "\n"),
-        path: path.rel,
-        cwd: path.base
-      }, owner, file);
-    }
-  }
-  async revert(id) {
-    const change = this.latest(id);
-    if (!change || change.pending || change.revertedBy) throw new Error("\u6B64\u6539\u52A8\u5DF2\u64A4\u56DE\u6216\u4E0D\u53EF\u7528");
-    const node2 = this.document().nodes.find((node3) => node3.id === change.nodeId);
-    if (!node2) throw new Error("\u5BB9\u5668\u5DF2\u79FB\u9664");
-    const file = change.after?.kind === "file" ? await this.file(change.after.path, change.after.cwd) : void 0;
-    const current = file ? file.entry : canvasEntry(node2, change.itemId);
-    requireVersion(change.afterVersion, file?.version ?? versionOf(current));
-    const undone = await this.record(node2, change.itemId, `undo:${id}`, current, change.before, { by: "\u7528\u6237" }, file);
-    await this.table.put(id, { ...change, revertedBy: undone.id });
-    return undone;
-  }
-};
-function registerContainerTools(ctx, store, scheduler) {
-  for (const kind of ["board", "note", "file"]) {
-    const when = ({ agent }) => store.mounts(agent.id, kind).length > 0;
-    ctx.tools.register({
-      name: `${kind}_read`,
-      description: `List your writable FlowSpace ${kind} references or read one with its current version.`,
-      parameters: { type: "object", properties: { edgeId: { type: "string" } }, additionalProperties: false },
-      output: jsonToolOutput,
-      async execute(raw, exec) {
-        const { edgeId } = lookup.partial().parse(raw);
-        const sessionId = exec.agent?.id;
-        if (!sessionId) throw new Error("\u5BB9\u5668\u5DE5\u5177\u9700\u8981\u753B\u5E03 Agent \u4F1A\u8BDD");
-        return scheduler.transact(async () => edgeId ? store.read(store.mount(sessionId, kind, edgeId), exec.signal) : { references: store.mounts(sessionId, kind).map(({ node: node2, edge: edge2, permission }) => ({
-          edgeId: edge2.id,
-          title: node2.title,
-          permission
-        })) });
+      if (n.kind === "agent") {
+        const live = state.live.get(n.id);
+        if (n.sessionId && live && live.seq >= 0) {
+          out[n.id] = `${n.sessionId}:${live.seq}`;
+        }
+        continue;
       }
-    }, { when });
-    const schema5 = kind === "board" ? boardUpdate : update;
-    const toolName = `${kind}_write`;
-    ctx.tools.register({
-      name: toolName,
-      description: kind === "board" ? "Change one granted FlowSpace board card. Use board_read first to get its current version. For add, expectedVersion is absent." : `Replace the text of one granted FlowSpace ${kind}. Read it first to get the current version.`,
-      parameters: zodToolSchema(schema5),
-      output: jsonToolOutput,
-      async execute(raw, exec) {
-        const args = schema5.parse(raw);
-        const agent = exec.agent;
-        if (!agent) throw new Error("\u5BB9\u5668\u5DE5\u5177\u9700\u8981\u753B\u5E03 Agent \u4F1A\u8BDD");
-        const before = store.mount(agent.id, kind, args.edgeId);
-        if (before.edge.ask) await approveWrite(ctx, exec, toolName, before.node.title);
-        return scheduler.transact(async () => {
-          exec.signal.throwIfAborted();
-          const current = store.mount(agent.id, kind, args.edgeId);
-          if (before.node.id !== current.node.id || before.edge.sourceItemKey !== current.edge.sourceItemKey || current.edge.ask && !before.edge.ask || kind === "file" && (extractFileNodePaths(before.node)[0] !== extractFileNodePaths(current.node)[0] || (before.node.worktreePath ?? before.node.cwd) !== (current.node.worktreePath ?? current.node.cwd)))
-            throw new Error("\u5BB9\u5668\u6388\u6743\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6");
-          const running = scheduler.activeSessionStep(agent.id);
-          const result = await store.write(current, args, {
-            by: agent.id,
-            sessionId: agent.id,
-            edgeId: current.edge.id,
-            runId: running?.run.id,
-            stepId: running?.step.id
-          }, JSON.stringify([agent.id, running?.step.id, exec.callId]), exec.signal);
-          return { id: result.id, itemId: result.itemId ?? null, version: result.afterVersion };
-        });
+      if (n.kind === "file") {
+        const baseCwd = resolveWorkspaceRoot(n.worktreePath ?? n.cwd);
+        out[n.id] = `${n.id}:${computeFileNodeFingerprint(n, baseCwd)}`;
+        continue;
       }
-    }, { when });
-  }
-}
-
-// packages/flowspace/src/host/variables.ts
-import { z as z18 } from "zod";
-
-// packages/flowspace/src/host/storage.ts
-import { z as z17 } from "zod";
-import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
-var variableRecordSchema = z17.object({
-  id: z17.string(),
-  key: z17.string(),
-  name: z17.string(),
-  scope: z17.enum(VARIABLE_SCOPES),
-  type: z17.enum(VARIABLE_TYPES),
-  runId: z17.string().optional(),
-  lane: z17.string().optional(),
-  version: z17.number().int().nonnegative(),
-  value: z17.json(),
-  history: z17.array(
-    z17.object({
-      id: z17.string(),
-      writer: z17.string(),
-      at: z17.number(),
-      version: z17.number().int().positive(),
-      from: z17.json(),
-      to: z17.json(),
-      runId: z17.string().optional(),
-      stepId: z17.string().optional()
-    })
-  )
-});
-var assetId = z17.string().trim().min(1);
-var teamModelSchema = z17.object({
-  provider: assetId,
-  model: assetId,
-  reasoningEffort: assetId.optional()
-});
-var saveRoleSchema = z17.object({
-  id: assetId,
-  title: assetId,
-  description: z17.string(),
-  persona: z17.string(),
-  model: teamModelSchema,
-  revision: z17.number().int().nonnegative()
-});
-var maxTeamSlots = 8;
-var saveTeamSchema = z17.object({
-  id: assetId,
-  title: assetId,
-  lead: z17.object({ persona: z17.string(), model: teamModelSchema }),
-  slots: z17.array(z17.object({
-    slotId: z17.string().regex(/^(?!lead$)[a-z][a-z0-9-]{0,31}$/, "Invalid native subagent slot name"),
-    roleId: assetId,
-    label: assetId,
-    model: teamModelSchema.optional(),
-    maxInstances: z17.number().int().positive().optional(),
-    nodeId: assetId.optional()
-  })).min(1).max(maxTeamSlots),
-  norms: z17.string(),
-  revision: z17.number().int().nonnegative()
-}).refine((team) => new Set(team.slots.map((slot) => slot.slotId)).size === team.slots.length, {
-  path: ["slots"],
-  message: "Slot names must be unique"
-});
-var revisionFields = {
-  revision: z17.number().int().positive(),
-  archived: z17.boolean().optional()
-};
-var roleDefinitionSchema = saveRoleSchema.extend(revisionFields);
-var teamBlueprintSchema = saveTeamSchema.safeExtend(revisionFields);
-var archiveTeamAssetSchema = z17.object({
-  id: assetId,
-  revision: revisionFields.revision
-});
-var teamReferenceSchema = z17.object({
-  teamId: assetId,
-  revision: revisionFields.revision.optional()
-});
-var teamDependenciesSchema = z17.object({
-  teams: z17.array(teamBlueprintSchema),
-  roles: z17.array(roleDefinitionSchema)
-}).refine(
-  ({ teams, roles }) => new Set(teams.map((team) => team.id)).size === teams.length && new Set(roles.map((role) => role.id)).size === roles.length,
-  "Team dependency IDs must be unique"
-);
-var teamModelReplacementSchema = z17.array(z17.object({ from: teamModelSchema, to: teamModelSchema }));
-var teamSessionSchema = z17.object({
-  leadSessionId: assetId,
-  nodeId: assetId,
-  roster: z17.object({
-    team: teamBlueprintSchema,
-    roles: z17.array(roleDefinitionSchema)
-  }),
-  delegations: z17.array(z17.object({
-    sessionId: assetId,
-    slotId: assetId,
-    roleId: assetId,
-    model: teamModelSchema,
-    roleRevision: revisionFields.revision,
-    /** The canvas role node the member was delegated through. */
-    nodeId: assetId.optional()
-  })),
-  /** Subagents the session already had when it became a team; they stay plain subagents. */
-  priorChildren: z17.array(assetId).optional(),
-  /** The node lost its roles: the session is a plain agent again, its member record kept. */
-  released: z17.boolean().optional()
-});
-var groupPort = z17.object({
-  id: z17.string(),
-  portId: z17.string().optional(),
-  kind: z17.enum(["reference", "continuation", "event"]),
-  direction: z17.enum(["in", "out"]),
-  name: z17.string(),
-  nodes: z17.array(z17.string()),
-  hidden: z17.boolean()
-});
-var budget = z17.object({
-  tokens: z17.number().int().positive().optional(),
-  seconds: z17.number().positive().optional(),
-  rounds: z17.number().int().positive().optional()
-});
-var boardChecklistItem = z17.object({
-  id: z17.string(),
-  text: z17.string().max(BOARD_LIMITS.checklistText),
-  done: z17.boolean()
-});
-var boardCard = z17.object({
-  id: z17.string(),
-  text: z17.string(),
-  description: z17.string().max(BOARD_LIMITS.description).optional(),
-  done: z17.boolean().optional(),
-  priority: z17.enum(BOARD_PRIORITIES).optional(),
-  tags: z17.array(z17.string().min(1).max(BOARD_LIMITS.tag)).max(BOARD_LIMITS.tags).optional(),
-  dueDate: z17.iso.date().optional(),
-  checklist: z17.array(boardChecklistItem).max(BOARD_LIMITS.checklist).optional(),
-  comments: z17.array(z17.object({ id: z17.string(), by: z17.string(), text: z17.string(), createdAt: z17.number() })).optional(),
-  author: z17.string().optional(),
-  previousColumnId: z17.string().optional(),
-  createdAt: z17.number().int().nonnegative().optional(),
-  updatedAt: z17.number().int().nonnegative().optional()
-});
-var boardColumn = z17.object({
-  id: z17.string(),
-  name: z17.string(),
-  cards: z17.array(boardCard),
-  role: z17.enum(BOARD_ROLES).optional(),
-  color: z17.enum(BOARD_COLORS).optional(),
-  wipLimit: z17.number().int().positive().max(BOARD_LIMITS.wip).optional(),
-  collapsed: z17.boolean().optional()
-});
-var boardSettings = z17.object({
-  view: z17.enum(["board", "list"]).optional(),
-  autoMoveDone: z17.boolean().optional(),
-  showCompleted: z17.boolean().optional(),
-  refScope: z17.enum(BOARD_REF_SCOPES).optional()
-});
-var windowState = z17.object({
-  x: z17.number().finite(),
-  y: z17.number().finite(),
-  w: z17.number().positive(),
-  h: z17.number().positive(),
-  snap: z17.enum(["left", "right", "max"]).nullable().optional(),
-  z: z17.number().optional()
-});
-var fanoutPairIds = z17.object({ fanId: assetId, mergeId: assetId });
-var generationRevision = z17.number().int().nonnegative().optional();
-var node = z17.object({
-  breakpoint: z17.boolean().optional(),
-  budget: budget.optional(),
-  laneBindings: z17.object({
-    provider: z17.string().optional(),
-    model: z17.string().optional(),
-    persona: z17.string().optional(),
-    cwd: z17.string().optional()
-  }).optional(),
-  lanePersona: z17.string().optional(),
-  canvasToolsOnly: z17.boolean().optional(),
-  id: z17.string(),
-  kind: z17.enum([
-    "agent",
-    "note",
-    "file",
-    "display",
-    "group",
-    "board",
-    "detail",
-    "git",
-    "changes",
-    "terminal",
-    "role",
-    "flow"
-  ]),
-  flowType: z17.string().regex(/^[a-z0-9-]+\/[a-z0-9-]+$/).optional(),
-  config: z17.record(z17.string(), z17.json()).optional(),
-  configVersion: z17.number().int().nonnegative().optional(),
-  title: z17.string(),
-  x: z17.number().finite(),
-  y: z17.number().finite(),
-  width: z17.number().positive(),
-  height: z17.number().positive(),
-  expanded: z17.boolean(),
-  parentId: z17.string().optional(),
-  fanout: fanoutPairIds.optional(),
-  masterOf: assetId.optional(),
-  generatedBy: assetId.optional(),
-  itemKey: assetId.optional(),
-  itemTitle: z17.string().optional(),
-  masterNodeId: assetId.optional(),
-  laneIndex: z17.number().int().nonnegative().optional(),
-  overridden: z17.boolean().optional(),
-  removed: z17.boolean().optional(),
-  generatedRevision: generationRevision,
-  sessionId: z17.string().optional(),
-  workspaceId: z17.string().optional(),
-  cwd: z17.string().optional(),
-  branch: z17.string().optional(),
-  worktreePath: z17.string().optional(),
-  agentPreset: z17.string().optional(),
-  teamRef: teamReferenceSchema.optional(),
-  teamConfig: z17.object({
-    persona: z17.string(),
-    norms: z17.string(),
-    model: teamModelSchema.optional()
-  }).optional(),
-  teamLayout: z17.enum(["row", "orbit", "tree"]).optional(),
-  roleRef: assetId.optional(),
-  teamModel: teamModelSchema.optional(),
-  maxInstances: z17.number().int().positive().max(8).optional(),
-  staffOf: z17.string().optional(),
-  slotId: z17.string().regex(SLOT_ID, "Invalid native subagent slot name").optional(),
-  planMode: z17.boolean().optional(),
-  customTitle: z17.boolean().optional(),
-  subAgentsExpanded: z17.boolean().optional(),
-  task: z17.string(),
-  draft: z17.string(),
-  continuationPrompt: z17.string().optional(),
-  continuationCollapsed: z17.boolean().optional(),
-  nativeTrigger: z17.enum(["inherit", "enabled", "disabled"]),
-  participation: z17.enum(["global", "manual", "paused", "bypassed"]),
-  text: z17.string(),
-  sourceNodeId: z17.string().optional(),
-  sourceSeq: z17.number().optional(),
-  fixed: z17.boolean(),
-  collapsed: z17.boolean(),
-  lastSubmittedTask: z17.string().optional(),
-  tab: z17.enum(["task", "conversation", "execution", "crew"]).optional(),
-  pinned: z17.boolean().optional(),
-  roleLabel: z17.string().optional(),
-  rerun: z17.enum(["change", "update", "always"]).optional(),
-  color: z17.enum(["violet", "teal", "blue", "amber"]).optional(),
-  ports: z17.array(groupPort).optional(),
-  templateId: z17.string().optional(),
-  templateRevision: z17.number().int().positive().optional(),
-  templateSlotId: z17.string().optional(),
-  titleKey: z17.string().optional(),
-  window: windowState.nullable().optional(),
-  columns: z17.array(boardColumn).optional(),
-  boardSettings: boardSettings.optional(),
-  items: z17.array(z17.string()).optional(),
-  selectedItems: z17.array(z17.string()).optional(),
-  nudge: z17.object({
-    by: z17.string(),
-    origX: z17.number().finite().optional(),
-    origY: z17.number().finite().optional(),
-    origW: z17.number().positive().optional(),
-    origH: z17.number().positive().optional()
-  }).optional(),
-  gitTab: z17.enum(["changes", "history", "branches"]).optional(),
-  gitCommitOid: z17.string().optional(),
-  changesSessionId: z17.string().optional(),
-  changesSeq: z17.number().optional(),
-  changesTurn: z17.number().optional(),
-  terminalSessionId: z17.string().optional(),
-  terminalId: z17.string().optional()
-});
-var waypoint = z17.object({
-  x: z17.number().finite(),
-  y: z17.number().finite()
-});
-var spill = z17.object({
-  locator: z17.string().min(1),
-  preview: z17.string(),
-  bytes: z17.number().int().nonnegative()
-});
-var contentItem = z17.object({
-  key: z17.string().min(1),
-  value: z17.json().optional(),
-  spill: spill.optional()
-}).refine((item) => item.value !== void 0 !== !!item.spill, "\u6761\u76EE\u5FC5\u987B\u5305\u542B\u4E00\u4E2A\u503C\u6216 spill \u5F15\u7528");
-var flowContentSchema = z17.object({
-  dataType: z17.enum(["text", "record", "list", "signal", "file"]),
-  value: z17.json().optional(),
-  items: z17.array(contentItem).optional(),
-  originalCount: z17.number().int().nonnegative().optional(),
-  spill: spill.optional()
-}).superRefine((content, ctx) => {
-  if (content.dataType === "list") {
-    if (!content.items || content.spill || content.value !== void 0)
-      ctx.addIssue({ code: "custom", message: "\u5217\u8868\u5185\u5BB9\u5FC5\u987B\u4F7F\u7528\u6709\u5E8F\u6761\u76EE" });
-    else if (new Set(content.items.map((item) => item.key)).size !== content.items.length)
-      ctx.addIssue({ code: "custom", path: ["items"], message: "\u5217\u8868\u6761\u76EE\u6807\u8BC6\u91CD\u590D" });
-    else if (content.originalCount !== void 0 && content.originalCount < content.items.length)
-      ctx.addIssue({ code: "custom", path: ["originalCount"], message: "\u539F\u59CB\u9879\u6570\u5C0F\u4E8E\u5DF2\u4FDD\u7559\u9879\u6570" });
-    return;
-  }
-  if (content.items || content.spill && content.value !== void 0) {
-    ctx.addIssue({ code: "custom", message: "\u5185\u5BB9\u503C\u4E0E\u6761\u76EE\u3001spill \u5F15\u7528\u4E0D\u80FD\u6DF7\u7528" });
-  } else if (!content.spill && (content.dataType === "text" && typeof content.value !== "string" || content.dataType === "record" && (!content.value || typeof content.value !== "object" || Array.isArray(content.value)) || content.dataType === "file" && content.value === void 0)) {
-    ctx.addIssue({ code: "custom", path: ["value"], message: "\u5185\u5BB9\u4E0E\u7AEF\u53E3\u7C7B\u578B\u4E0D\u7B26" });
-  }
-});
-var edge = z17.object({
-  id: z17.string(),
-  source: z17.string(),
-  target: z17.string(),
-  generatedBy: assetId.optional(),
-  itemKey: assetId.optional(),
-  masterEdgeId: assetId.optional(),
-  generatedRevision: generationRevision,
-  sourcePort: z17.string().optional(),
-  targetPort: z17.string().optional(),
-  emitMode: z17.enum(["stream", "end"]).optional(),
-  permission: z17.enum(["read", "advance", "edit"]).optional(),
-  ask: z17.boolean().optional(),
-  delivery: z17.object({ mode: z17.enum(["lines", "paragraph", "list"]), columnId: z17.string().optional() }).optional(),
-  logic: z17.object({
-    negate: z17.boolean().optional(),
-    fromRound: z17.number().int().nonnegative().optional(),
-    maxTimes: z17.number().int().nonnegative().optional(),
-    delayMs: z17.number().int().nonnegative().optional()
-  }).optional(),
-  kind: z17.enum(["reference", "continuation", "event"]),
-  event: z17.object({
-    mode: z17.enum(["end", "change", "continuous"]),
-    kinds: z17.array(z17.enum(["running", "waiting", "done", "error", "budget", "output", "tool", "usage", "container"])),
-    reasons: z17.array(z17.string()).optional(),
-    cooldownMs: z17.number().int().nonnegative().optional(),
-    maxTimes: z17.number().int().positive().optional(),
-    full: z17.boolean().optional()
-  }).optional(),
-  mode: z17.enum(["conclusion", "session", "fork"]),
-  trigger: z17.enum(["off", "auto", "confirm"]),
-  maxRounds: z17.number().int().positive(),
-  always: z17.boolean(),
-  sentVersion: z17.string().optional(),
-  currentVersion: z17.string().optional(),
-  sourceItemKey: z17.string().optional(),
-  snapshotTitle: z17.string().optional(),
-  snapshotText: z17.string().optional(),
-  snapshotContent: flowContentSchema.optional(),
-  originMode: z17.enum(["conclusion", "session", "fork"]).optional(),
-  waypoints: z17.array(waypoint).optional(),
-  placedCapsules: z17.array(z17.string()).optional()
-});
-var workflowTemplateSchema = z17.object({
-  id: z17.string(),
-  fanout: fanoutPairIds.optional(),
-  title: z17.string(),
-  description: z17.string(),
-  revision: z17.number().int().positive(),
-  builtin: z17.boolean().optional(),
-  color: z17.enum(["violet", "teal", "blue", "amber"]).optional(),
-  w: z17.number().positive(),
-  h: z17.number().positive(),
-  nodes: z17.array(node),
-  edges: z17.array(edge),
-  ports: z17.array(groupPort)
-});
-var canvasSnapshotSchema = z17.object({
-  id: z17.string(),
-  title: z17.string(),
-  createdAt: z17.number(),
-  nodes: z17.array(node),
-  edges: z17.array(edge),
-  viewport: z17.object({
-    x: z17.number(),
-    y: z17.number(),
-    zoom: z17.number().positive()
-  }),
-  summary: z17.object({
-    drafts: z17.number(),
-    stopping: z17.number(),
-    awaiting: z17.number(),
-    queued: z17.number(),
-    recentOutputs: z17.array(
-      z17.object({
-        title: z17.string(),
-        snippet: z17.string()
-      })
-    )
-  }).optional()
-});
-var documentSchema = z17.object({
-  containerRevision: z17.number().int().nonnegative().optional(),
-  version: z17.literal(1),
-  generationRevision,
-  id: z17.literal("main"),
-  title: z17.string(),
-  nodes: z17.array(node),
-  edges: z17.array(edge),
-  viewport: z17.object({
-    x: z17.number(),
-    y: z17.number(),
-    zoom: z17.number().positive()
-  }),
-  settings: z17.object({
-    nativeChatTriggers: z17.boolean(),
-    reducedMotion: z17.boolean(),
-    automaticTriggers: z17.boolean().optional(),
-    budget: budget.optional(),
-    triggerGuards: z17.object({
-      cooldownSec: z17.number().nonnegative().optional(),
-      dailyLimit: z17.number().int().positive().optional(),
-      busy: z17.enum(["skip", "queue", "interrupt"]).optional()
-    }).optional(),
-    listLimit: z17.number().int().positive().optional()
-  }),
-  prefs: z17.object({
-    theme: z17.enum(["dark", "light", "auto"]).optional(),
-    wheel: z17.enum(["zoom", "pan"]).optional(),
-    wireRouting: z17.enum(["avoid", "overlap"]).optional(),
-    snap: z17.boolean().optional(),
-    filter: z17.enum(["auto", "running", "3d", "7d", "all"]).optional(),
-    hiddenWorkspaces: z17.array(z17.string()).optional(),
-    showBranches: z17.boolean().optional(),
-    showWorktrees: z17.boolean().optional()
-  }).optional(),
-  templates: z17.array(workflowTemplateSchema).optional(),
-  snapshots: z17.array(canvasSnapshotSchema).optional()
-});
-var containerEntrySchema = z17.discriminatedUnion("kind", [
-  z17.object({ kind: z17.literal("board"), columnId: z17.string(), beforeId: z17.string().optional(), card: boardCard }),
-  z17.object({ kind: z17.literal("note"), text: z17.string() }),
-  z17.object({ kind: z17.literal("file"), text: z17.string(), path: z17.string(), cwd: z17.string() })
-]).nullable();
-var flowspaceDomain = defineDomain({
-  name: "flowspace",
-  version: 1,
-  tables: {
-    documents: domainTable(documentSchema),
-    runs: domainTable(
-      z17.custom(
-        (v) => typeof v === "object" && v !== null && "id" in v && "steps" in v
-      ).transform((run) => {
-        for (const token of run.tokens) token.createdAt ??= token.source.capturedAt;
-        return run;
-      })
-    ),
-    templates: domainTable(workflowTemplateSchema),
-    snapshots: domainTable(canvasSnapshotSchema),
-    roles: domainTable(roleDefinitionSchema),
-    teams: domainTable(teamBlueprintSchema),
-    team_sessions: domainTable(teamSessionSchema),
-    variables: domainTable(variableRecordSchema),
-    play_counters: domainTable(z17.object({ next: z17.number().int().nonnegative(), lastStep: z17.string(), index: z17.number().int().nonnegative() })),
-    arena_results: domainTable(z17.object({ id: z17.string(), runId: z17.string(), tag: z17.string(), model: teamModelSchema, won: z17.boolean() })),
-    triggers: domainTable(z17.object({
-      id: z17.string(),
-      nextAt: z17.number().optional(),
-      lastAt: z17.number().optional(),
-      hits: z17.number(),
-      missed: z17.number(),
-      day: z17.string().optional(),
-      configKey: z17.string().optional(),
-      queued: z17.array(z17.custom()).optional(),
-      observed: z17.record(z17.string(), z17.string()).optional()
-    })),
-    content_spills: domainTable(spill.extend({
-      encoding: z17.enum(["text", "json"]),
-      retrievalHint: z17.string()
-    })),
-    container_changes: domainTable(z17.object({
-      id: z17.string(),
-      nodeId: z17.string(),
-      itemId: z17.string().optional(),
-      edgeId: z17.string().optional(),
-      sessionId: z17.string().optional(),
-      runId: z17.string().optional(),
-      stepId: z17.string().optional(),
-      by: z17.string(),
-      at: z17.number(),
-      revision: z17.number().int().positive(),
-      before: containerEntrySchema,
-      after: containerEntrySchema,
-      beforeVersion: z17.string(),
-      afterVersion: z17.string(),
-      pending: z17.boolean().optional(),
-      revertedBy: z17.string().optional()
-    }))
-  }
-});
-function checkGraph(graph) {
-  const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
-  const missingPlugins = /* @__PURE__ */ new Set();
-  for (const n of graph.nodes) {
-    if (n.fanout) {
-      const fan = nodes.get(n.fanout.fanId), merge = nodes.get(n.fanout.mergeId);
-      if (n.kind !== "group" || fan?.flowType !== "flowspace/fanout" || merge?.flowType !== "flowspace/merge-sort" || fan.parentId !== n.id || merge.parentId !== n.id) throw new Error("\u6247\u51FA\u4E0E\u5408\u5E76\u5FC5\u987B\u4F4D\u4E8E\u6240\u5C5E\u7684\u6247\u51FA\u5206\u7EC4\u5185");
+      if (n.kind === "board") {
+        out[n.id] = `${n.id}:${shortHash(resolveBoardReference(n).text)}`;
+        continue;
+      }
+      if (n.kind === "note" || n.kind === "display" || n.kind === "git" || n.kind === "changes" || n.kind === "terminal") {
+        out[n.id] = `${n.id}:${shortHash(n.text)}`;
+      }
     }
-    if (n.generatedBy && (!n.itemKey || !n.masterNodeId && !n.overridden || n.laneIndex === void 0 || nodes.get(n.generatedBy)?.flowType !== "flowspace/fanout")) throw new Error("\u6CF3\u9053\u8282\u70B9\u7F3A\u5C11\u6761\u76EE\u3001\u6BCD\u7248\u6216\u6247\u51FA\u6765\u6E90");
-    if (n.window === null) {
-      delete n.window;
-    } else if (n.window && n.window.snap === null) {
-      delete n.window.snap;
-    }
-    if (n.kind === "board") graph.edges = pruneBoardReferences(n, graph.edges);
-    if (n.kind !== "flow") continue;
-    const descriptor = descriptorOf(n.flowType);
-    if (!descriptor) {
-      missingPlugins.add(n.id);
-      continue;
-    }
-    const version = n.configVersion ?? 1;
-    if (version > descriptor.version)
-      throw new Error(`${n.title}\uFF1A\u914D\u7F6E\u7248\u672C ${version} \u9AD8\u4E8E\u5DF2\u5B89\u88C5\u7684 ${descriptor.version}`);
-    let config = n.config ?? descriptor.defaultConfig;
-    if (n.config && version < descriptor.version && descriptor.migrate)
-      config = descriptor.migrate(n.config, version);
-    const parsed2 = descriptor.configSchema.safeParse(config);
-    if (!parsed2.success) throw new Error(`${n.title}\uFF1A\u8282\u70B9\u914D\u7F6E\u65E0\u6548\uFF08${z17.prettifyError(parsed2.error)}\uFF09`);
-    n.config = parsed2.data;
-    n.configVersion = descriptor.version;
+    return out;
   }
-  for (const edge2 of graph.edges) {
-    const source = nodes.get(edge2.source), target = nodes.get(edge2.target);
-    const result = canConnect({
-      ...edge2,
-      source,
-      target,
-      edges: graph.edges,
-      edgeId: edge2.id
-    });
-    if (result.ok) {
-      if (edge2.kind === "event") {
-        const seen = /* @__PURE__ */ new Set([edge2.target]);
-        const pending2 = [edge2.target];
-        while (pending2.length) {
-          const current = pending2.pop();
-          for (const link of graph.edges) {
-            if (link.source !== current || link.kind === "reference" || link.trigger === "off" || seen.has(link.target)) continue;
-            seen.add(link.target);
-            pending2.push(link.target);
+  referenceVersion(edge2, source, sourceVersions) {
+    if (edge2.snapshotContent) {
+      return `${edge2.source}:${shortHash(JSON.stringify(edge2.snapshotContent))}`;
+    }
+    if (source?.kind === "board" && (edge2.sourceItemKey !== void 0 || !edge2.snapshotText)) {
+      if (edge2.sourceItemKey === void 0 && sourceVersions[source.id]) {
+        return sourceVersions[source.id];
+      }
+      return `${source.id}:${shortHash(resolveBoardReference(source, edge2.sourceItemKey).text)}`;
+    }
+    return edge2.snapshotText ? `${edge2.source}:${shortHash(edge2.snapshotText)}` : sourceVersions[edge2.source] ?? edge2.currentVersion;
+  }
+  syncLiveReferenceVersions(doc, sourceVersions = this.computeSourceVersions()) {
+    const nodes = new Map(doc.nodes.map((node2) => [node2.id, node2]));
+    for (const edge2 of doc.edges) {
+      if (edge2.kind === "reference") {
+        edge2.currentVersion = this.referenceVersion(
+          edge2,
+          nodes.get(edge2.source),
+          sourceVersions
+        );
+      }
+    }
+    return sourceVersions;
+  }
+  async prepareReferences(sessionId) {
+    const { state, runtime, variables } = this.deps;
+    const node2 = state.doc.nodes.find((n) => n.sessionId === sessionId);
+    if (!node2) return [];
+    const entries = [];
+    for (const edge2 of state.doc.edges.filter(
+      (e) => e.target === node2.id && (e.kind === "reference" || e.trigger === "off")
+    )) {
+      const source = state.doc.nodes.find((n) => n.id === edge2.source);
+      if (!source) continue;
+      const captured = source.flowType === variableNode.flowType ? variables.reference(source) : source.kind === "agent" ? await runtime.capture(source, edge2.mode) : await runtime.reference(source, edge2);
+      if (captured.referenceKind === "board-card" && captured.missing) continue;
+      const version = `${captured.sourceSessionId ?? captured.sourceNodeId}:${captured.version ?? captured.seq ?? captured.text}`;
+      edge2.currentVersion = version;
+      if (edge2.kind === "reference" && !edge2.always && edge2.sentVersion === version) {
+        continue;
+      }
+      entries.push({ snapshot: captured, edgeId: edge2.id, version });
+    }
+    if (new Set(
+      entries.filter((e) => e.snapshot.kind === "session").map((e) => e.snapshot.sourceSessionId)
+    ).size > 3) {
+      throw new Error("\u4E00\u6B21\u4F1A\u8BDD\u5F15\u7528\u6700\u591A\u5305\u542B\u4E09\u4E2A\u6765\u6E90");
+    }
+    return entries;
+  }
+  onInboxInserted(agentId, message, report) {
+    const { ctx, state, scheduler } = this.deps;
+    if (message.source.kind !== "user") return;
+    const id = "rpcId" in message.source && typeof message.source.rpcId === "string" ? message.source.rpcId : message.id;
+    const owned = state.runs.some(
+      (r) => r.steps.some((s) => s.requestId === id)
+    );
+    const preparation = owned ? Promise.resolve([]) : this.prepareReferences(agentId);
+    void preparation.catch(
+      (e) => ctx.logger.warn("FlowSpace reference preparation: %s", e)
+    );
+    this.inputContexts.set(message.id, preparation);
+    report(
+      scheduler.native(
+        agentId,
+        id,
+        plainText(message.content),
+        state.canvasSessions.has(agentId)
+      )
+    );
+  }
+  onInboxDiscarded(messageId) {
+    this.inputContexts.delete(messageId);
+  }
+  async onPreStep(agent, decision) {
+    if (decision.kind !== "enter" || !decision.messages) return decision;
+    const { ctx, state, operations, runtime, teams, persist } = this.deps;
+    const node2 = state.doc.nodes.find((n) => n.sessionId === agent.id);
+    if (node2?.canvasToolsOnly && !this.canvasToolRestrictions.has(agent.id)) {
+      const deny = ctx.tools.definitions().map((tool) => tool.name).filter((name) => /^(bash|pwsh|terminal_)/.test(name));
+      if (deny.length) {
+        this.canvasToolRestrictions.set(
+          agent.id,
+          agent.ctx.tools.restrict({ deny })
+        );
+      }
+    }
+    const messages = await Promise.all(
+      decision.messages.map(async (message) => {
+        const id = message.source.kind === "user" && "rpcId" in message.source && typeof message.source.rpcId === "string" ? message.source.rpcId : message.id;
+        const run = state.runs.find(
+          (r) => r.steps.some((step2) => step2.requestId === id)
+        );
+        const step = run?.steps.find((s) => s.requestId === id);
+        const requests = run && step ? operations.prefetch(run, step) : [];
+        if (requests.length) {
+          const text2 = "\u56DE\u5408\u7ED3\u675F\u540E FlowSpace \u5C06\u6267\u884C\u4EE5\u4E0B\u64CD\u4F5C\u3002\u8BF7\u7528 provide_flow_parameters \u63D0\u4EA4\u6240\u9700\u53C2\u6570\uFF0C\u64CD\u4F5C\u7531 Host \u6267\u884C\u3002\n" + JSON.stringify(requests);
+          message = {
+            ...message,
+            content: [...message.content, { type: "text", text: text2 }]
+          };
+        }
+        const preparation = this.inputContexts.get(message.id);
+        this.inputContexts.delete(message.id);
+        if (step && step.sources.length > 0 && !state.injectedSteps.has(step.id)) {
+          state.injectedSteps.add(step.id);
+          const text2 = await runtime.contextText(step.sources, agent.id);
+          return text2 ? {
+            ...message,
+            content: [...message.content, { type: "text", text: text2 }]
+          } : message;
+        }
+        if (!preparation) return message;
+        const entries = await preparation;
+        if (!entries.length) return message;
+        const sources = entries.map((e) => e.snapshot);
+        for (const item of entries) {
+          const liveEdge = state.doc.edges.find((e) => e.id === item.edgeId);
+          if (liveEdge) {
+            liveEdge.sentVersion = item.version;
+            liveEdge.currentVersion = item.version;
           }
         }
-        if ((target?.kind === "agent" || seen.has(edge2.source)) && !edge2.event?.cooldownMs)
-          throw new Error("\u53D1\u5F80 Agent \u6216\u6784\u6210\u73AF\u8DEF\u7684\u4E8B\u4EF6\u7EBF\u9700\u8981\u51B7\u5374\u65F6\u95F4");
-        if (seen.has(edge2.source) && !edge2.event?.maxTimes) throw new Error("\u4E8B\u4EF6\u73AF\u8DEF\u9700\u8981\u6B21\u6570\u4E0A\u9650");
-      }
-      if (edge2.emitMode && (source?.kind !== "agent" || edge2.kind !== "continuation" || !target || !structuredInput(target, edge2.targetPort))) throw new Error("\u4EA7\u51FA\u6A21\u5F0F\u9700\u8981 Agent \u63A5\u7EED\u5230\u5217\u8868\u6216\u8BB0\u5F55\u8F93\u5165");
-      if (edge2.emitMode === "stream" && target && !canStreamTo(target, edge2.targetPort))
-        throw new Error("\u968F\u51FA\u968F\u53D1\u9700\u8981\u6247\u51FA\u3001\u5408\u5E76\u5206\u62E3\u6216\u6570\u636E\u8282\u70B9");
-      continue;
-    }
-    if (result.reason === "flow_invalid_output" && missingPlugins.has(edge2.source)) continue;
-    if (result.reason === "flow_invalid_input" && missingPlugins.has(edge2.target)) continue;
-    throw new Error(tFor("zh", result.reason));
-  }
-}
-function checkDocument(doc) {
-  checkGraph(doc);
-  for (const template2 of doc.templates ?? []) checkGraph(template2);
-  for (const snapshot2 of doc.snapshots ?? []) checkGraph(snapshot2);
-  const ids = new Set(doc.nodes.map((n) => n.id));
-  if (ids.size !== doc.nodes.length) throw new Error("\u8282\u70B9\u8EAB\u4EFD\u91CD\u590D");
-  const sessions = doc.nodes.flatMap((n) => n.sessionId ? [n.sessionId] : []);
-  if (sessions.length !== new Set(sessions).size)
-    throw new Error("\u4E00\u4E2A\u4F1A\u8BDD\u53EA\u80FD\u5BF9\u5E94\u4E00\u4E2A Agent \u8282\u70B9");
-  const byId = new Map(doc.nodes.map((n) => [n.id, n]));
-  const staffSlots = /* @__PURE__ */ new Map();
-  for (const n of doc.nodes) {
-    if ((n.teamRef || n.teamConfig) && n.kind !== "agent") throw new Error("\u56E2\u961F\u5FC5\u987B\u4F7F\u7528 Agent \u8282\u70B9");
-    if (n.teamRef && n.teamConfig) throw new Error("\u56E2\u961F\u53EA\u80FD\u5F15\u7528\u7F16\u5236\u5E93\u6216\u5728\u753B\u5E03\u4E0A\u7EC4\u5EFA\uFF0C\u4E0D\u80FD\u540C\u65F6\u4F7F\u7528");
-    if (n.staffOf !== void 0) {
-      if (n.kind !== "role") throw new Error("\u53EA\u6709\u5C97\u4F4D\u8282\u70B9\u53EF\u4EE5\u63A5\u5165\u56E2\u961F");
-      if (byId.get(n.staffOf)?.kind !== "agent") throw new Error("\u5C97\u4F4D\u8282\u70B9\u53EA\u80FD\u63A5\u5165 Agent \u8282\u70B9");
-      const taken = staffSlots.get(n.staffOf) ?? /* @__PURE__ */ new Set();
-      if (n.slotId && taken.has(n.slotId)) throw new Error(`\u540C\u4E00\u56E2\u961F\u7684\u5C97\u4F4D\u540D\u91CD\u590D: ${n.slotId}`);
-      if (n.slotId) taken.add(n.slotId);
-      staffSlots.set(n.staffOf, taken);
-    }
-    if (!n.parentId) continue;
-    const parent = doc.nodes.find((p) => p.id === n.parentId);
-    if (!parent || parent.kind !== "group" || parent.id === n.id)
-      throw new Error("\u65E0\u6548\u5206\u7EC4");
-    const grand = parent.parentId && doc.nodes.find((p) => p.id === parent.parentId);
-    if (grand && (grand.parentId || n.kind === "group"))
-      throw new Error("\u5206\u7EC4\u6700\u591A\u4E24\u5C42");
-  }
-}
-
-// packages/flowspace/src/host/variables.ts
-var humanWrite = z18.strictObject({
-  id: z18.string(),
-  runId: z18.string().optional(),
-  lane: z18.string().optional(),
-  expectedVersion: z18.number().int().nonnegative(),
-  value: z18.json().optional()
-});
-var laneKey = (step) => step?.fanoutId && step.itemKey ? JSON.stringify([step.fanoutId, step.itemKey]) : void 0;
-function applyOperation(current, operation, input) {
-  if (operation === "set") return variableValue(current.type, input);
-  if (operation === "append" && current.type === "list") {
-    const addition = Array.isArray(input) ? input : [input];
-    return [...current.value, ...addition];
-  }
-  if ((operation === "increment" || operation === "decrement") && current.type === "number") {
-    const delta = variableValue("number", input);
-    return variableValue("number", current.value + delta * (operation === "increment" ? 1 : -1));
-  }
-  if (operation === "merge" && current.type === "record")
-    return { ...current.value, ...variableValue("record", input) };
-  throw new Error("\u6B64\u64CD\u4F5C\u4E0E\u53D8\u91CF\u7C7B\u578B\u4E0D\u5339\u914D");
-}
-var VariableStore = class {
-  constructor(table, document, runs, publish, onWrite) {
-    this.table = table;
-    this.document = document;
-    this.runs = runs;
-    this.publish = publish;
-    this.onWrite = onWrite;
-  }
-  definitions(runId) {
-    return (runId ? this.runs().find((run) => run.id === runId)?.graph.nodes ?? [] : this.document().nodes).filter((node2) => node2.flowType === variableNode.flowType);
-  }
-  definition(node2) {
-    return node2.config ?? variableNode.defaultConfig;
-  }
-  named(name, runId) {
-    const node2 = this.definitions(runId).find((node3) => this.definition(node3).name === name);
-    if (!node2) throw new Error(`\u53D8\u91CF\u4E0D\u5B58\u5728\uFF1A${name}`);
-    return node2;
-  }
-  resolve(node2, context, strict) {
-    const { name, scope, type, initial } = this.definition(node2);
-    const runId = scope !== "canvas" ? context.runId : void 0;
-    const lane = scope === "lane" ? context.lane : void 0;
-    if (strict && scope !== "canvas" && (!runId || scope === "lane" && !lane))
-      throw new Error(`\u8BF7\u9009\u62E9\u300C${name}\u300D\u7684\u8FD0\u884C\u6216\u6CF3\u9053`);
-    const key = JSON.stringify([this.document().id, node2.id, type, scope, runId, lane]);
-    return {
-      id: node2.id,
-      key,
-      scope,
-      type,
-      version: 0,
-      value: variableValue(type, initial),
-      history: [],
-      ...this.table.get(key),
-      name,
-      ...runId ? { runId } : {},
-      ...lane ? { lane } : {}
-    };
-  }
-  list() {
-    const records = [...this.table.entries()].map(([, value]) => value);
-    const defined = this.definitions();
-    return [
-      ...defined.map((node2) => this.resolve(node2, {}, false)),
-      ...records.filter((record) => record.runId)
-    ];
-  }
-  read(node2, context) {
-    return this.resolve(node2, context, false);
-  }
-  async write(node2, operation, value, owner, expectedVersion) {
-    const current = this.resolve(node2, owner, true);
-    if (owner.writeId && current.history.some((write) => write.id === owner.writeId)) return current;
-    if (expectedVersion !== void 0 && expectedVersion !== current.version)
-      throw new Error(`\u53D8\u91CF\u7248\u672C\u51B2\u7A81\u3002\u5F53\u524D\u7248\u672C v${current.version}\u3002`);
-    let next = applyOperation(current, operation, value);
-    if (Array.isArray(next)) next = next.slice(0, this.document().settings.listLimit ?? DEFAULT_LIST_LIMIT);
-    const version = current.version + 1;
-    const history = current.history.concat({
-      id: owner.writeId ?? crypto.randomUUID(),
-      at: Date.now(),
-      writer: owner.writer,
-      from: current.value,
-      to: next,
-      version,
-      runId: owner.runId,
-      stepId: owner.stepId
-    });
-    const result = { ...current, value: next, version, history };
-    await this.table.put(result.key, result);
-    this.publish();
-    this.onWrite(result);
-    return result;
-  }
-  async manualWrite(input) {
-    const { id, runId, lane, value, expectedVersion } = humanWrite.parse(input);
-    const node2 = this.definitions(runId).find((node3) => node3.id === id);
-    if (!node2) throw new Error("\u53D8\u91CF\u5DF2\u79FB\u9664");
-    await this.write(
-      node2,
-      "set",
-      value === void 0 ? this.definition(node2).initial : value,
-      { runId, lane, writer: "\u7528\u6237" },
-      expectedVersion
+        const text = await runtime.contextText(sources, agent.id);
+        if (step) {
+          step.sources.push(...sources);
+        }
+        await persist();
+        return text ? {
+          ...message,
+          content: [...message.content, { type: "text", text }]
+        } : message;
+      })
     );
-  }
-  reference(node2, run, step) {
-    const result = this.resolve(node2, { runId: run?.id, lane: laneKey(step) }, false);
-    return {
-      ...snapshotWithContent(node2, variableContent(result.type, result.value, run?.listLimit ?? DEFAULT_LIST_LIMIT)),
-      referenceKind: "variable",
-      version: String(result.version),
-      title: `${result.name} \xB7 v${result.version}`
-    };
-  }
-  prepare(node2, task, run, step) {
-    const values = /* @__PURE__ */ new Map();
-    const replace = (text) => text.replace(variableTemplate, (_whole, name) => {
-      const result = values.get(name) ?? this.resolve(this.named(name, run?.id), { runId: run?.id, lane: laneKey(step) }, false);
-      values.set(name, result);
-      return typeof result.value === "string" ? result.value : JSON.stringify(result.value);
-    });
-    const visit = (value, field) => {
-      if (typeof value === "string") return field === "source" ? value : replace(value);
-      if (Array.isArray(value)) return value.map((entry) => visit(entry));
-      if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, visit(item, name)]));
-      return value;
-    };
-    const resolvedTask = replace(task);
-    const expanded = node2.config ? visit(node2.config) : void 0;
-    const config = node2.flowType?.startsWith("flowspace/exec-") ? node2.config : expanded;
-    if (node2.breakpoint || run?.singleStep || run?.budget || node2.budget) {
-      for (const definition2 of this.definitions(run?.id)) {
-        const record = this.resolve(definition2, { runId: run?.id, lane: laneKey(step) }, false);
-        if (!values.has(record.name)) values.set(record.name, record);
+    const sessionId = agent.id;
+    if (teams.isLead(sessionId) && messages.length) {
+      const brief = await teams.brief(sessionId);
+      if (brief && this.teamBriefs.get(sessionId) !== brief) {
+        this.teamBriefs.set(sessionId, brief);
+        messages.push(teamBriefMessage(brief));
       }
     }
-    const variables = [...values.values()].map(({ history, ...record }) => record);
-    return { resolvedTask, config, variables };
+    return { ...decision, messages };
   }
-  assign = async (node2, step, signal, options) => {
-    const config = assignmentConfig.parse(node2.config);
-    const variable = this.named(config.name, options?.runId);
-    const input = step.sources.at(-1);
-    let value = config.inputValue && input ? input.content?.value ?? input.text : config.value;
-    if (config.inputValue && input?.content?.dataType === "list") value = input.content.items.map((item) => item.value ?? null);
-    signal.throwIfAborted();
-    const result = await this.write(
-      variable,
-      config.operation,
-      value,
-      { runId: options?.runId, lane: laneKey(step), stepId: step.id, writer: node2.title, writeId: step.id }
-    );
-    const source = snapshotWithContent(node2, variableContent(result.type, result.value, options?.listLimit ?? DEFAULT_LIST_LIMIT));
-    return { route: "out", output: source.text, source: { ...source, version: String(result.version) } };
-  };
-  deliver(node2, run, step, edgeId, source) {
-    const value = source.content?.dataType === "list" ? source.content.items.map((item) => item.value ?? null) : source.content?.value ?? source.text;
-    return this.write(node2, "set", value, {
-      runId: run.id,
-      lane: laneKey(step),
-      stepId: step?.id,
-      writer: step?.sessionId ?? source.title,
-      writeId: JSON.stringify([step?.id, edgeId])
-    });
-  }
-  recordAccumulator(run, step, node2, source) {
-    const value = source.content?.items?.map((item) => item.value ?? item.spill?.preview ?? null) ?? [];
-    const variable = { ...node2, config: { name: node2.title, scope: "run", type: "list", initial: "[]" } };
-    return this.write(variable, "set", value, { runId: run.id, stepId: step.id, writer: node2.title, writeId: step.id });
-  }
-  registerTools(ctx, scheduler) {
-    const mounts = (sessionId) => {
-      const doc = this.document();
-      const target = doc.nodes.find((node2) => node2.kind === "agent" && node2.sessionId === sessionId);
-      if (!target) return [];
-      return doc.edges.flatMap((edge2) => {
-        if (edge2.target !== target.id) return [];
-        const node2 = doc.nodes.find((node3) => node3.id === edge2.source && node3.flowType === variableNode.flowType);
-        return node2 && containerPermission(node2, edge2) === "edit" ? [{ node: node2, edge: edge2 }] : [];
-      });
-    };
-    const select = (sessionId, edgeId) => {
-      const found = mounts(sessionId).find((item) => item.edge.id === edgeId);
-      if (!found) throw new Error("\u4F1A\u8BDD\u6CA1\u6709\u6B64\u53D8\u91CF\u7684\u5199\u5165\u6388\u6743");
-      return found;
-    };
-    const when = ({ agent }) => mounts(agent.id).length > 0;
-    const get = z18.strictObject({ edgeId: z18.string().optional() });
-    const set = z18.strictObject({
-      edgeId: z18.string(),
-      expectedVersion: z18.number().int().nonnegative().optional(),
-      operation: z18.enum(VARIABLE_OPERATIONS).default("set"),
-      value: z18.json()
-    });
-    ctx.tools.register({
-      name: "var_get",
-      description: "List writable variables or get a variable's current value and version by its reference edge ID.",
-      parameters: zodToolSchema(get),
-      output: jsonToolOutput,
-      execute: async (raw, exec) => {
-        const args = get.parse(raw);
-        const id = exec.agent.id;
-        const owner = scheduler.activeSessionStep(id);
-        if (!args.edgeId) return { references: mounts(id).map(({ node: node2, edge: edge2 }) => ({ id: edge2.id, name: this.definition(node2).name })) };
-        const result = this.read(select(id, args.edgeId).node, { runId: owner?.run.id, lane: laneKey(owner?.step) });
-        return { value: result.value, version: result.version };
+  pruneToolRestrictions(doc) {
+    for (const [id, dispose] of this.canvasToolRestrictions) {
+      if (doc.nodes.some((node2) => node2.sessionId === id && node2.canvasToolsOnly)) {
+        continue;
       }
-    }, { when });
-    ctx.tools.register({
-      name: "var_set",
-      description: "Set, append, increment, decrement or merge a mounted variable. Use var_get for its current version.",
-      parameters: { type: "object", additionalProperties: false, required: ["edgeId", "value"], properties: {
-        edgeId: { type: "string" },
-        expectedVersion: { type: "integer", minimum: 0 },
-        operation: { type: "string", enum: [...VARIABLE_OPERATIONS] },
-        value: {}
-      } },
-      output: jsonToolOutput,
-      execute: async (raw, exec) => {
-        const args = set.parse(raw);
-        const id = exec.agent.id;
-        const before = select(id, args.edgeId);
-        if (before.edge.ask) await approveWrite(ctx, exec, "var_set", before.node.title, "\u53D8\u91CF\u4FEE\u6539\u672A\u83B7\u6279\u51C6");
-        return scheduler.transact(async () => {
-          exec.signal.throwIfAborted();
-          const current = select(id, args.edgeId);
-          if (current.node.id !== before.node.id || current.edge.ask && !before.edge.ask)
-            throw new Error("\u53D8\u91CF\u7684\u6388\u6743\u5DF2\u53D8\u5316");
-          const owner = scheduler.activeSessionStep(id);
-          const result = await this.write(current.node, args.operation, args.value, {
-            runId: owner?.run.id,
-            lane: laneKey(owner?.step),
-            stepId: owner?.step.id,
-            writer: id,
-            writeId: JSON.stringify([id, owner?.step.id, exec.callId])
-          }, args.expectedVersion);
-          return { value: result.value, version: result.version };
-        });
-      }
-    }, { when });
+      dispose();
+      this.canvasToolRestrictions.delete(id);
+    }
   }
-};
-
-// packages/flowspace/src/host/nodes/operations.ts
-import { readFile as readFile2 } from "node:fs/promises";
-import { z as z19 } from "zod";
-var stringValues = z19.record(z19.string(), z19.string());
-var operationRequest = z19.strictObject({ nodeId: z19.string(), values: stringValues.default({}) });
-var softActions = /* @__PURE__ */ new Set(["discard", "push", "removeWorktree"]);
-var requiredFields = {
-  commit: ["message"],
-  stage: ["paths"],
-  unstage: ["paths"],
-  discard: ["paths"],
-  createBranch: ["branch"],
-  checkoutBranch: ["branch"],
-  createWorktree: ["branch"],
-  removeWorktree: ["worktreePath"]
-};
-var shellQuote = (value, windows) => "'" + value.replaceAll("'", windows ? "''" : "'\\''") + "'";
-var stdio = { maxBytes: 65536, spill: { maxBytes: 16 * 1024 * 1024 } };
-function configOf(node2) {
-  return node2.flowType === gitExec.flowType ? gitOperation.parse(node2.config) : terminalOperation.parse(node2.config);
-}
-function directSource(run, step) {
-  const matches2 = run?.steps.filter((entry) => step.upstreamStepIds?.includes(entry.id)) ?? [];
-  return matches2.length === 1 ? matches2[0].sessionId : void 0;
-}
-function interpolate(text, step) {
-  const expand = (value) => value.replace(variableTemplate, (_match, name) => {
-    const variable = step.variables?.find((item) => item.name === name);
-    if (!variable) throw new Error(`\u53D8\u91CF\u4E0D\u5B58\u5728\uFF1A${name}`);
-    return typeof variable.value === "string" ? variable.value : JSON.stringify(variable.value);
-  });
-  return expand(text).replace(/\{\{\s*(input|task)\s*\}\}/g, (_match, key) => key === "task" ? step.task : step.sources.at(-1)?.text ?? "");
-}
-var fullOutput = (output) => output.spillPath ? readFile2(output.spillPath, "utf8") : Promise.resolve(output.text);
-var OperationService = class {
-  constructor(ctx, git, document, runs, workdir, sessionDirectory) {
-    this.ctx = ctx;
-    this.git = git;
-    this.document = document;
-    this.runs = runs;
-    this.workdir = workdir;
-    this.sessionDirectory = sessionDirectory;
-  }
-  terminals = /* @__PURE__ */ new Map();
-  terminalQueue = new KeyedSerialQueue();
   dispose() {
-    this.terminals.clear();
-    this.terminalQueue.clear();
-  }
-  agent(sessionId) {
-    return resolveAgentOptional(this.ctx, sessionId);
-  }
-  async fullAccess(id) {
-    const agent = await this.agent(id);
-    const policy = getSandboxPolicy(this.ctx);
-    return !!agent && policy?.resolve({ session: agent.session }).mode === "danger-full-access";
-  }
-  async generate(config, node2, step, name, signal, record) {
-    if (!config.provider || !config.model) return void 0;
-    const { text } = await streamLlmText(this.ctx.llm, {
-      provider: config.provider,
-      model: config.model,
-      purpose: "flowspace-parameters",
-      system: 'Give the requested operation parameter as a JSON object {"value":"..."}.',
-      userText: JSON.stringify({ operation: node2.title, parameter: name, sources: step.sources.map((source) => source.text) }),
-      signal,
-      trace: { operation: "execution parameter", inputSummary: name, record }
-    });
-    try {
-      return z19.object({ value: z19.string().min(1) }).parse(JSON.parse(text)).value;
-    } catch {
-      return void 0;
-    }
-  }
-  preview(config, values, cwd) {
-    return "program" in config ? `${cwd}
-${JSON.stringify([config.program, ...config.parameters.map((parameter) => values[parameter.name] ?? "\u2026")])}` : `${cwd}
-${JSON.stringify({ action: config.action, ...values }, null, 2)}`;
-  }
-  async prepare(node2, config, step, run, signal, sessionId = directSource(run, step), supplied = {}, record) {
-    const directory = config.cwd || node2.worktreePath || node2.cwd || (sessionId ? this.sessionDirectory(sessionId) : void 0);
-    const cwd = this.workdir(directory);
-    if (directory && !sameFsPath(directory, cwd)) throw new Error("\u6267\u884C\u76EE\u5F55\u4E0D\u5728\u53EF\u7528\u7684\u5DE5\u4F5C\u533A\u5185");
-    const values = {};
-    const parent = run?.steps.findLast((entry) => step.upstreamStepIds?.includes(entry.id) && entry.sessionId === sessionId);
-    const prefetched = parent?.operationParameters?.[node2.id] ?? {};
-    const missing = [];
-    for (const parameter of config.parameters) {
-      const { name, source, value } = parameter;
-      let resolved = source === "fixed" ? value : source === "template" ? interpolate(value, step) : void 0;
-      if (source === "upstream") {
-        const input = step.sources.at(-1)?.content?.value;
-        const entry = input && typeof input === "object" && !Array.isArray(input) ? input[name] : void 0;
-        resolved = supplied[name] ?? prefetched[name] ?? (typeof entry === "string" ? entry : void 0) ?? (value === "" ? void 0 : interpolate(value, step)) ?? await this.generate(config, node2, step, name, signal, record);
-      }
-      if (source === "model") resolved = await this.generate(config, node2, step, name, signal, record);
-      if (source === "human") resolved = supplied[name];
-      if (resolved === void 0 || source !== "fixed" && !resolved.trim()) missing.push(name);
-      else values[name] = resolved;
-    }
-    if ("action" in config) {
-      const required = requiredFields[config.action] ?? [];
-      for (const field of required) if (!values[field]?.trim() && !missing.includes(field)) missing.push(field);
-    }
-    const revision = "action" in config ? (await this.git.inspect(cwd)).revision : void 0;
-    return { cwd, sessionId, values, missing, preview: this.preview(config, values, cwd), revision };
-  }
-  async requiresApproval(config, operation) {
-    if (await this.fullAccess(operation.sessionId)) return false;
-    if ("action" in config && (softActions.has(config.action) || config.action === "checkoutBranch" && this.document().nodes.filter((node2) => node2.sessionId && sameFsPath(
-      this.sessionDirectory(node2.sessionId) ?? node2.worktreePath ?? node2.cwd,
-      operation.cwd
-    )).length > 1)) return true;
-    if (config.approved.includes(operation.preview)) return false;
-    return config.parameters.some((parameter) => parameter.source === "model" || parameter.source === "upstream");
-  }
-  execute = async (node2, step, signal, options) => {
-    const config = configOf(node2);
-    const run = this.runs().find((run2) => run2.id === options?.runId);
-    const operation = step.operation ?? await this.prepare(node2, config, step, run, signal, void 0, {}, options?.recordCall);
-    operation.preview = this.preview(config, operation.values, operation.cwd);
-    const followup = config.retryUpstream && operation.sessionId && operation.missing.length && !run?.steps.some((entry) => entry.parameterRetryFor === step.id) && config.parameters.some((parameter) => parameter.source === "upstream" && operation.missing.includes(parameter.name));
-    if (operation.missing.length || !operation.approved && (operation.review || await this.requiresApproval(config, operation))) {
-      return { operation, awaiting: {
-        question: operation.preview,
-        options: ["execute", "skip", ...followup ? ["retry"] : []],
-        operation: true,
-        fields: operation.missing.map((name) => ({ name, label: name, type: "text", required: true }))
-      } };
-    }
-    const result = await this.perform(node2, config, operation, signal);
-    const failed = result.exitCode !== 0 || result.timedOut;
-    const output = [result.stdout, result.stderr].filter(Boolean).join("\n") || (result.timedOut ? "\u6267\u884C\u8D85\u65F6" : failed ? `\u6267\u884C\u5931\u8D25\uFF08\u9000\u51FA\u7801 ${result.exitCode ?? "\u672A\u77E5"}\uFF09` : "");
-    const content = "outputMode" in config && config.outputMode === "lines" && result.exitCode === 0 ? contentList(output.split(/\r?\n/).filter(Boolean), options?.listLimit ?? DEFAULT_LIST_LIMIT) : { dataType: "text", value: output };
-    return {
-      operation,
-      operationResult: { ...result, stdout: result.stdout.slice(0, 4096), stderr: result.stderr.slice(0, 4096) },
-      route: failed ? "error" : "out",
-      output,
-      source: snapshotWithContent(node2, content)
-    };
-  };
-  async perform(node2, config, operation, signal) {
-    signal.throwIfAborted();
-    if ("action" in config) {
-      const fields = operation.values;
-      const request = {
-        action: config.action,
-        expectedRevision: operation.revision,
-        paths: fields.paths?.split(/\r?\n/).filter(Boolean),
-        branch: fields.branch,
-        message: fields.message,
-        baseRef: fields.baseRef,
-        worktreePath: fields.worktreePath
-      };
-      const result = await this.git.act(operation.cwd, request);
-      return { exitCode: 0, timedOut: false, stdout: result.commits[0]?.oid ?? result.branch ?? config.action, stderr: "" };
-    }
-    if (!config.program.trim()) throw new Error("\u8BF7\u5148\u6307\u5B9A\u53EF\u6267\u884C\u7A0B\u5E8F");
-    const subprocess = getSubprocess(this.ctx);
-    if (!subprocess) throw new Error("\u6B64 DSH \u914D\u7F6E\u6CA1\u6709\u5B50\u8FDB\u7A0B\u670D\u52A1");
-    const deadline = new AbortController();
-    const timer = setTimeout(() => deadline.abort(), Math.round(config.timeoutSec * 1e3));
-    timer.unref();
-    const timeout = deadline.signal;
-    const combined = AbortSignal.any([signal, timeout]);
-    const args = config.parameters.map((parameter) => operation.values[parameter.name]);
-    try {
-      if (config.mode === "interactive") return await this.interactive(node2, config, operation, args, combined);
-      if (config.sandbox) {
-        const shell = getShell(this.ctx);
-        if (!shell?.sandboxMode || shell.sandboxMode === "danger-full-access") throw new Error("\u6B64 DSH \u914D\u7F6E\u6CA1\u6709\u542F\u7528\u53D7\u9650 Shell \u6267\u884C\u5668");
-        const pwsh = /pwsh/i.test(shell.constructor.name);
-        const command = (pwsh ? "& " : "") + [config.program, ...args].map((arg) => shellQuote(arg, pwsh)).join(" ");
-        const result = await shell.execute(shell.resolve({
-          command,
-          workdir: operation.cwd,
-          signal: combined,
-          timeoutMs: Math.round(config.timeoutSec * 1e3)
-        })).result();
-        const [stdout2, stderr2] = await Promise.all([fullOutput(result.stdout), fullOutput(result.stderr)]);
-        return { exitCode: result.exitCode, timedOut: result.timedOut || timeout.aborted, stdout: stdout2, stderr: stderr2 };
-      }
-      const exe = await subprocess.resolveExecutable(config.program, void 0, combined);
-      const handle = subprocess.spawn({
-        argv: [exe, ...args],
-        cwd: operation.cwd,
-        stdio: { stdin: "ignore", stdout: stdio, stderr: stdio },
-        graceMs: 500,
-        signal: combined
-      });
-      const { exitCode } = await handle.done;
-      const [stdout, stderr] = await Promise.all([fullOutput(handle.collected.stdout.readFrom(0)), fullOutput(handle.collected.stderr.readFrom(0))]);
-      return { exitCode, timedOut: timeout.aborted, stdout, stderr };
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  async interactive(node2, config, operation, args, signal) {
-    const controller = getTerminalController(this.ctx);
-    const sessionId = operation.sessionId ?? node2.terminalSessionId;
-    const owner = await this.agent(sessionId);
-    if (!controller || !owner) throw new Error("\u4EA4\u4E92\u6267\u884C\u9700\u8981\u7ED1\u5B9A\u5E26\u539F\u751F\u7EC8\u7AEF\u670D\u52A1\u7684\u4F1A\u8BDD");
-    const key = JSON.stringify([sessionId, node2.id, operation.cwd]);
-    const execute = async () => {
-      signal.throwIfAborted();
-      let terminal = this.terminals.get(key);
-      if (config.terminalId && config.terminalId !== terminal?.id) throw new Error("\u8BE5\u7EC8\u7AEF\u4E0D\u5C5E\u4E8E\u6B64\u6267\u884C\u8282\u70B9");
-      if (terminal?.info.control === "user") throw new Error("\u6B64\u7EC8\u7AEF\u5DF2\u7531\u7528\u6237\u63A5\u7BA1");
-      if (!terminal || terminal.info.state !== "running") {
-        const policy = getSandboxPolicy(this.ctx);
-        terminal = await controller.openForAgent(owner, {
-          title: node2.title,
-          cwd: operation.cwd,
-          cols: 100,
-          rows: 28,
-          preferredShells: process.platform === "win32" ? ["pwsh.exe", "powershell.exe"] : ["bash", "sh"],
-          policy: policy?.resolve({ session: owner.session }) ?? { mode: "danger-full-access", workspaceRoot: operation.cwd }
-        }, signal);
-        this.terminals.set(key, terminal);
-      }
-      const windows = /(?:^|[\\/])(?:powershell|pwsh)(?:\.exe)?$/i.test(terminal.info.shell.path);
-      const marker = `FLOWSPACE_${crypto.randomUUID().replaceAll("-", "")}`;
-      const invocation = [config.program, ...args].map((arg) => shellQuote(arg, windows)).join(" ");
-      const begin = `${marker}=start`;
-      const wrapped = windows ? `[Console]::WriteLine('${begin}'); & ${invocation}; if ($?) { [Console]::WriteLine('${marker}=0') } else { [Console]::WriteLine("${marker}=$LASTEXITCODE") }` : `printf '\\n%s\\n' '${begin}'; ${invocation}; printf '\\n${marker}=%s\\n' "$?"`;
-      const ready2 = config.readyPattern ? new RegExp(config.readyPattern, "u") : void 0;
-      const completion = new RegExp(`${marker}=(-?\\d+)[ \\t\\r]*$`, "m");
-      await terminal.drain();
-      const mark = terminal.mark();
-      let output = "";
-      try {
-        await terminal.write(wrapped + "\r");
-        for (; ; ) {
-          const revision = terminal.revision;
-          const lines2 = mark.lines().lines;
-          const start = lines2.findIndex((line) => line.trimEnd().endsWith(begin));
-          output = start < 0 ? "" : lines2.slice(start + 1).join("\n");
-          const end = completion.exec(output);
-          if (end || ready2?.test(output) || terminal.info.state !== "running")
-            return {
-              exitCode: end ? Number(end[1]) : ready2?.test(output) ? 0 : null,
-              timedOut: false,
-              stdout: output.replace(completion, "").trim(),
-              stderr: ""
-            };
-          await terminal.changed(revision, signal);
-        }
-      } catch (error) {
-        if (!signal.aborted) throw error;
-        return { exitCode: null, timedOut: true, stdout: output, stderr: "" };
-      } finally {
-        mark.dispose();
-      }
-    };
-    return this.terminalQueue.run(key, execute);
-  }
-  prefetch(run, step) {
-    if (step.parameterRetryFor) {
-      const target = run.steps.find((entry) => entry.id === step.parameterRetryFor);
-      const node2 = run.graph.nodes.find((node3) => node3.id === target?.nodeId);
-      return target?.operation && node2 ? [{ id: node2.id, title: node2.title, fields: target.operation.missing.filter((name) => configOf(node2).parameters.some((parameter) => parameter.name === name && parameter.source === "upstream")) }] : [];
-    }
-    return run.graph.edges.flatMap((edge2) => {
-      if (edge2.kind !== "continuation" || edge2.trigger === "off" || edge2.source !== step.nodeId) return [];
-      const node2 = run.graph.nodes.find((node3) => node3.id === edge2.target);
-      if (!node2 || !isOperation(node2.flowType)) return [];
-      const fields = configOf(node2).parameters.filter((parameter) => parameter.source === "upstream").map((parameter) => parameter.name);
-      return fields.length ? [{ id: node2.id, title: node2.title, fields }] : [];
-    });
-  }
-  registerTools(scheduler) {
-    const lookup2 = (id) => {
-      const target = this.document().nodes.find((node2) => node2.sessionId === id);
-      const ids = new Set(this.document().edges.filter((edge2) => edge2.kind === "reference" && edge2.target === target?.id).map((edge2) => edge2.source));
-      return this.document().nodes.filter((node2) => ids.has(node2.id) && isOperation(node2.flowType));
-    };
-    const schema5 = zodToolSchema(operationRequest);
-    this.ctx.tools.register({
-      name: "provide_flow_parameters",
-      description: "Supply parameters to a downstream FlowSpace operation before ending this turn.",
-      parameters: schema5,
-      output: jsonToolOutput,
-      execute: async (input, exec) => scheduler.transact(async () => {
-        const { nodeId, values } = operationRequest.parse(input);
-        exec.signal.throwIfAborted();
-        const owner = exec.agent && scheduler.activeSessionStep(exec.agent.id);
-        const downstream = owner && this.prefetch(owner.run, owner.step).find((node2) => node2.id === nodeId);
-        if (!owner || !downstream || Object.keys(values).some((field) => !downstream.fields.includes(field)))
-          throw new Error("\u5F53\u524D\u6B65\u9AA4\u672A\u8BF7\u6C42\u8FD9\u4E9B\u53C2\u6570");
-        (owner.step.operationParameters ??= {})[nodeId] = values;
-        return { accepted: Object.keys(values) };
-      })
-    }, { when: ({ agent }) => scheduler.transact(async () => {
-      const owner = scheduler.activeSessionStep(agent.id);
-      return !!owner && this.prefetch(owner.run, owner.step).length > 0;
-    }) });
-    this.ctx.tools.register({
-      name: "flow_execute",
-      description: "Execute a preconfigured FlowSpace operation. The operation ID and allowed parameters are defined by a reference wire.",
-      parameters: schema5,
-      output: jsonToolOutput,
-      execute: async (input, exec) => {
-        const { nodeId, values } = operationRequest.parse(input);
-        const id = exec.agent.id;
-        const node2 = lookup2(id).find((node3) => node3.id === nodeId);
-        if (!node2) throw new Error("\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u6B64\u6267\u884C\u8282\u70B9\u7684\u5DE5\u5177\u5F15\u7528");
-        const config = configOf(node2);
-        const owner = scheduler.activeSessionStep(id);
-        const step = owner?.step ?? {
-          id: exec.callId,
-          nodeId: node2.id,
-          requestId: exec.callId,
-          state: "running",
-          iteration: 0,
-          sources: [],
-          task: "",
-          createdAt: Date.now()
-        };
-        const operation = await this.prepare(node2, config, step, owner?.run, exec.signal, id, values);
-        if (operation.missing.length) throw new Error(`\u9700\u8981\u8865\u9F50\u53C2\u6570\uFF1A${operation.missing.join(", ")}`);
-        if (await this.requiresApproval(config, operation)) await approveWrite(this.ctx, exec, "flow_execute", operation.preview, "\u6267\u884C\u64CD\u4F5C\u672A\u83B7\u6279\u51C6");
-        if (!lookup2(id).some((candidate) => candidate.id === node2.id && JSON.stringify(candidate.config) === JSON.stringify(node2.config)))
-          throw new Error("\u6267\u884C\u8282\u70B9\u5B9A\u4E49\u6216\u6388\u6743\u5DF2\u53D8\u5316");
-        return this.perform(node2, config, operation, exec.signal);
-      }
-    }, { when: ({ agent }) => lookup2(agent.id).length > 0 });
+    this.inputContexts.clear();
+    this.canvasToolRestrictions.forEach((dispose) => dispose());
+    this.canvasToolRestrictions.clear();
   }
 };
 
-// packages/flowspace/src/host/nodes/interactions.ts
-import { Cron, RRule } from "@deepseek-ai/dsh-util-time";
-var humanExecutor = (ctx) => async (node2, step, signal) => {
-  const config = humanConfig.parse(node2.config);
-  const fields = node2.flowType === "flowspace/human-score" ? [
-    { name: "score", label: "flow_human_rating", type: config.rating === "like" ? "like" : "score", required: true },
-    { name: "comment", label: "flow_human_comment", type: "text" }
-  ] : node2.flowType === "flowspace/human-review" ? [
-    { name: "text", label: "flow_human_review", type: "review", required: true }
-  ] : config.fields;
-  let initial = node2.flowType === "flowspace/human-review" ? { text: step.sources.at(-1)?.text ?? "" } : {};
-  if (config.timeoutAction === "default") initial = checkAnswers(fields, JSON.parse(config.defaultAnswer));
-  if (config.aiPrefill && config.provider && config.model) {
-    try {
-      const res = await streamLlmText(ctx.llm, {
-        provider: config.provider,
-        model: config.model,
-        signal,
-        purpose: "flowspace-form-prefill",
-        system: "Suggest form answers in a single JSON object keyed by field name.",
-        userText: JSON.stringify({ question: config.question, fields, source: step.sources.at(-1)?.text })
-      });
-      initial = checkAnswers(fields, JSON.parse(res.text));
-    } catch {
-      signal.throwIfAborted();
-    }
+// packages/flowspace/src/host/sessionIngestor.ts
+var SessionIngestor = class {
+  constructor(deps) {
+    this.deps = deps;
   }
-  return { awaiting: {
-    question: config.question,
-    fields,
-    initial,
-    options: ["out", "skip"],
-    timeoutAction: config.timeoutAction,
-    defaultOption: "out",
-    ...config.timeoutSec && config.timeoutAction !== "wait" ? { deadline: Date.now() + config.timeoutSec * 1e3 } : {}
-  } };
-};
-var noticeExecutor = (notify) => async (node2, step) => {
-  const config = noticeConfig.parse(node2.config);
-  const source = step.sources.at(-1);
-  const value = source?.content?.value;
-  const summary = value && typeof value === "object" && !Array.isArray(value) && typeof value.summary === "string" ? value.summary : void 0;
-  const text = config.message || summary || source?.text.slice(0, 1e3) || node2.title;
-  notify({ id: step.id, at: Date.now(), title: config.title || node2.title, text, system: config.system, sound: config.sound });
-  return { route: "out", output: text, source: snapshotWithContent(node2, { dataType: "text", value: text }) };
-};
-function triggerNext(config, after) {
-  if (config.mode === "interval") return after + config.intervalSec * 1e3;
-  if (config.mode !== "cron" && config.mode !== "rrule") return void 0;
-  const result = config.mode === "cron" ? Cron.parse(config.schedule, config.timeZone) : RRule.parse(config.schedule);
-  if (result.kind === "rejected") throw new Error(result.detail);
-  const next = result.rule.next(after);
-  return next === void 0 ? void 0 : Date.parse(next);
-}
-function validateTriggers(document) {
-  for (const node2 of document.nodes) {
-    if (node2.flowType !== triggerNode.flowType) continue;
-    const config = triggerConfig.parse(node2.config);
-    if (config.enabled) triggerNext(config, Date.now());
-    if (config.match && config.mode === "terminal") new RegExp(config.match, "u");
-  }
-}
-var TriggerService = class {
-  constructor(ctx, table, scheduler, git, document, runs, publish, path, changes) {
-    this.ctx = ctx;
-    this.table = table;
-    this.scheduler = scheduler;
-    this.git = git;
-    this.document = document;
-    this.runs = runs;
-    this.publish = publish;
-    this.path = path;
-    this.changes = changes;
-    this.serial = new SerialQueue((error) => this.ctx.logger.warn("FlowSpace \u89E6\u53D1\u5668\uFF1A%s", error));
-  }
-  startedAt = Date.now();
-  serial;
-  timer;
-  running = false;
-  observedAtBoot = /* @__PURE__ */ new Set();
-  list() {
-    return [...this.table.entries()].map(([, value]) => value);
-  }
-  start() {
-    this.timer = setInterval(() => {
-      if (this.running) return;
-      this.running = true;
-      void this.queue(() => this.tick(Date.now())).catch(() => void 0).finally(() => {
-        this.running = false;
-      });
-    }, 1e3);
-    this.timer.unref();
-    return () => clearInterval(this.timer);
-  }
-  queue(action) {
-    return this.serial.run(action);
-  }
-  launch(id, values) {
-    return this.queue(async () => {
-      const node2 = this.document().nodes.find((node3) => node3.id === id && node3.flowType === triggerNode.flowType);
-      if (!node2) throw new Error("\u542F\u52A8\u53F0\u5DF2\u79FB\u9664");
-      const config = triggerConfig.parse(node2.config);
-      if (config.mode !== "launchpad") throw new Error("\u6B64\u89E6\u53D1\u5668\u4E0D\u662F\u542F\u52A8\u53F0");
-      const answer = checkAnswers(config.fields, values);
-      const source = snapshotWithContent(node2, config.fields.length ? { dataType: "record", value: answer } : { dataType: "text", value: node2.title });
-      const status = this.table.get(id) ?? { id, hits: 0, missed: 0 };
-      const run = await this.scheduler.startTriggered(id, source);
-      await this.save({ ...status, lastAt: Date.now(), hits: status.hits + 1 });
-      return run;
+  upsertSubagentBrief(childSessionId, parentSessionId, running) {
+    const { ctx, state, publish } = this.deps;
+    const existing = state.subagents.get(childSessionId);
+    state.subagents.set(childSessionId, {
+      sessionId: childSessionId,
+      parentSessionId,
+      title: existing?.title ?? childSessionId.slice(0, 8),
+      running,
+      updatedAt: Date.now()
+    });
+    publish();
+    void ctx.sessionQuery.readTitleSnapshots([childSessionId]).then((titles) => {
+      const resolvedTitle = titles[0]?.status === "fulfilled" ? titles[0].value.title?.title : void 0;
+      if (resolvedTitle) {
+        const cur = state.subagents.get(childSessionId);
+        if (cur && cur.title !== resolvedTitle) {
+          state.subagents.set(childSessionId, {
+            ...cur,
+            title: resolvedTitle
+          });
+          publish();
+        }
+      }
+    }).catch(() => {
     });
   }
-  async save(status) {
-    await this.table.put(status.id, status);
-    this.publish();
-  }
-  active(id) {
-    return this.runs().findLast((run) => run.triggerId === id && ["running", "waiting", "paused"].includes(run.state));
-  }
-  async fire(node2, config, state, source, now) {
-    const defaults = this.document().settings.triggerGuards;
-    const day = new Intl.DateTimeFormat("sv-SE", { timeZone: config.timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
-    if (day !== state.day) Object.assign(state, { day, hits: 0 });
-    if (now - (state.lastAt ?? 0) < (config.cooldownSec ?? defaults?.cooldownSec ?? 0) * 1e3 || state.hits >= (config.dailyLimit ?? defaults?.dailyLimit ?? Infinity)) {
-      state.missed++;
-      return;
+  async hydrateBoundSessions() {
+    const { ctx, state, runtime, workspaceFs } = this.deps;
+    const listed = await ctx.sessionController.list(
+      {},
+      new AbortController().signal
+    );
+    const subRows = listed.items.filter((s) => s.origin === "subagent");
+    if (subRows.length) {
+      const titles = await ctx.sessionQuery.readTitleSnapshots(
+        subRows.map((s) => s.sessionId)
+      );
+      subRows.forEach((row, idx) => {
+        const parentId = row.parentSessionId;
+        if (parentId) {
+          state.subagents.set(row.sessionId, {
+            sessionId: row.sessionId,
+            parentSessionId: parentId,
+            title: titles[idx]?.status === "fulfilled" ? titles[idx].value.title?.title ?? row.sessionId : row.sessionId,
+            running: row.running
+          });
+        }
+      });
     }
-    const active2 = this.active(node2.id);
-    if (active2) {
-      const strategy = config.busy ?? defaults?.busy ?? "skip";
-      if (strategy === "skip") {
-        state.missed++;
-        return;
+    for (const sub of subRows) {
+      try {
+        var _stack = [];
+        try {
+          const subObs = __using(_stack, await ctx.sessionQuery.observeSession(sub.sessionId, {
+            projectionMode: "none"
+          }));
+          for (const ev of subObs.events) {
+            this.recordNativeMessage(sub.sessionId, ev);
+          }
+        } catch (_) {
+          var _error = _, _hasError = true;
+        } finally {
+          __callDispose(_stack, _error, _hasError);
+        }
+      } catch {
       }
-      if (strategy === "queue") {
-        (state.queued ??= []).push(source);
-        return;
+    }
+    for (const node2 of state.doc.nodes) {
+      if (node2.kind !== "agent" || !node2.sessionId) continue;
+      try {
+        var _stack2 = [];
+        try {
+          const obs = __using(_stack2, await ctx.sessionQuery.observeSession(
+            node2.sessionId,
+            { projectionMode: "none" }
+          ));
+          const lastAssistant = obs.events.findLast(
+            (e) => e.type === "assistant/message" && !e.data.interrupted && plainText(e.data.message.content).trim().length > 0
+          ) ?? obs.events.findLast(
+            (e) => e.type === "assistant/message" && !e.data.interrupted
+          );
+          const lastWorkdir = obs.events.findLast(
+            (e) => e.type === "working-directory/change"
+          );
+          const lastTime = obs.events.at(-1)?.time;
+          for (const ev of obs.events) {
+            this.recordNativeMessage(node2.sessionId, ev);
+          }
+          const turns = this.collectSessionChangesFromEvents(
+            node2.sessionId,
+            obs.events
+          );
+          const effectiveCwd = lastWorkdir?.data?.cwd ?? node2.worktreePath ?? node2.cwd;
+          if (effectiveCwd) {
+            workspaceFs.trackWorktree(effectiveCwd);
+          }
+          state.live.set(node2.id, {
+            nodeId: node2.id,
+            sessionId: node2.sessionId,
+            running: runtime.running().includes(node2.sessionId),
+            output: lastAssistant?.type === "assistant/message" ? plainText(lastAssistant.data.message.content) : "",
+            seq: lastAssistant?.seq ?? obs.cursor,
+            pendingInput: [],
+            updatedAt: lastTime,
+            effectiveCwd,
+            changesTurns: turns
+          });
+        } catch (_2) {
+          var _error2 = _2, _hasError2 = true;
+        } finally {
+          __callDispose(_stack2, _error2, _hasError2);
+        }
+      } catch {
       }
-      await this.scheduler.command(active2.id, "cancel");
     }
-    state.lastAt = now;
-    state.hits++;
-    await this.save(state);
-    await this.scheduler.startTriggered(node2.id, source);
   }
-  async observe(node2, config) {
-    if (config.mode === "file" && config.path.trim()) {
-      const { base, full, rel } = this.path({ path: config.path, cwd: config.cwd || node2.worktreePath || node2.cwd });
-      const root = await this.ctx.fs.resolve(base);
-      const target = await this.ctx.fs.resolve(full);
-      if (!this.ctx.fs.contains(root, target)) throw new Error("\u89E6\u53D1\u8DEF\u5F84\u8D85\u51FA\u5DE5\u4F5C\u533A");
-      const info = await this.ctx.fs.stat(target);
-      if (info?.type === "directory") {
-        const files = (await this.ctx.fs.listDir(target)).filter((entry) => entry.type === "file");
-        return Object.fromEntries(await Promise.all(files.map(async (entry) => [
-          rel === "." || !rel ? entry.name : `${rel.replaceAll("\\", "/")}/${entry.name}`,
-          entry.version ?? (await this.ctx.fs.stat(entry.target))?.version ?? ""
-        ])));
+  recordNativeMessage(sessionId, event) {
+    if (event.type !== "user/message") return false;
+    const { state } = this.deps;
+    const src = event.data.source;
+    const senderSessionId = src.senderSessionId ?? src.senderId;
+    if ((src.kind === "agent-message" || src.kind === "subagent-settled" || src.kind === "team-message") && typeof senderSessionId === "string" && senderSessionId.length > 0) {
+      const msgId = `${sessionId}:${event.seq}`;
+      if (state.nativeMessages.has(msgId)) return false;
+      const bodyText = plainText(event.data.content).trim() || src.summary || (src.senderName ? `From ${src.senderName}` : "");
+      state.nativeMessages.set(msgId, {
+        id: msgId,
+        fromSessionId: senderSessionId,
+        toSessionId: sessionId,
+        kind: src.kind,
+        text: bodyText,
+        summary: src.summary ?? src.senderName,
+        seq: event.seq,
+        time: event.time
+      });
+      if (src.kind === "subagent-settled") {
+        const existingSub = state.subagents.get(senderSessionId);
+        state.subagents.set(senderSessionId, {
+          sessionId: senderSessionId,
+          parentSessionId: existingSub?.parentSessionId ?? sessionId,
+          title: existingSub?.title ?? senderSessionId.slice(0, 8),
+          running: false,
+          updatedAt: event.time
+        });
       }
-      return info ? { [rel]: info.version } : {};
+      return true;
     }
-    if (config.mode === "git") {
-      const directory = this.path({ path: ".", cwd: config.cwd || node2.worktreePath || node2.cwd }).base;
-      const status = await this.git.inspect(directory);
-      if (config.match === "commit") return { commit: status.commits[0]?.oid ?? "" };
-      if (config.match === "branch") return { branch: status.branch };
-      return { git: status.revision };
+    return false;
+  }
+  collectSessionChangesFromEvents(sessionId, events) {
+    const wc = getWorkspaceChanges(this.deps.ctx);
+    if (!wc) return [];
+    const byTurn = /* @__PURE__ */ new Map();
+    for (const ev of events) {
+      if (ev.type !== "workspace/changes") continue;
+      const sum = wc.summary(sessionId, ev.seq);
+      if (!sum) continue;
+      byTurn.set(sum.turn, {
+        sessionId,
+        turn: sum.turn,
+        seq: ev.seq,
+        cwd: sum.cwd,
+        total: sum.total,
+        added: sum.added,
+        deleted: sum.deleted,
+        files: sum.files.map((f) => ({
+          path: f.path,
+          display: f.display,
+          added: f.added,
+          deleted: f.deleted,
+          binary: f.binary,
+          oversized: f.oversized
+        }))
+      });
     }
-    if (config.mode === "terminal") {
-      const all = this.runs().flatMap((run) => run.steps.filter((step) => step.operationResult && (!config.sourceNodeId || step.nodeId === config.sourceNodeId)));
-      const found = all.findLast((step) => config.match ? new RegExp(config.match, "u").test(step.output ?? "") : step.operationResult.exitCode !== 0);
-      return found ? { terminal: found.id, output: found.output?.slice(0, 512) ?? "" } : {};
+    return [...byTurn.values()].sort((a, b) => b.turn - a.turn);
+  }
+  onAgentStatus(agentId, status) {
+    const { state, publish } = this.deps;
+    const n = state.doc.nodes.find((item) => item.sessionId === agentId);
+    if (n) {
+      const old = state.live.get(n.id);
+      state.live.set(n.id, {
+        nodeId: n.id,
+        sessionId: agentId,
+        running: status === "running",
+        output: old?.output ?? "",
+        seq: old?.seq ?? -1,
+        pendingInput: [],
+        updatedAt: Date.now(),
+        effectiveCwd: old?.effectiveCwd,
+        changesTurns: old?.changesTurns
+      });
+      publish();
     }
-    if (config.mode === "container") {
-      const board = this.document().nodes.find((node3) => node3.id === config.sourceNodeId && node3.kind === "board");
-      if (board) return Object.fromEntries((board.columns ?? []).filter((column) => !config.match || config.match === column.id).flatMap((column) => column.cards.map((card) => [card.id, column.id])));
-      const found = this.changes().findLast((change) => (!config.sourceNodeId || change.nodeId === config.sourceNodeId) && (!config.match || change.columnId === config.match));
-      return found ? { container: found.key, at: String(found.at) } : {};
+    const sub = state.subagents.get(agentId);
+    if (sub) {
+      state.subagents.set(agentId, {
+        ...sub,
+        running: status === "running",
+        updatedAt: Date.now()
+      });
+      publish();
     }
   }
-  async tick(now) {
-    const doc = this.document();
-    const nodes = doc.nodes.filter((node2) => node2.flowType === triggerNode.flowType);
-    for (const node2 of nodes) {
-      const config = triggerConfig.parse(node2.config);
-      if (!config.enabled || config.mode === "launchpad") continue;
-      const old = this.table.get(node2.id);
-      const configKey = JSON.stringify([config.mode, config.schedule, config.timeZone, config.intervalSec, config.path, config.cwd, config.sourceNodeId, config.match]);
-      const state = old?.configKey === configKey ? structuredClone(old) : { id: node2.id, hits: old?.hits ?? 0, lastAt: old?.lastAt, missed: old?.missed ?? 0, configKey, nextAt: triggerNext(config, now) };
-      const scheduled = state.nextAt;
-      if (scheduled && scheduled <= now) {
-        let next = scheduled;
-        if (config.mode === "interval") {
-          const period = config.intervalSec * 1e3;
-          const missed = Math.floor((now - scheduled) / period);
-          next = scheduled + (missed + 1) * period;
-          state.missed += missed;
-        } else {
-          for (; ; ) {
-            const occurrence = triggerNext(config, next);
-            if (occurrence === void 0 || occurrence > now) {
-              next = occurrence ?? 0;
-              break;
-            }
-            next = occurrence;
-            state.missed++;
+  onSessionEvent(sessionId, event, report, header) {
+    const {
+      ctx,
+      state,
+      workspaceFs,
+      teams,
+      scheduler,
+      publish,
+      schedulePersist
+    } = this.deps;
+    if (this.recordNativeMessage(sessionId, event)) {
+      publish();
+    }
+    if (header?.origin === "subagent") {
+      const prev = state.subagents.get(sessionId);
+      if (prev) {
+        state.subagents.set(sessionId, {
+          ...prev,
+          updatedAt: event.time
+        });
+      } else if (header.parentSession) {
+        this.upsertSubagentBrief(sessionId, header.parentSession, true);
+      }
+    }
+    const node2 = state.doc.nodes.find((n) => n.sessionId === sessionId);
+    if (!node2) return;
+    const evAny = event;
+    if (evAny.type === "tool/call" && evAny.data) {
+      const name = String(evAny.data.name ?? "");
+      report(scheduler.nativeStatus(sessionId, "tool", name, event.seq));
+      if (/^(bash|pwsh|terminal_(?:exec|send))$/.test(name)) {
+        const raw = evAny.data.args ?? evAny.data.arguments;
+        let args = raw;
+        if (typeof raw === "string") {
+          try {
+            args = JSON.parse(raw);
+          } catch {
+            args = void 0;
           }
         }
-        state.nextAt = next || void 0;
-        if (!doc.settings.automaticTriggers || scheduled < this.startedAt) state.missed++;
-        else await this.fire(node2, config, state, snapshotWithContent(node2, {
-          dataType: "text",
-          value: new Date(scheduled).toISOString()
-        }), now);
-      }
-      const observed = await this.observe(node2, config);
-      const hasBaseline = this.observedAtBoot.has(node2.id);
-      if (observed) this.observedAtBoot.add(node2.id);
-      if (observed && JSON.stringify(observed) !== JSON.stringify(state.observed)) {
-        const before = state.observed;
-        state.observed = observed;
-        if (before && Object.keys(observed).length + Object.keys(before).length) {
-          const diff = [.../* @__PURE__ */ new Set([...Object.keys(observed), ...Object.keys(before)])].filter((key) => observed[key] !== before[key]);
-          if (doc.settings.automaticTriggers && old && hasBaseline) {
-            const entered = diff.filter((key) => observed[key] !== void 0);
-            if (config.mode !== "container" || entered.length) {
-              const source = snapshotWithContent(node2, config.mode === "file" ? contentList(diff) : { dataType: "text", value: JSON.stringify(config.mode === "container" ? Object.fromEntries(entered.map((key) => [key, observed[key]])) : observed) });
-              await this.fire(node2, config, state, source, now);
+        if (args && typeof args === "object") {
+          const command = ["command", "text", "code"].flatMap(
+            (key) => typeof args[key] === "string" ? [String(args[key])] : []
+          )[0];
+          if (command) {
+            const kind = /^\s*git(?:\.exe)?\s/i.test(command) ? "git" : "terminal";
+            const cwd = state.live.get(node2.id)?.effectiveCwd ?? node2.worktreePath ?? node2.cwd;
+            const key = `${node2.id}:${kind}`;
+            const old = state.nativeOperations.get(key);
+            if (!old || old.seq < event.seq) {
+              state.nativeOperations.set(key, {
+                nodeId: node2.id,
+                kind,
+                command: command.slice(0, 256),
+                cwd,
+                at: event.time,
+                seq: event.seq
+              });
+              publish();
             }
-          } else state.missed++;
+          }
         }
       }
-      if (doc.settings.automaticTriggers && state.queued?.length && !this.active(node2.id)) {
-        const source = state.queued.shift();
-        await this.fire(node2, config, state, source, now);
+    }
+    if (evAny.type === "working-directory/change" && evAny.data?.cwd) {
+      const nextCwd = String(evAny.data.cwd);
+      workspaceFs.trackWorktree(nextCwd);
+      const old = state.live.get(node2.id);
+      state.live.set(node2.id, {
+        nodeId: node2.id,
+        sessionId,
+        running: old?.running ?? false,
+        output: old?.output ?? "",
+        seq: event.seq,
+        pendingInput: old?.pendingInput ?? [],
+        updatedAt: event.time,
+        effectiveCwd: nextCwd,
+        changesTurns: old?.changesTurns
+      });
+      publish();
+    }
+    if (evAny.type === "step/start" && evAny.data) {
+      const turn = Number(evAny.data.turn ?? 0);
+      report(
+        scheduler.recordTelemetry(sessionId, turn, { addStep: true }).then((updated) => {
+          if (updated) publish();
+        })
+      );
+    }
+    if (evAny.type === "deliverables/presented" && evAny.data) {
+      const turn = Number(evAny.data.turn ?? 0);
+      const files = Array.isArray(evAny.data.files) ? evAny.data.files : [];
+      if (files.length) {
+        report(
+          scheduler.deliverable(sessionId, turn, event.seq, event.time, files)
+        );
       }
-      if (JSON.stringify(state) !== JSON.stringify(old)) await this.save(state);
+    }
+    if (evAny.type === "workspace/changes") {
+      const wc = getWorkspaceChanges(ctx);
+      const sum = wc?.summary(sessionId, event.seq);
+      if (sum) {
+        const turnEntry = {
+          sessionId,
+          turn: sum.turn,
+          seq: event.seq,
+          cwd: sum.cwd,
+          total: sum.total,
+          added: sum.added,
+          deleted: sum.deleted,
+          files: sum.files.map((f) => ({
+            path: f.path,
+            display: f.display,
+            added: f.added,
+            deleted: f.deleted,
+            binary: f.binary,
+            oversized: f.oversized
+          }))
+        };
+        const old = state.live.get(node2.id);
+        const existing = (old?.changesTurns ?? []).filter(
+          (c) => c.turn !== sum.turn
+        );
+        state.live.set(node2.id, {
+          nodeId: node2.id,
+          sessionId,
+          running: old?.running ?? false,
+          output: old?.output ?? "",
+          seq: event.seq,
+          pendingInput: old?.pendingInput ?? [],
+          updatedAt: event.time,
+          effectiveCwd: old?.effectiveCwd,
+          changesTurns: [turnEntry, ...existing]
+        });
+        let docMutated = false;
+        for (const chNode of state.doc.nodes) {
+          if (chNode.kind === "changes" && !chNode.fixed && chNode.changesSessionId === sessionId) {
+            chNode.changesSeq = event.seq;
+            chNode.changesTurn = sum.turn;
+            chNode.text = formatTurnChangesSummary(sum);
+            docMutated = true;
+          }
+        }
+        publish();
+        if (docMutated) schedulePersist();
+      }
+    }
+    if (event.type === "assistant/message") {
+      const text = plainText(event.data.message.content);
+      const usage = event.data.usage;
+      if (usage) {
+        report(
+          scheduler.recordTelemetry(sessionId, event.data.turn, {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens
+          })
+        );
+        report(
+          scheduler.nativeStatus(
+            sessionId,
+            "usage",
+            JSON.stringify(usage),
+            event.seq
+          )
+        );
+      }
+      if (!event.data.interrupted && text.trim().length > 0) {
+        state.turnOutput.set(sessionId, text);
+      } else if (!state.turnOutput.has(sessionId) && text.length > 0) {
+        state.turnOutput.set(sessionId, text);
+      }
+      const effectiveOutput = text.trim().length > 0 ? text : state.turnOutput.get(sessionId) ?? text;
+      const old = state.live.get(node2.id);
+      state.live.set(node2.id, {
+        nodeId: node2.id,
+        sessionId,
+        running: old?.running ?? true,
+        output: effectiveOutput,
+        seq: event.seq,
+        pendingInput: [],
+        updatedAt: event.time,
+        effectiveCwd: old?.effectiveCwd,
+        changesTurns: old?.changesTurns
+      });
+      let displayMutated = false;
+      if (!event.data.interrupted && effectiveOutput.trim().length > 0) {
+        for (const display of state.doc.nodes.filter(
+          (n) => (n.kind === "display" && !n.fixed || n.kind === "detail" && !n.pinned) && n.sourceNodeId === node2.id
+        )) {
+          display.text = effectiveOutput;
+          display.sourceSeq = event.seq;
+          displayMutated = true;
+        }
+      }
+      publish();
+      if (displayMutated) schedulePersist();
+    }
+    if (event.type === "turn/start") state.turnOutput.delete(sessionId);
+    if (event.type === "turn/end") {
+      report(
+        scheduler.finish(
+          sessionId,
+          event.data.turn,
+          event.data.reason.kind,
+          event.seq,
+          state.turnOutput.get(sessionId) ?? "",
+          event.data.reason.kind === "error" ? event.data.reason.error.message : void 0,
+          teams.isFollowup(sessionId, event.data.turn)
+        )
+      );
     }
   }
 };
 
-// packages/flowspace/src/host/nodes/play.ts
-import { randomInt } from "node:crypto";
-var randomExecutor = (counter) => async (node2, step) => {
-  const config = randomConfig.parse(node2.config);
-  const count = config.branches.length;
-  let index;
-  if (config.mode === "rotation") {
-    const state = counter.get(node2.id);
-    if (state?.lastStep === step.id) index = state.index % count;
-    else {
-      index = (state?.next ?? 0) % count;
-      await counter.put(node2.id, { next: index + 1, lastStep: step.id, index });
-    }
-  } else index = config.seed ? seededIndex(config.seed, step.iteration, count) : randomInt(count);
-  const option = config.branches[index];
-  const source = snapshotWithContent(node2, { dataType: "text", value: option.value || option.label });
-  return { route: option.id, output: source.text, source, verdict: { branch: option.id } };
-};
-var ArenaStore = class {
-  constructor(table) {
-    this.table = table;
-  }
-  list() {
-    return [...this.table.entries()].map(([, result]) => result);
-  }
-  async settle(run) {
-    if (run.state !== "completed") return;
-    for (const batch of run.fanouts ?? []) {
-      const merge = run.graph.nodes.find((node2) => node2.id === batch.mergeId);
-      if (!merge?.config?.arena || !batch.mergeStepId || !batch.lanes.some((lane) => lane.adopted === true)) continue;
-      for (const lane of batch.lanes) {
-        if (!lane.model || lane.adopted === void 0) continue;
-        const id = JSON.stringify([run.id, batch.id, lane.item.key]);
-        if (this.table.get(id)) continue;
-        await this.table.put(id, { id, runId: run.id, tag: String(merge.config.taskTag || ""), model: lane.model, won: lane.adopted });
-      }
-    }
-  }
-};
-async function buildReport(ctx, run, model) {
-  const ended = Math.max(run.createdAt, ...run.steps.map((step) => step.endedAt ?? step.createdAt));
-  const usage = budgetUsage(run.steps, run.createdAt, ended);
-  const scores = run.fanouts?.flatMap((batch) => batch.lanes.filter((lane) => lane.adopted).map((lane) => ({ batch, lane }))) ?? [];
-  const chosen = scores.toSorted((a, b) => (b.lane.score ?? 0) - (a.lane.score ?? 0))[0];
-  const best = chosen && run.graph.nodes.find((node2) => node2.generatedBy === chosen.batch.fanId && node2.itemKey === chosen.lane.item.key);
-  const bestNode = best?.title ?? run.graph.nodes.find((node2) => node2.id === run.steps.findLast((step) => step.state === "completed" && step.sessionId)?.nodeId)?.title;
-  const { text: summary } = await streamLlmText(ctx.llm, {
-    provider: model.provider,
-    model: model.model,
-    purpose: "flowspace-run-report",
-    system: "Summarize this completed FlowSpace run in three short sentences using the provided results.",
-    userText: JSON.stringify({
-      title: run.title,
-      ...usage,
-      bestNode,
-      steps: run.steps.slice(-40).map((step) => ({ state: step.state, task: step.task.slice(0, 180), output: step.output?.slice(0, 480) })),
-      artifacts: run.deliverables?.map((artifact) => artifact.path)
-    })
-  });
-  if (!summary.trim()) throw new Error("\u6A21\u578B\u6CA1\u6709\u8FD4\u56DE\u6218\u62A5");
-  return { summary, ...usage, bestNode, artifacts: run.deliverables ?? [] };
-}
-
-// packages/flowspace/src/host/fanoutDrafts.ts
-function motherDefinition(doc, fan) {
-  const nodes = doc.nodes.filter((node2) => node2.masterOf === fan.id);
-  const ids = new Set(nodes.map((node2) => node2.id));
-  const edges = doc.edges.filter((edge2) => !edge2.generatedBy && (ids.has(edge2.source) || ids.has(edge2.target)));
-  return JSON.stringify([fan.config, nodes, edges]);
-}
-async function reconcileFanoutDrafts(next, previous, runs, resolveDeferred, changedFiles = []) {
-  const fans = next.nodes.filter((node2) => node2.flowType === "flowspace/fanout");
-  if (!fans.length) return false;
-  markFanoutOverrides(previous, next);
-  const oldInputs = createStaticResolver(previous);
-  const newInputs = createStaticResolver(next, {}, Object.fromEntries(changedFiles.map((id) => [id, "changed"])));
-  let changed = false;
-  const needsHost = (state) => state === "needs-file" || state === "needs-code" || state === "needs-spill";
-  const used = new Set(runs.flatMap((run) => run.steps.map((step) => step.nodeId)));
-  for (const run of runs) {
-    if (run.state === "running" || run.state === "waiting" || run.state === "paused") {
-      for (const node2 of run.graph.nodes) if (node2.generatedBy) used.add(node2.id);
-    }
-  }
-  for (const fan of fans) {
-    const old = previous.nodes.find((node2) => node2.id === fan.id);
-    const motherChanged = !old || motherDefinition(previous, old) !== motherDefinition(next, fan);
-    if (!motherChanged && oldInputs.signature(fan.id) === newInputs.signature(fan.id)) continue;
-    let after = staticFanoutContent(next, fan.id);
-    if (!after && needsHost(newInputs.inputs(fan.id).state)) after = await resolveDeferred(fan.id);
-    if (after || old && (staticFanoutContent(previous, fan.id) || needsHost(oldInputs.inputs(fan.id).state))) {
-      if (reconcileFanout(next, fan.id, after?.items ?? [], used)) changed = true;
-    } else if (motherChanged) {
-      if (syncExistingFanout(next, fan.id, used)) changed = true;
-    }
-  }
-  return changed;
+// packages/flowspace/src/host/state.ts
+function createHostState() {
+  return {
+    doc: emptyDocument(),
+    runs: [],
+    live: /* @__PURE__ */ new Map(),
+    nativeMessages: /* @__PURE__ */ new Map(),
+    nativeOperations: /* @__PURE__ */ new Map(),
+    notices: [],
+    subagents: /* @__PURE__ */ new Map(),
+    listeners: /* @__PURE__ */ new Set(),
+    turnOutput: /* @__PURE__ */ new Map(),
+    canvasSessions: /* @__PURE__ */ new Set(),
+    injectedSteps: /* @__PURE__ */ new Set()
+  };
 }
 
 // packages/flowspace/src/host/teamAssets.ts
@@ -10849,9 +12260,9 @@ var TeamAssets = class {
 };
 
 // packages/flowspace/src/host/teamDelegate.ts
-import { z as z20 } from "zod";
+import { z as z19 } from "zod";
 var teamDelegateName = "team_delegate";
-var inputSchema = z20.object({ slot: z20.string().min(1), task: z20.string().trim().min(1) });
+var inputSchema = z19.object({ slot: z19.string().min(1), task: z19.string().trim().min(1) });
 function teamAgentOptions(model) {
   return { ...model, reasoningEffort: model.reasoningEffort };
 }
@@ -11354,57 +12765,679 @@ Coordinate work and report the team's results. Assign new work through team_dele
   }
 };
 
-// packages/flowspace/src/index.ts
-function teamBriefMessage(text) {
-  return Object.freeze({
-    id: randomUUID(),
-    role: "user",
-    content: [{ type: "text", text }],
-    source: { kind: "flowspace-team", form: "snapshot", sections: [{ name: "flowspace-team", text }] }
-  });
+// packages/flowspace/src/host/toolBridge.ts
+var HostToolBridge = class {
+  constructor(deps) {
+    this.deps = deps;
+  }
+  async sessions() {
+    const { ctx } = this.deps;
+    const result = await ctx.sessionController.list(
+      {},
+      new AbortController().signal
+    );
+    const rows = result.items.filter((s) => s.origin !== "subagent");
+    const titles = await ctx.sessionQuery.readTitleSnapshots(
+      rows.map((s) => s.sessionId)
+    );
+    return rows.map((s, i) => ({
+      sessionId: s.sessionId,
+      title: titles[i]?.status === "fulfilled" ? titles[i].value.title?.title ?? s.sessionId : s.sessionId,
+      cwd: s.cwd,
+      running: s.running,
+      updatedAt: s.updatedAt
+    }));
+  }
+  workspaces() {
+    return this.deps.ctx.workspaceRegistry.list().map((w) => ({ id: w.id, name: w.title, path: w.path }));
+  }
+  async projectStructures() {
+    const { ctx, git, workspaceFs } = this.deps;
+    const list = ctx.workspaceRegistry.list();
+    return Promise.all(
+      list.map(async (w) => {
+        const status = await git.inspect(w.path).catch(() => null);
+        if (status?.topLevel && sameFsPath(status.topLevel, w.path)) {
+          for (const wt of status.worktrees) {
+            if (wt.path && !wt.isMain) {
+              workspaceFs.trackWorktree(wt.path);
+            }
+          }
+        }
+        return {
+          id: w.id,
+          name: w.title,
+          path: w.path,
+          isGitRepo: Boolean(
+            status?.isGitRepo && sameFsPath(status.topLevel, w.path)
+          ),
+          currentBranch: status?.branch || void 0,
+          branches: status?.branches ?? [],
+          worktrees: status?.worktrees ?? []
+        };
+      })
+    );
+  }
+  async gitInspect(request) {
+    const { git, workspaceFs } = this.deps;
+    const base = workspaceFs.resolveWorkspaceRoot(request.cwd);
+    const status = await git.inspect(base);
+    if (status.topLevel && sameFsPath(status.topLevel, base)) {
+      for (const wt of status.worktrees) {
+        if (wt.path && !wt.isMain) {
+          workspaceFs.trackWorktree(wt.path);
+        }
+      }
+    }
+    return status;
+  }
+  async gitDiff(request) {
+    const { git, workspaceFs } = this.deps;
+    const base = workspaceFs.resolveWorkspaceRoot(request.cwd);
+    return git.diff(base, request);
+  }
+  async gitAction(request) {
+    const { git, workspaceFs } = this.deps;
+    const base = workspaceFs.resolveWorkspaceRoot(request.cwd);
+    const status = await git.act(base, request);
+    if (status.topLevel && sameFsPath(status.topLevel, base)) {
+      for (const wt of status.worktrees) {
+        if (wt.path && !wt.isMain) {
+          workspaceFs.trackWorktree(wt.path);
+        }
+      }
+    }
+    return status;
+  }
+  async sessionChanges(request) {
+    var _stack = [];
+    try {
+      const sessionId = request.sessionId.trim();
+      if (!sessionId) return [];
+      const obs = __using(_stack, await this.deps.ctx.sessionQuery.observeSession(
+        sessionId,
+        { projectionMode: "none" }
+      ));
+      return this.deps.ingestor.collectSessionChangesFromEvents(
+        sessionId,
+        obs.events
+      );
+    } catch (_) {
+      var _error = _, _hasError = true;
+    } finally {
+      __callDispose(_stack, _error, _hasError);
+    }
+  }
+  async sessionChangeDiff(request) {
+    const wc = getWorkspaceChanges(this.deps.ctx);
+    if (!wc) {
+      throw new Error("\u5F53\u524D Host \u672A\u6302\u8F7D workspace-changes \u670D\u52A1");
+    }
+    const sid = request.sessionId;
+    const sum = wc.summary(sid, request.seq);
+    if (!sum) {
+      throw new Error("\u8BE5\u8F6E\u6539\u52A8\u4E34\u65F6\u5FEB\u7167\u5DF2\u8FC7\u671F\u6216\u4E0D\u5B58\u5728");
+    }
+    const signal = new AbortController().signal;
+    if (request.fileIndex !== void 0) {
+      const diff = await wc.diff(sid, request.seq, request.fileIndex, signal);
+      if (!diff) throw new Error("\u672A\u627E\u5230\u6307\u5B9A\u6587\u4EF6\u6539\u52A8\u5BF9\u6BD4");
+      if (diff.kind !== "text") {
+        return {
+          path: diff.path,
+          display: diff.display,
+          kind: diff.kind,
+          hunks: [],
+          formatted: `[${diff.kind.toUpperCase()}] ${diff.display}`
+        };
+      }
+      const formatted = [
+        `--- a/${diff.display}`,
+        `+++ b/${diff.display}`,
+        ...diff.hunks.flatMap((h) => [
+          `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`,
+          ...h.lines
+        ])
+      ].join("\n");
+      return {
+        path: diff.path,
+        display: diff.display,
+        kind: "text",
+        hunks: diff.hunks,
+        formatted
+      };
+    }
+    const parts = [
+      `Turn #${sum.turn} (${sum.total} files, +${sum.added} / -${sum.deleted})`
+    ];
+    const allHunks = [];
+    for (let i = 0; i < Math.min(sum.files.length, 20); i++) {
+      const diff = await wc.diff(sid, request.seq, i, signal).catch(() => void 0);
+      if (!diff) continue;
+      if (diff.kind !== "text") {
+        parts.push(`
+[${diff.kind.toUpperCase()}] ${diff.display}`);
+        continue;
+      }
+      parts.push(`
+--- a/${diff.display}
++++ b/${diff.display}`);
+      for (const h of diff.hunks) {
+        allHunks.push(h);
+        parts.push(
+          `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`,
+          ...h.lines
+        );
+      }
+    }
+    return {
+      path: sum.cwd,
+      display: `Turn #${sum.turn}`,
+      kind: "text",
+      hunks: allHunks.slice(0, 60),
+      formatted: parts.join("\n")
+    };
+  }
+  sessionTerminals(request) {
+    const tc = getTerminalController(this.deps.ctx);
+    if (!tc || !request.sessionId) return [];
+    return tc.list(request.sessionId).map((t) => ({
+      id: t.id,
+      sessionId: request.sessionId,
+      title: t.title,
+      cwd: t.cwd,
+      state: t.state,
+      exitCode: t.exitCode,
+      origin: t.origin
+    }));
+  }
+  async openSessionTerminal(request) {
+    const { ctx } = this.deps;
+    const tc = getTerminalController(ctx);
+    if (!tc) throw new Error("\u5F53\u524D\u73AF\u5883\u672A\u542F\u7528 terminalController");
+    const resolved = await ctx.sessionController.resolveAgent(
+      request.sessionId
+    );
+    if ("error" in resolved) throw resolved.error;
+    const created = await tc.create(
+      resolved.agent,
+      { id: uid(), cols: 100, rows: 28 },
+      new AbortController().signal
+    );
+    return {
+      id: created.id,
+      sessionId: request.sessionId,
+      title: created.title,
+      cwd: created.cwd,
+      state: created.state,
+      exitCode: created.exitCode,
+      origin: created.origin
+    };
+  }
+  async readTerminalScreen(request) {
+    const { ctx } = this.deps;
+    const tc = getTerminalController(ctx);
+    if (!tc) throw new Error("\u5F53\u524D\u73AF\u5883\u672A\u542F\u7528 terminalController");
+    const sid = request.sessionId;
+    const list = tc.list(sid);
+    const chosen = (request.terminalId ? list.find((t) => t.id === request.terminalId) : void 0) ?? list[0];
+    if (!chosen) {
+      return {
+        sessionId: request.sessionId,
+        terminalId: "",
+        title: "\u65E0\u6D3B\u52A8\u7EC8\u7AEF",
+        state: "exited",
+        text: "",
+        totalLines: 0,
+        truncated: false
+      };
+    }
+    const resolved = await ctx.sessionController.resolveAgent(sid);
+    if ("error" in resolved) throw resolved.error;
+    const page = await tc.readScreen(resolved.agent, chosen.id, {
+      offset: 0,
+      count: Math.min(400, Math.max(20, request.lines ?? 140)),
+      maxBytes: MAX_INLINE_CONTEXT_BYTES
+    });
+    return {
+      sessionId: request.sessionId,
+      terminalId: chosen.id,
+      title: chosen.title,
+      state: chosen.state,
+      text: page.text,
+      totalLines: page.totalLines,
+      truncated: page.truncated
+    };
+  }
+};
+
+// packages/flowspace/src/host/variables.ts
+import { z as z20 } from "zod";
+var humanWrite = z20.strictObject({
+  id: z20.string(),
+  runId: z20.string().optional(),
+  lane: z20.string().optional(),
+  expectedVersion: z20.number().int().nonnegative(),
+  value: z20.json().optional()
+});
+var laneKey = (step) => step?.fanoutId && step.itemKey ? JSON.stringify([step.fanoutId, step.itemKey]) : void 0;
+function applyOperation(current, operation, input) {
+  if (operation === "set") return variableValue(current.type, input);
+  if (operation === "append" && current.type === "list") {
+    const addition = Array.isArray(input) ? input : [input];
+    return [...current.value, ...addition];
+  }
+  if ((operation === "increment" || operation === "decrement") && current.type === "number") {
+    const delta = variableValue("number", input);
+    return variableValue("number", current.value + delta * (operation === "increment" ? 1 : -1));
+  }
+  if (operation === "merge" && current.type === "record")
+    return { ...current.value, ...variableValue("record", input) };
+  throw new Error("\u6B64\u64CD\u4F5C\u4E0E\u53D8\u91CF\u7C7B\u578B\u4E0D\u5339\u914D");
 }
+var VariableStore = class {
+  constructor(table, document, runs, publish, onWrite) {
+    this.table = table;
+    this.document = document;
+    this.runs = runs;
+    this.publish = publish;
+    this.onWrite = onWrite;
+  }
+  definitions(runId) {
+    return (runId ? this.runs().find((run) => run.id === runId)?.graph.nodes ?? [] : this.document().nodes).filter((node2) => node2.flowType === variableNode.flowType);
+  }
+  definition(node2) {
+    return node2.config ?? variableNode.defaultConfig;
+  }
+  named(name, runId) {
+    const node2 = this.definitions(runId).find((node3) => this.definition(node3).name === name);
+    if (!node2) throw new Error(`\u53D8\u91CF\u4E0D\u5B58\u5728\uFF1A${name}`);
+    return node2;
+  }
+  resolve(node2, context, strict) {
+    const { name, scope, type, initial } = this.definition(node2);
+    const runId = scope !== "canvas" ? context.runId : void 0;
+    const lane = scope === "lane" ? context.lane : void 0;
+    if (strict && scope !== "canvas" && (!runId || scope === "lane" && !lane))
+      throw new Error(`\u8BF7\u9009\u62E9\u300C${name}\u300D\u7684\u8FD0\u884C\u6216\u6CF3\u9053`);
+    const key = JSON.stringify([this.document().id, node2.id, type, scope, runId, lane]);
+    return {
+      id: node2.id,
+      key,
+      scope,
+      type,
+      version: 0,
+      value: variableValue(type, initial),
+      history: [],
+      ...this.table.get(key),
+      name,
+      ...runId ? { runId } : {},
+      ...lane ? { lane } : {}
+    };
+  }
+  list() {
+    const records = [...this.table.entries()].map(([, value]) => value);
+    const defined = this.definitions();
+    return [
+      ...defined.map((node2) => this.resolve(node2, {}, false)),
+      ...records.filter((record) => record.runId)
+    ];
+  }
+  read(node2, context) {
+    return this.resolve(node2, context, false);
+  }
+  async write(node2, operation, value, owner, expectedVersion) {
+    const current = this.resolve(node2, owner, true);
+    if (owner.writeId && current.history.some((write) => write.id === owner.writeId)) return current;
+    if (expectedVersion !== void 0 && expectedVersion !== current.version)
+      throw new Error(`\u53D8\u91CF\u7248\u672C\u51B2\u7A81\u3002\u5F53\u524D\u7248\u672C v${current.version}\u3002`);
+    let next = applyOperation(current, operation, value);
+    if (Array.isArray(next)) next = next.slice(0, this.document().settings.listLimit ?? DEFAULT_LIST_LIMIT);
+    const version = current.version + 1;
+    const history = current.history.concat({
+      id: owner.writeId ?? crypto.randomUUID(),
+      at: Date.now(),
+      writer: owner.writer,
+      from: current.value,
+      to: next,
+      version,
+      runId: owner.runId,
+      stepId: owner.stepId
+    });
+    const result = { ...current, value: next, version, history };
+    await this.table.put(result.key, result);
+    this.publish();
+    this.onWrite(result);
+    return result;
+  }
+  async manualWrite(input) {
+    const { id, runId, lane, value, expectedVersion } = humanWrite.parse(input);
+    const node2 = this.definitions(runId).find((node3) => node3.id === id);
+    if (!node2) throw new Error("\u53D8\u91CF\u5DF2\u79FB\u9664");
+    await this.write(
+      node2,
+      "set",
+      value === void 0 ? this.definition(node2).initial : value,
+      { runId, lane, writer: "\u7528\u6237" },
+      expectedVersion
+    );
+  }
+  reference(node2, run, step) {
+    const result = this.resolve(node2, { runId: run?.id, lane: laneKey(step) }, false);
+    return {
+      ...snapshotWithContent(node2, variableContent(result.type, result.value, run?.listLimit ?? DEFAULT_LIST_LIMIT)),
+      referenceKind: "variable",
+      version: String(result.version),
+      title: `${result.name} \xB7 v${result.version}`
+    };
+  }
+  prepare(node2, task, run, step) {
+    const values = /* @__PURE__ */ new Map();
+    const replace = (text) => text.replace(variableTemplate, (_whole, name) => {
+      const result = values.get(name) ?? this.resolve(this.named(name, run?.id), { runId: run?.id, lane: laneKey(step) }, false);
+      values.set(name, result);
+      return typeof result.value === "string" ? result.value : JSON.stringify(result.value);
+    });
+    const visit = (value, field) => {
+      if (typeof value === "string") return field === "source" ? value : replace(value);
+      if (Array.isArray(value)) return value.map((entry) => visit(entry));
+      if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, visit(item, name)]));
+      return value;
+    };
+    const resolvedTask = replace(task);
+    const expanded = node2.config ? visit(node2.config) : void 0;
+    const config = node2.flowType?.startsWith("flowspace/exec-") ? node2.config : expanded;
+    if (node2.breakpoint || run?.singleStep || run?.budget || node2.budget) {
+      for (const definition2 of this.definitions(run?.id)) {
+        const record = this.resolve(definition2, { runId: run?.id, lane: laneKey(step) }, false);
+        if (!values.has(record.name)) values.set(record.name, record);
+      }
+    }
+    const variables = [...values.values()].map(({ history, ...record }) => record);
+    return { resolvedTask, config, variables };
+  }
+  assign = async (node2, step, signal, options) => {
+    const config = assignmentConfig.parse(node2.config);
+    const variable = this.named(config.name, options?.runId);
+    const input = step.sources.at(-1);
+    let value = config.inputValue && input ? input.content?.value ?? input.text : config.value;
+    if (config.inputValue && input?.content?.dataType === "list") value = input.content.items.map((item) => item.value ?? null);
+    signal.throwIfAborted();
+    const result = await this.write(
+      variable,
+      config.operation,
+      value,
+      { runId: options?.runId, lane: laneKey(step), stepId: step.id, writer: node2.title, writeId: step.id }
+    );
+    const source = snapshotWithContent(node2, variableContent(result.type, result.value, options?.listLimit ?? DEFAULT_LIST_LIMIT));
+    return { route: "out", output: source.text, source: { ...source, version: String(result.version) } };
+  };
+  deliver(node2, run, step, edgeId, source) {
+    const value = source.content?.dataType === "list" ? source.content.items.map((item) => item.value ?? null) : source.content?.value ?? source.text;
+    return this.write(node2, "set", value, {
+      runId: run.id,
+      lane: laneKey(step),
+      stepId: step?.id,
+      writer: step?.sessionId ?? source.title,
+      writeId: JSON.stringify([step?.id, edgeId])
+    });
+  }
+  recordAccumulator(run, step, node2, source) {
+    const value = source.content?.items?.map((item) => item.value ?? item.spill?.preview ?? null) ?? [];
+    const variable = { ...node2, config: { name: node2.title, scope: "run", type: "list", initial: "[]" } };
+    return this.write(variable, "set", value, { runId: run.id, stepId: step.id, writer: node2.title, writeId: step.id });
+  }
+  registerTools(ctx, scheduler) {
+    const mounts = (sessionId) => {
+      const doc = this.document();
+      const target = doc.nodes.find((node2) => node2.kind === "agent" && node2.sessionId === sessionId);
+      if (!target) return [];
+      return doc.edges.flatMap((edge2) => {
+        if (edge2.target !== target.id) return [];
+        const node2 = doc.nodes.find((node3) => node3.id === edge2.source && node3.flowType === variableNode.flowType);
+        return node2 && containerPermission(node2, edge2) === "edit" ? [{ node: node2, edge: edge2 }] : [];
+      });
+    };
+    const select = (sessionId, edgeId) => {
+      const found = mounts(sessionId).find((item) => item.edge.id === edgeId);
+      if (!found) throw new Error("\u4F1A\u8BDD\u6CA1\u6709\u6B64\u53D8\u91CF\u7684\u5199\u5165\u6388\u6743");
+      return found;
+    };
+    const when = ({ agent }) => mounts(agent.id).length > 0;
+    const get = z20.strictObject({ edgeId: z20.string().optional() });
+    const set = z20.strictObject({
+      edgeId: z20.string(),
+      expectedVersion: z20.number().int().nonnegative().optional(),
+      operation: z20.enum(VARIABLE_OPERATIONS).default("set"),
+      value: z20.json()
+    });
+    ctx.tools.register({
+      name: "var_get",
+      description: "List writable variables or get a variable's current value and version by its reference edge ID.",
+      parameters: zodToolSchema(get),
+      output: jsonToolOutput,
+      execute: async (raw, exec) => {
+        const args = get.parse(raw);
+        const id = exec.agent.id;
+        const owner = scheduler.activeSessionStep(id);
+        if (!args.edgeId) return { references: mounts(id).map(({ node: node2, edge: edge2 }) => ({ id: edge2.id, name: this.definition(node2).name })) };
+        const result = this.read(select(id, args.edgeId).node, { runId: owner?.run.id, lane: laneKey(owner?.step) });
+        return { value: result.value, version: result.version };
+      }
+    }, { when });
+    ctx.tools.register({
+      name: "var_set",
+      description: "Set, append, increment, decrement or merge a mounted variable. Use var_get for its current version.",
+      parameters: { type: "object", additionalProperties: false, required: ["edgeId", "value"], properties: {
+        edgeId: { type: "string" },
+        expectedVersion: { type: "integer", minimum: 0 },
+        operation: { type: "string", enum: [...VARIABLE_OPERATIONS] },
+        value: {}
+      } },
+      output: jsonToolOutput,
+      execute: async (raw, exec) => {
+        const args = set.parse(raw);
+        const id = exec.agent.id;
+        const before = select(id, args.edgeId);
+        if (before.edge.ask) await approveWrite(ctx, exec, "var_set", before.node.title, "\u53D8\u91CF\u4FEE\u6539\u672A\u83B7\u6279\u51C6");
+        return scheduler.transact(async () => {
+          exec.signal.throwIfAborted();
+          const current = select(id, args.edgeId);
+          if (current.node.id !== before.node.id || current.edge.ask && !before.edge.ask)
+            throw new Error("\u53D8\u91CF\u7684\u6388\u6743\u5DF2\u53D8\u5316");
+          const owner = scheduler.activeSessionStep(id);
+          const result = await this.write(current.node, args.operation, args.value, {
+            runId: owner?.run.id,
+            lane: laneKey(owner?.step),
+            stepId: owner?.step.id,
+            writer: id,
+            writeId: JSON.stringify([id, owner?.step.id, exec.callId])
+          }, args.expectedVersion);
+          return { value: result.value, version: result.version };
+        });
+      }
+    }, { when });
+  }
+};
+
+// packages/flowspace/src/host/workspaceFs.ts
+import { open, readdir, readFile as readFile2, realpath, stat } from "node:fs/promises";
+import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute3, relative as relative3, resolve as resolve4 } from "node:path";
+var SKIP_DIRS = /* @__PURE__ */ new Set([
+  "node_modules",
+  ".git",
+  ".local",
+  ".backups",
+  "dist",
+  "lib",
+  ".next",
+  "coverage"
+]);
+var WorkspaceFs = class {
+  constructor(ctx) {
+    this.ctx = ctx;
+  }
+  knownWorktrees = /* @__PURE__ */ new Set();
+  trackWorktree(path) {
+    if (path) this.knownWorktrees.add(resolve4(path));
+  }
+  /**
+   * Confine `cwd` strictly to registered DSH workspaces, `<repo>-worktrees/*` managed directories,
+   * or verified Git worktrees discovered from those workspaces.
+   */
+  resolveWorkspaceRoot(cwd) {
+    const list = this.ctx.workspaceRegistry.list();
+    if (cwd) {
+      const candidate = resolve4(cwd);
+      const inRegisteredWorkspace = list.some((w) => isSubPath(w.path, candidate));
+      const inManagedWorktreesDir = list.some(
+        (w) => isSubPath(
+          resolve4(w.path, "..", `${basename2(w.path)}-worktrees`),
+          candidate
+        )
+      );
+      const inVerifiedWorktree = [...this.knownWorktrees].some(
+        (wt) => isSubPath(wt, candidate)
+      );
+      if (inRegisteredWorkspace || inManagedWorktreesDir || inVerifiedWorktree || isSubPath(resolve4(process.cwd()), candidate)) {
+        return candidate;
+      }
+    }
+    return resolve4(list[0]?.path ?? process.cwd());
+  }
+  workspacePath(request) {
+    const base = this.resolveWorkspaceRoot(request.cwd);
+    const raw = request.path.trim();
+    if (!raw) throw new Error("\u672A\u6307\u5B9A\u6587\u4EF6\u8DEF\u5F84");
+    const full = resolve4(base, raw);
+    const rel = relative3(base, full);
+    if (rel.startsWith("..") || isAbsolute3(rel)) {
+      throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
+    }
+    return { base, raw, full, rel };
+  }
+  async workspaceFile(request) {
+    const { base, raw, full, rel } = this.workspacePath(request);
+    const info = await stat(full).catch(() => null);
+    if (!info || !info.isFile()) throw new Error(`\u6587\u4EF6\u4E0D\u5B58\u5728\uFF1A${raw}`);
+    if (!isSubPath(await realpath(base), await realpath(full))) {
+      throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
+    }
+    return { full, rel, info, raw };
+  }
+  async checkedTarget(path, cwd, signal) {
+    const { base, full } = this.workspacePath({ path, cwd });
+    const root = await this.ctx.fs.resolve(base, { signal });
+    const target = await this.ctx.fs.resolve(full, { signal });
+    if (!this.ctx.fs.contains(root, target)) {
+      throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
+    }
+    return target;
+  }
+  async checkedWatchTarget(path, cwd, signal) {
+    const { base, full } = this.workspacePath({ path, cwd });
+    const physical = await realpath(full).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+      return realpath(dirname2(full));
+    });
+    if (!isSubPath(await realpath(base), physical)) {
+      throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
+    }
+    return this.ctx.fs.resolve(full, { signal });
+  }
+  async readFullText(path, cwd, signal) {
+    const { full } = await this.workspaceFile({ path, cwd });
+    const body = await readFile2(full, { signal });
+    if (body.includes(0)) throw new Error(`\u4E8C\u8FDB\u5236\u6587\u4EF6\u4E0D\u80FD\u4F5C\u4E3A\u6587\u672C\u8F93\u5165\uFF1A${path}`);
+    return new TextDecoder().decode(body);
+  }
+  async readBoundedText(request, maxReadBytes = MAX_INLINE_CONTEXT_BYTES, maxChars = 24e3) {
+    const { full, rel, info, raw } = await this.workspaceFile(request);
+    const toRead = Math.min(info.size, maxReadBytes);
+    if (toRead === 0) {
+      return {
+        path: rel.replaceAll("\\", "/"),
+        content: "",
+        truncated: false
+      };
+    }
+    const fh = await open(full, "r");
+    try {
+      const buf = Buffer.allocUnsafe(toRead);
+      const { bytesRead } = await fh.read(buf, 0, toRead, 0);
+      const slice = buf.subarray(0, bytesRead);
+      if (slice.includes(0)) {
+        throw new Error(`\u4E8C\u8FDB\u5236\u6587\u4EF6\u4E0D\u652F\u6301\u6587\u672C\u9884\u89C8\uFF1A${raw}`);
+      }
+      const decoded = new TextDecoder("utf-8", { fatal: false }).decode(slice);
+      const truncated = bytesRead < info.size || decoded.length > maxChars;
+      return {
+        path: rel.replaceAll("\\", "/"),
+        content: decoded.length > maxChars ? decoded.slice(0, maxChars) : decoded,
+        truncated
+      };
+    } finally {
+      await fh.close();
+    }
+  }
+  async listFiles(request) {
+    const base = this.resolveWorkspaceRoot(request.cwd);
+    const out = [];
+    const walk = async (dir, depth) => {
+      if (depth > 3 || out.length >= 80) return;
+      let entries;
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (out.length >= 80) break;
+        if (SKIP_DIRS.has(entry.name)) continue;
+        const full = resolve4(dir, entry.name);
+        if (entry.isDirectory()) await walk(full, depth + 1);
+        else if (entry.isFile()) {
+          out.push(relative3(base, full).replaceAll("\\", "/"));
+        }
+      }
+    };
+    await walk(base, 0);
+    return out;
+  }
+};
+
+// packages/flowspace/src/index.ts
 var _follow_dec, _stopNode_dec, _canvasPresence_dec, _readWorkspaceFile_dec, _workspaceFiles_dec, _readTerminalScreen_dec, _openSessionTerminal_dec, _sessionTerminals_dec, _sessionChangeDiff_dec, _sessionChanges_dec, _gitAction_dec, _gitDiff_dec, _gitInspect_dec, _projectStructures_dec, _workspaces_dec, _sessions_dec, _display_dec, _bind_dec, _inspectEdgePayload_dec, _restoreSnapshot_dec, _release_dec, _previewData_dec, _remindEmission_dec, _answerHuman_dec, _command_dec, _extendLoop_dec, _rerunFailed_dec, _start_dec, _plan_dec, _draft_dec, _importWorkflow_dec, _generateReport_dec, _debugStep_dec, _launchTrigger_dec, _writeVariable_dec, _revertContainerChange_dec, _save_dec, _listModelRoutes_dec, _archiveTeam_dec, _saveTeam_dec, _listTeams_dec, _archiveRole_dec, _saveRole_dec, _listRoles_dec, _snapshot_dec, _a, _init, _b;
 var FlowspaceService = class extends (_b = TypertRemoteService) {
   constructor(ctx) {
     super(ctx, "flowspace");
     __runInitializers(_init, 5, this);
-    __publicField(this, "state", {
-      doc: emptyDocument(),
-      runs: [],
-      live: /* @__PURE__ */ new Map(),
-      nativeMessages: /* @__PURE__ */ new Map(),
-      nativeOperations: /* @__PURE__ */ new Map(),
-      notices: [],
-      subagents: /* @__PURE__ */ new Map(),
-      listeners: /* @__PURE__ */ new Set(),
-      turnOutput: /* @__PURE__ */ new Map(),
-      canvasSessions: /* @__PURE__ */ new Set(),
-      injectedSteps: /* @__PURE__ */ new Set()
-    });
+    __publicField(this, "state", createHostState());
     __publicField(this, "domain");
     __publicField(this, "workspaceFs");
     __publicField(this, "teamAssets");
     __publicField(this, "teams");
-    __publicField(this, "teamBriefs", /* @__PURE__ */ new Map());
     __publicField(this, "scheduler");
     __publicField(this, "containers");
     __publicField(this, "variables");
     __publicField(this, "operations");
     __publicField(this, "triggers");
     __publicField(this, "arena");
-    __publicField(this, "reportRequests", /* @__PURE__ */ new Map());
-    __publicField(this, "canvasToolRestrictions", /* @__PURE__ */ new Map());
     __publicField(this, "runtime");
     __publicField(this, "dataFileWatch");
+    __publicField(this, "references");
+    __publicField(this, "ingestor");
+    __publicField(this, "documents");
+    __publicField(this, "toolBridge");
     __publicField(this, "nodeExecutors", /* @__PURE__ */ new Map());
     __publicField(this, "git", new HostGitService());
-    __publicField(this, "inputContexts", /* @__PURE__ */ new Map());
-    __publicField(this, "deferredPersistTimer");
     __publicField(this, "disposed", false);
   }
   registerNodeKind(descriptor, executor) {
     return this.ctx.effect(() => {
-      if (this.nodeExecutors.has(descriptor.flowType)) throw new Error(`\u8282\u70B9\u6267\u884C\u5668\u5DF2\u6CE8\u518C\uFF1A${descriptor.flowType}`);
+      if (this.nodeExecutors.has(descriptor.flowType)) {
+        throw new Error(`\u8282\u70B9\u6267\u884C\u5668\u5DF2\u6CE8\u518C\uFF1A${descriptor.flowType}`);
+      }
       const unregister = descriptorOf(descriptor.flowType) === descriptor ? void 0 : registerDescriptor(descriptor);
       this.nodeExecutors.set(descriptor.flowType, executor);
       return () => {
@@ -11424,38 +13457,8 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
       () => this.publish(),
       () => this.state?.doc.nodes ?? []
     );
-    const storedDoc = sanitizeDocumentForWire(
-      structuredClone(
-        this.domain.table("documents").get("main") ?? emptyDocument()
-      )
-    );
-    const storedTemplates = [...this.domain.table("templates").entries()].map(
-      ([, tpl]) => structuredClone(tpl)
-    );
-    const storedSnapshots = [...this.domain.table("snapshots").entries()].map(([, snap]) => structuredClone(snap)).sort((a, b) => b.createdAt - a.createdAt);
-    if (storedTemplates.length) {
-      storedDoc.templates = storedTemplates;
-    } else if (storedDoc.templates?.length) {
-      for (const tpl of storedDoc.templates) {
-        await this.domain.table("templates").put(tpl.id, structuredClone(tpl));
-      }
-    }
-    if (storedSnapshots.length) {
-      storedDoc.snapshots = storedSnapshots;
-    } else if (storedDoc.snapshots?.length) {
-      for (const snap of storedDoc.snapshots) {
-        await this.domain.table("snapshots").put(snap.id, structuredClone(snap));
-      }
-    }
-    checkDocument(storedDoc);
-    validateTriggers(storedDoc);
-    syncUntitledAgentTitles(storedDoc);
-    this.state.doc = sanitizeDocumentForWire(storedDoc);
     this.workspaceFs = new WorkspaceFs(this.ctx);
-    for (const n of this.state.doc.nodes) {
-      this.workspaceFs.trackWorktree(n.worktreePath);
-    }
-    this.state.runs = [...this.domain.table("runs").entries()].map(([, r]) => structuredClone(r)).sort((a, b) => a.createdAt - b.createdAt);
+    await loadInitialHostState(this.domain, this.workspaceFs, this.state);
     this.runtime = new DshRuntime(
       this.ctx,
       (id) => this.state.doc.nodes.find((n) => n.id === id),
@@ -11465,22 +13468,43 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
       () => this.state.doc.settings.listLimit,
       (path, cwd) => this.workspaceFs.readFullText(path, cwd)
     );
-    const executors = judgeExecutors(this.ctx, this.runtime.contextText.bind(this.runtime));
-    for (const descriptor of judges) this.registerNodeKind(descriptor, executors[descriptor.flowType]);
-    const stepLimit = (step) => this.state.runs.find((run) => run.steps.some((current) => current.id === step.id))?.listLimit ?? this.state.doc.settings.listLimit ?? DEFAULT_LIST_LIMIT;
+    const executors = judgeExecutors(
+      this.ctx,
+      this.runtime.contextText.bind(this.runtime)
+    );
+    for (const descriptor of judges) {
+      this.registerNodeKind(descriptor, executors[descriptor.flowType]);
+    }
+    const stepLimit = (step) => this.state.runs.find(
+      (run) => run.steps.some((current) => current.id === step.id)
+    )?.listLimit ?? this.state.doc.settings.listLimit ?? DEFAULT_LIST_LIMIT;
     this.registerNodeKind(mergeSort, mergeExecutor(this.ctx, stepLimit));
     const transform = dataExecutor(this.ctx, stepLimit);
-    for (const descriptor of dataDescriptors) this.registerNodeKind(descriptor, transform);
-    this.variables = new VariableStore(this.domain.table("variables"), () => this.state.doc, () => this.state.runs, () => this.publish(), (value) => {
-      const write = value.history.at(-1);
-      if (!write) return;
-      void this.scheduler.variableChanged(
-        value.id,
-        JSON.stringify({ name: value.name, version: value.version, value: value.value }),
-        write.runId,
-        write.stepId
-      ).catch((error) => this.ctx.logger.warn("FlowSpace \u53D8\u91CF\u4E8B\u4EF6\uFF1A%s", error));
-    });
+    for (const descriptor of dataDescriptors) {
+      this.registerNodeKind(descriptor, transform);
+    }
+    this.variables = new VariableStore(
+      this.domain.table("variables"),
+      () => this.state.doc,
+      () => this.state.runs,
+      () => this.publish(),
+      (value) => {
+        const write = value.history.at(-1);
+        if (!write) return;
+        void this.scheduler.variableChanged(
+          value.id,
+          JSON.stringify({
+            name: value.name,
+            version: value.version,
+            value: value.value
+          }),
+          write.runId,
+          write.stepId
+        ).catch(
+          (error) => this.ctx.logger.warn("FlowSpace \u53D8\u91CF\u4E8B\u4EF6\uFF1A%s", error)
+        );
+      }
+    );
     this.operations = new OperationService(
       this.ctx,
       this.git,
@@ -11492,44 +13516,100 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
     this.registerNodeKind(gitExec, this.operations.execute);
     this.registerNodeKind(terminalExec, this.operations.execute);
     const draw = randomExecutor(this.domain.table("play_counters"));
-    this.registerNodeKind(randomNode, (node2, step, signal, options) => this.scheduler.transact(() => draw(node2, step, signal, options)));
-    for (const descriptor of humanNodes) this.registerNodeKind(descriptor, humanExecutor(this.ctx));
-    this.registerNodeKind(noticeNode, noticeExecutor((notice) => {
-      if (this.state.notices.some((entry) => entry.id === notice.id)) return;
-      this.state.notices = [...this.state.notices.slice(-39), notice];
-      this.publish();
-    }));
-    this.registerNodeKind(assignmentNode, (node2, step, signal, options) => this.scheduler.transact(() => this.variables.assign(node2, step, signal, options)));
+    this.registerNodeKind(
+      randomNode,
+      (node2, step, signal, options) => this.scheduler.transact(() => draw(node2, step, signal, options))
+    );
+    for (const descriptor of humanNodes) {
+      this.registerNodeKind(descriptor, humanExecutor(this.ctx));
+    }
+    this.registerNodeKind(
+      noticeNode,
+      noticeExecutor((notice) => {
+        if (this.state.notices.some((entry) => entry.id === notice.id)) return;
+        this.state.notices = [...this.state.notices.slice(-39), notice];
+        this.publish();
+      })
+    );
+    this.registerNodeKind(
+      assignmentNode,
+      (node2, step, signal, options) => this.scheduler.transact(
+        () => this.variables.assign(node2, step, signal, options)
+      )
+    );
+    this.documents = new DocumentService({
+      ctx: this.ctx,
+      domain: this.domain,
+      state: this.state,
+      arena: this.arena,
+      teamAssets: this.teamAssets,
+      teams: this.teams,
+      runtime: this.runtime,
+      workspaceFs: this.workspaceFs,
+      getScheduler: () => this.scheduler,
+      getContainers: () => this.containers,
+      getDataFileWatch: () => this.dataFileWatch,
+      getReferences: () => this.references,
+      getIngestor: () => this.ingestor,
+      publish: () => this.publish()
+    });
     this.scheduler = new Scheduler(
       this.runtime,
       {
         document: () => this.state.doc,
-        changed: () => this.persist(),
+        changed: () => this.documents.persist(),
         deliver: async (run, edge2, token) => {
           const source = await this.runtime.hydrateContent(token.source);
-          const variable = this.state.doc.nodes.find((node2) => node2.id === edge2.target && node2.flowType === variableNode.flowType);
-          if (variable) await this.variables.deliver(variable, run, run.steps.find((step) => step.id === token.stepId), edge2.id, source);
-          else await this.containers.deliver(run, edge2, token, source);
+          const variable = this.state.doc.nodes.find(
+            (node2) => node2.id === edge2.target && node2.flowType === variableNode.flowType
+          );
+          if (variable) {
+            await this.variables.deliver(
+              variable,
+              run,
+              run.steps.find((step) => step.id === token.stepId),
+              edge2.id,
+              source
+            );
+          } else {
+            await this.containers.deliver(run, edge2, token, source);
+          }
         },
         variableReference: (run, step, node2) => this.variables.reference(node2, run, step),
         prepareStep: async (run, step, node2) => {
-          const { resolvedTask, config, variables } = this.variables.prepare(node2, step.task, run, step);
+          const { resolvedTask, config, variables } = this.variables.prepare(
+            node2,
+            step.task,
+            run,
+            step
+          );
           step.task = node2.lanePersona ? `${node2.lanePersona}
 
 ${resolvedTask}` : resolvedTask;
-          if (node2.teamModel?.provider === "@available") node2.teamModel = await this.availableModel(node2.teamModel.model);
+          if (node2.teamModel?.provider === "@available") {
+            node2.teamModel = await this.documents.availableModel(
+              node2.teamModel.model
+            );
+          }
           if (variables.length) {
             step.variables = variables;
             step.resolvedConfig = config;
           }
           if (config?.provider === "@available") {
-            const model = await this.availableModel(String(config.model ?? "0"));
+            const model = await this.documents.availableModel(
+              String(config.model ?? "0")
+            );
             step.resolvedConfig = { ...config, ...model };
           }
         },
         toolsFor: (run, step) => this.operations.prefetch(run, step).length ? ["provide_flow_parameters"] : [],
         recordAccumulator: async (run, step, node2, source) => {
-          await this.variables.recordAccumulator(run, step, node2, await this.runtime.hydrateContent(source));
+          await this.variables.recordAccumulator(
+            run,
+            step,
+            node2,
+            await this.runtime.hydrateContent(source)
+          );
         },
         bound: async (nodeId, sessionId, fork) => {
           const node2 = this.state.doc.nodes.find((n) => n.id === nodeId);
@@ -11556,7 +13636,7 @@ ${resolvedTask}` : resolvedTask;
           }
         },
         submitted: async (id, task, isContinuation) => {
-          const n = this.state.doc.nodes.find((n2) => n2.id === id);
+          const n = this.state.doc.nodes.find((item) => item.id === id);
           if (n) {
             syncUntitledAgentNode(n);
             n.lastSubmittedTask = isContinuation ? task : n.task || task;
@@ -11566,11 +13646,38 @@ ${resolvedTask}` : resolvedTask;
       },
       this.state.runs
     );
+    this.references = new ReferenceService({
+      ctx: this.ctx,
+      state: this.state,
+      runtime: this.runtime,
+      variables: this.variables,
+      operations: this.operations,
+      teams: this.teams,
+      scheduler: this.scheduler,
+      resolveWorkspaceRoot: (cwd) => this.resolveWorkspaceRoot(cwd),
+      persist: () => this.documents.persist()
+    });
+    this.ingestor = new SessionIngestor({
+      ctx: this.ctx,
+      state: this.state,
+      runtime: this.runtime,
+      workspaceFs: this.workspaceFs,
+      teams: this.teams,
+      scheduler: this.scheduler,
+      publish: () => this.publish(),
+      schedulePersist: () => this.documents.schedulePersist()
+    });
+    this.toolBridge = new HostToolBridge({
+      ctx: this.ctx,
+      git: this.git,
+      workspaceFs: this.workspaceFs,
+      ingestor: this.ingestor
+    });
     this.containers = new ContainerStore(
       this.ctx,
       this.domain.table("container_changes"),
       () => this.state.doc,
-      () => this.persist(),
+      () => this.documents.persist(),
       () => this.publish(),
       (request) => this.workspaceFs.workspacePath(request)
     );
@@ -11591,12 +13698,14 @@ ${resolvedTask}` : resolvedTask;
           nodeId: change.nodeId,
           columnId: change.after?.kind === "board" ? change.after.columnId : void 0
         })),
-        ...this.variables.list().flatMap((variable) => variable.history.map((write) => ({
-          key: write.id,
-          at: write.at,
-          nodeId: variable.id,
-          columnId: void 0
-        })))
+        ...this.variables.list().flatMap(
+          (variable) => variable.history.map((write) => ({
+            key: write.id,
+            at: write.at,
+            nodeId: variable.id,
+            columnId: void 0
+          }))
+        )
       ].sort((a, b) => a.at - b.at)
     );
     this.ctx.effect(() => this.triggers.start());
@@ -11604,7 +13713,6 @@ ${resolvedTask}` : resolvedTask;
     registerContainerTools(this.ctx, this.containers, this.scheduler);
     this.variables.registerTools(this.ctx, this.scheduler);
     this.operations.registerTools(this.scheduler);
-    this.ctx.effect(() => () => this.canvasToolRestrictions.forEach((dispose) => dispose()));
     this.ctx.on("llm/stream", (options, next) => {
       const source = next();
       const id = options.sessionId;
@@ -11636,122 +13744,37 @@ ${resolvedTask}` : resolvedTask;
       this.ctx.fs,
       (path, cwd, signal) => this.workspaceFs.checkedWatchTarget(path, cwd, signal),
       (ids) => {
-        void this.refreshDataFiles(ids).catch((error) => this.ctx.logger.warn("FlowSpace \u6587\u4EF6\u9884\u89C8\u66F4\u65B0\u5931\u8D25: %s", error));
+        void this.documents.refreshDataFiles(ids).catch(
+          (error) => this.ctx.logger.warn("FlowSpace \u6587\u4EF6\u9884\u89C8\u66F4\u65B0\u5931\u8D25: %s", error)
+        );
       }
     );
     this.ctx.effect(() => () => this.dataFileWatch.dispose());
     await this.dataFileWatch.sync(this.state.doc);
     const fileIds = this.state.doc.nodes.filter((node2) => node2.kind === "file").map((node2) => node2.id);
-    if (fileIds.length) await this.refreshDataFiles(fileIds);
-    await this.hydrateBoundSessions().catch(
+    if (fileIds.length) await this.documents.refreshDataFiles(fileIds);
+    await this.ingestor.hydrateBoundSessions().catch(
       (e) => this.ctx.logger.warn("FlowSpace session hydration: %s", e)
     );
     await this.teams.hydrate();
-    this.syncTeams();
+    this.documents.syncTeams();
     const report = (promise) => {
       void promise.catch((e) => this.ctx.logger.error("FlowSpace: %s", e));
     };
     this.ctx.on("agent/inbox/inserted", ({ agent, message }) => {
-      if (message.source.kind !== "user") return;
-      const id = "rpcId" in message.source ? message.source.rpcId : message.id;
-      const owned = this.state.runs.some(
-        (r) => r.steps.some((s) => s.requestId === id)
-      );
-      const preparation = owned ? Promise.resolve([]) : this.prepareReferences(agent.id);
-      void preparation.catch(
-        (e) => this.ctx.logger.warn("FlowSpace reference preparation: %s", e)
-      );
-      this.inputContexts.set(message.id, preparation);
-      report(
-        this.scheduler.native(
-          agent.id,
-          id,
-          plainText(message.content),
-          this.state.canvasSessions.has(agent.id)
-        )
-      );
+      this.references.onInboxInserted(agent.id, message, report);
     });
     this.ctx.on(
       "agent/pre-step",
       async (payload, next) => {
         const decision = await next();
-        if (decision.kind !== "enter") return decision;
-        const node2 = this.state.doc.nodes.find((node3) => node3.sessionId === payload.agent.id);
-        if (node2?.canvasToolsOnly && !this.canvasToolRestrictions.has(payload.agent.id)) {
-          const deny = this.ctx.tools.definitions().map((tool) => tool.name).filter((name) => /^(bash|pwsh|terminal_)/.test(name));
-          if (deny.length) this.canvasToolRestrictions.set(payload.agent.id, payload.agent.ctx.tools.restrict({ deny }));
-        }
-        const messages = await Promise.all(
-          decision.messages.map(async (message) => {
-            const id = message.source.kind === "user" && "rpcId" in message.source ? message.source.rpcId : message.id;
-            const run = this.state.runs.find((run2) => run2.steps.some((step2) => step2.requestId === id));
-            const step = run?.steps.find((step2) => step2.requestId === id);
-            const requests = run && step ? this.operations.prefetch(run, step) : [];
-            if (requests.length) {
-              const text2 = "\u56DE\u5408\u7ED3\u675F\u540E FlowSpace \u5C06\u6267\u884C\u4EE5\u4E0B\u64CD\u4F5C\u3002\u8BF7\u7528 provide_flow_parameters \u63D0\u4EA4\u6240\u9700\u53C2\u6570\uFF0C\u64CD\u4F5C\u7531 Host \u6267\u884C\u3002\n" + JSON.stringify(requests);
-              message = { ...message, content: [...message.content, { type: "text", text: text2 }] };
-            }
-            const preparation = this.inputContexts.get(message.id);
-            this.inputContexts.delete(message.id);
-            if (step && step.sources.length > 0 && !this.state.injectedSteps.has(step.id)) {
-              this.state.injectedSteps.add(step.id);
-              const text2 = await this.runtime.contextText(
-                step.sources,
-                payload.agent.id
-              );
-              return text2 ? {
-                ...message,
-                content: [
-                  ...message.content,
-                  { type: "text", text: text2 }
-                ]
-              } : message;
-            }
-            if (!preparation) return message;
-            const entries = await preparation;
-            if (!entries.length) return message;
-            const sources = entries.map((e) => e.snapshot);
-            for (const item of entries) {
-              const liveEdge = this.state.doc.edges.find(
-                (e) => e.id === item.edgeId
-              );
-              if (liveEdge) {
-                liveEdge.sentVersion = item.version;
-                liveEdge.currentVersion = item.version;
-              }
-            }
-            const text = await this.runtime.contextText(
-              sources,
-              payload.agent.id
-            );
-            if (step) {
-              step.sources.push(...sources);
-            }
-            await this.persist();
-            return text ? {
-              ...message,
-              content: [
-                ...message.content,
-                { type: "text", text }
-              ]
-            } : message;
-          })
-        );
-        const sessionId = payload.agent.id;
-        if (this.teams.isLead(sessionId) && messages.length) {
-          const brief = await this.teams.brief(sessionId);
-          if (brief && this.teamBriefs.get(sessionId) !== brief) {
-            this.teamBriefs.set(sessionId, brief);
-            messages.push(teamBriefMessage(brief));
-          }
-        }
-        return { ...decision, messages };
+        return this.references.onPreStep(payload.agent, decision);
       },
       { prepend: true }
     );
     this.ctx.on("agent/inbox/claimed", ({ agent, message, turn }) => {
       this.teams.claim(agent, turn, message.source.kind === "user");
-      if (message.source.kind === "user")
+      if (message.source.kind === "user") {
         report(
           this.scheduler.claim(
             "rpcId" in message.source ? message.source.rpcId : message.id,
@@ -11759,56 +13782,33 @@ ${resolvedTask}` : resolvedTask;
             this.teams.reference(agent.id)
           )
         );
+      }
     });
     this.ctx.on("agent/inbox/discarded", ({ message }) => {
-      this.inputContexts.delete(message.id);
+      this.references.onInboxDiscarded(message.id);
     });
     this.ctx.on("agent/status", ({ agent, status }) => {
-      const n = this.state.doc.nodes.find((n2) => n2.sessionId === agent.id);
-      if (n) {
-        const old = this.state.live.get(n.id);
-        this.state.live.set(n.id, {
-          nodeId: n.id,
-          sessionId: agent.id,
-          running: status === "running",
-          output: old?.output ?? "",
-          seq: old?.seq ?? -1,
-          pendingInput: [],
-          updatedAt: Date.now(),
-          effectiveCwd: old?.effectiveCwd,
-          changesTurns: old?.changesTurns
-        });
-        this.publish();
-      }
-      const sub = this.state.subagents.get(agent.id);
-      if (sub) {
-        this.state.subagents.set(agent.id, {
-          ...sub,
-          running: status === "running",
-          updatedAt: Date.now()
-        });
-        this.publish();
-      }
+      this.ingestor.onAgentStatus(agent.id, status);
     });
     const rawCtx = this.ctx;
     rawCtx.on("subagent/start", (rawInfo) => {
       const info = rawInfo;
-      if (!info?.id || !info?.parentSessionId) return;
-      this.upsertSubagentBrief(info.id, info.parentSessionId, true);
+      if (info?.id && info?.parentSessionId) {
+        this.ingestor.upsertSubagentBrief(info.id, info.parentSessionId, true);
+      }
     });
     rawCtx.on("subagent/end", (rawInfo) => {
       const info = rawInfo;
       if (!info?.id) return;
-      const existing = this.state.subagents.get(info.id);
-      const parentId = info.parentSessionId ?? existing?.parentSessionId;
+      const parentId = info.parentSessionId ?? this.state.subagents.get(info.id)?.parentSessionId;
       if (parentId) {
-        this.upsertSubagentBrief(info.id, parentId, false);
+        this.ingestor.upsertSubagentBrief(info.id, parentId, false);
       }
     });
     rawCtx.on("api-session/added", (rawSummary) => {
       const summary = rawSummary;
       if (summary?.origin === "subagent" && summary.sessionId && summary.parentSessionId) {
-        this.upsertSubagentBrief(
+        this.ingestor.upsertSubagentBrief(
           summary.sessionId,
           summary.parentSessionId,
           Boolean(summary.running)
@@ -11816,512 +13816,25 @@ ${resolvedTask}` : resolvedTask;
       }
     });
     this.ctx.on("session/event", (session, event) => {
-      this.event(session.id, event, report, session.header);
+      this.ingestor.onSessionEvent(session.id, event, report, session.header);
     });
     this.ctx.effect(() => async () => {
       this.disposed = true;
-      clearTimeout(this.deferredPersistTimer);
-      this.inputContexts.clear();
-      this.reportRequests.clear();
+      this.documents.dispose();
+      this.references.dispose();
       this.operations.dispose();
       await this.scheduler.dispose();
       this.state.listeners.forEach((fn) => fn());
       await this.domain.close();
     });
   }
-  upsertSubagentBrief(childSessionId, parentSessionId, running) {
-    const existing = this.state.subagents.get(childSessionId);
-    this.state.subagents.set(childSessionId, {
-      sessionId: childSessionId,
-      parentSessionId,
-      title: existing?.title ?? childSessionId.slice(0, 8),
-      running,
-      updatedAt: Date.now()
-    });
-    this.publish();
-    void this.ctx.sessionQuery.readTitleSnapshots([childSessionId]).then((titles) => {
-      const resolvedTitle = titles[0]?.status === "fulfilled" ? titles[0].value.title?.title : void 0;
-      if (resolvedTitle) {
-        const cur = this.state.subagents.get(childSessionId);
-        if (cur && cur.title !== resolvedTitle) {
-          this.state.subagents.set(childSessionId, {
-            ...cur,
-            title: resolvedTitle
-          });
-          this.publish();
-        }
-      }
-    }).catch(() => {
-    });
-  }
-  schedulePersist() {
-    clearTimeout(this.deferredPersistTimer);
-    this.deferredPersistTimer = setTimeout(() => {
-      void this.persist().catch(
-        (e) => this.ctx.logger.warn("FlowSpace deferred persist: %s", e)
-      );
-    }, 350);
-  }
-  async hydrateBoundSessions() {
-    const listed = await this.ctx.sessionController.list(
-      {},
-      new AbortController().signal
-    );
-    const subRows = listed.items.filter((s) => s.origin === "subagent");
-    if (subRows.length) {
-      const titles = await this.ctx.sessionQuery.readTitleSnapshots(
-        subRows.map((s) => s.sessionId)
-      );
-      subRows.forEach((row, idx) => {
-        const parentId = row.parentSessionId;
-        if (parentId) {
-          this.state.subagents.set(row.sessionId, {
-            sessionId: row.sessionId,
-            parentSessionId: parentId,
-            title: titles[idx]?.status === "fulfilled" ? titles[idx].value.title?.title ?? row.sessionId : row.sessionId,
-            running: row.running
-          });
-        }
-      });
-    }
-    for (const sub of subRows) {
-      try {
-        var _stack = [];
-        try {
-          const subObs = __using(_stack, await this.ctx.sessionQuery.observeSession(
-            sub.sessionId,
-            { projectionMode: "none" }
-          ));
-          for (const ev of subObs.events) {
-            this.recordNativeMessage(sub.sessionId, ev);
-          }
-        } catch (_) {
-          var _error = _, _hasError = true;
-        } finally {
-          __callDispose(_stack, _error, _hasError);
-        }
-      } catch {
-      }
-    }
-    for (const node2 of this.state.doc.nodes) {
-      if (node2.kind !== "agent" || !node2.sessionId) continue;
-      try {
-        var _stack2 = [];
-        try {
-          const obs = __using(_stack2, await this.ctx.sessionQuery.observeSession(
-            node2.sessionId,
-            { projectionMode: "none" }
-          ));
-          const lastAssistant = obs.events.findLast(
-            (e) => e.type === "assistant/message" && !e.data.interrupted && plainText(e.data.message.content).trim().length > 0
-          ) ?? obs.events.findLast(
-            (e) => e.type === "assistant/message" && !e.data.interrupted
-          );
-          const lastWorkdir = obs.events.findLast(
-            (e) => e.type === "working-directory/change"
-          );
-          const lastTime = obs.events.at(-1)?.time;
-          for (const ev of obs.events) {
-            this.recordNativeMessage(node2.sessionId, ev);
-          }
-          const turns = this.collectSessionChangesFromEvents(
-            node2.sessionId,
-            obs.events
-          );
-          const effectiveCwd = lastWorkdir?.data?.cwd ?? node2.worktreePath ?? node2.cwd;
-          if (effectiveCwd) {
-            this.workspaceFs.trackWorktree(effectiveCwd);
-          }
-          this.state.live.set(node2.id, {
-            nodeId: node2.id,
-            sessionId: node2.sessionId,
-            running: this.runtime.running().includes(node2.sessionId),
-            output: lastAssistant?.type === "assistant/message" ? plainText(lastAssistant.data.message.content) : "",
-            seq: lastAssistant?.seq ?? obs.cursor,
-            pendingInput: [],
-            updatedAt: lastTime,
-            effectiveCwd,
-            changesTurns: turns
-          });
-        } catch (_2) {
-          var _error2 = _2, _hasError2 = true;
-        } finally {
-          __callDispose(_stack2, _error2, _hasError2);
-        }
-      } catch {
-      }
-    }
-  }
-  recordNativeMessage(sessionId, event) {
-    if (event.type !== "user/message") return false;
-    const src = event.data.source;
-    const senderSessionId = src.senderSessionId ?? src.senderId;
-    if ((src.kind === "agent-message" || src.kind === "subagent-settled" || src.kind === "team-message") && typeof senderSessionId === "string" && senderSessionId.length > 0) {
-      const msgId = `${sessionId}:${event.seq}`;
-      if (this.state.nativeMessages.has(msgId)) return false;
-      const bodyText = plainText(event.data.content).trim() || src.summary || (src.senderName ? `From ${src.senderName}` : "");
-      this.state.nativeMessages.set(msgId, {
-        id: msgId,
-        fromSessionId: senderSessionId,
-        toSessionId: sessionId,
-        kind: src.kind,
-        text: bodyText,
-        summary: src.summary ?? src.senderName,
-        seq: event.seq,
-        time: event.time
-      });
-      if (src.kind === "subagent-settled") {
-        const existingSub = this.state.subagents.get(senderSessionId);
-        this.state.subagents.set(senderSessionId, {
-          sessionId: senderSessionId,
-          parentSessionId: existingSub?.parentSessionId ?? sessionId,
-          title: existingSub?.title ?? senderSessionId.slice(0, 8),
-          running: false,
-          updatedAt: event.time
-        });
-      }
-      return true;
-    }
-    return false;
-  }
-  collectSessionChangesFromEvents(sessionId, events) {
-    const wc = getWorkspaceChanges(this.ctx);
-    if (!wc) return [];
-    const byTurn = /* @__PURE__ */ new Map();
-    for (const ev of events) {
-      if (ev.type !== "workspace/changes") continue;
-      const sum = wc.summary(sessionId, ev.seq);
-      if (!sum) continue;
-      byTurn.set(sum.turn, {
-        sessionId,
-        turn: sum.turn,
-        seq: ev.seq,
-        cwd: sum.cwd,
-        total: sum.total,
-        added: sum.added,
-        deleted: sum.deleted,
-        files: sum.files.map((f) => ({
-          path: f.path,
-          display: f.display,
-          added: f.added,
-          deleted: f.deleted,
-          binary: f.binary,
-          oversized: f.oversized
-        }))
-      });
-    }
-    return [...byTurn.values()].sort((a, b) => b.turn - a.turn);
-  }
-  event(sessionId, event, report, header) {
-    if (this.recordNativeMessage(sessionId, event)) {
-      this.publish();
-    }
-    if (header?.origin === "subagent") {
-      const prev = this.state.subagents.get(sessionId);
-      if (prev) {
-        this.state.subagents.set(sessionId, {
-          ...prev,
-          updatedAt: event.time
-        });
-      } else if (header.parentSession) {
-        this.upsertSubagentBrief(sessionId, header.parentSession, true);
-      }
-    }
-    const node2 = this.state.doc.nodes.find((n) => n.sessionId === sessionId);
-    if (!node2) return;
-    const evAny = event;
-    if (evAny.type === "tool/call" && evAny.data) {
-      const name = String(evAny.data.name ?? "");
-      report(this.scheduler.nativeStatus(sessionId, "tool", name, event.seq));
-      if (/^(bash|pwsh|terminal_(?:exec|send))$/.test(name)) {
-        const raw = evAny.data.args ?? evAny.data.arguments;
-        let args = raw;
-        if (typeof raw === "string") {
-          try {
-            args = JSON.parse(raw);
-          } catch {
-            args = void 0;
-          }
-        }
-        if (args && typeof args === "object") {
-          const command = ["command", "text", "code"].flatMap((key) => typeof args[key] === "string" ? [String(args[key])] : [])[0];
-          if (command) {
-            const kind = /^\s*git(?:\.exe)?\s/i.test(command) ? "git" : "terminal";
-            const cwd = this.state.live.get(node2.id)?.effectiveCwd ?? node2.worktreePath ?? node2.cwd;
-            const key = `${node2.id}:${kind}`;
-            const old = this.state.nativeOperations.get(key);
-            if (!old || old.seq < event.seq) {
-              this.state.nativeOperations.set(key, {
-                nodeId: node2.id,
-                kind,
-                command: command.slice(0, 256),
-                cwd,
-                at: event.time,
-                seq: event.seq
-              });
-              this.publish();
-            }
-          }
-        }
-      }
-    }
-    if (evAny.type === "working-directory/change" && evAny.data?.cwd) {
-      const nextCwd = String(evAny.data.cwd);
-      this.workspaceFs.trackWorktree(nextCwd);
-      const old = this.state.live.get(node2.id);
-      this.state.live.set(node2.id, {
-        nodeId: node2.id,
-        sessionId,
-        running: old?.running ?? false,
-        output: old?.output ?? "",
-        seq: event.seq,
-        pendingInput: old?.pendingInput ?? [],
-        updatedAt: event.time,
-        effectiveCwd: nextCwd,
-        changesTurns: old?.changesTurns
-      });
-      this.publish();
-    }
-    if (evAny.type === "step/start" && evAny.data) {
-      const turn = Number(evAny.data.turn ?? 0);
-      report(
-        this.scheduler.recordTelemetry(sessionId, turn, { addStep: true }).then((updated) => {
-          if (updated) this.publish();
-        })
-      );
-    }
-    if (evAny.type === "deliverables/presented" && evAny.data) {
-      const turn = Number(evAny.data.turn ?? 0);
-      const files = Array.isArray(evAny.data.files) ? evAny.data.files : [];
-      if (files.length) {
-        report(
-          this.scheduler.deliverable(
-            sessionId,
-            turn,
-            event.seq,
-            event.time,
-            files
-          )
-        );
-      }
-    }
-    if (evAny.type === "workspace/changes") {
-      const wc = getWorkspaceChanges(this.ctx);
-      const sum = wc?.summary(sessionId, event.seq);
-      if (sum) {
-        const turnEntry = {
-          sessionId,
-          turn: sum.turn,
-          seq: event.seq,
-          cwd: sum.cwd,
-          total: sum.total,
-          added: sum.added,
-          deleted: sum.deleted,
-          files: sum.files.map((f) => ({
-            path: f.path,
-            display: f.display,
-            added: f.added,
-            deleted: f.deleted,
-            binary: f.binary,
-            oversized: f.oversized
-          }))
-        };
-        const old = this.state.live.get(node2.id);
-        const existing = (old?.changesTurns ?? []).filter(
-          (c) => c.turn !== sum.turn
-        );
-        this.state.live.set(node2.id, {
-          nodeId: node2.id,
-          sessionId,
-          running: old?.running ?? false,
-          output: old?.output ?? "",
-          seq: event.seq,
-          pendingInput: old?.pendingInput ?? [],
-          updatedAt: event.time,
-          effectiveCwd: old?.effectiveCwd,
-          changesTurns: [turnEntry, ...existing]
-        });
-        let docMutated = false;
-        for (const chNode of this.state.doc.nodes) {
-          if (chNode.kind === "changes" && !chNode.fixed && chNode.changesSessionId === sessionId) {
-            chNode.changesSeq = event.seq;
-            chNode.changesTurn = sum.turn;
-            chNode.text = formatTurnChangesSummary(sum);
-            docMutated = true;
-          }
-        }
-        this.publish();
-        if (docMutated) this.schedulePersist();
-      }
-    }
-    if (event.type === "assistant/message") {
-      const text = plainText(event.data.message.content);
-      const usage = event.data.usage;
-      if (usage) {
-        report(
-          this.scheduler.recordTelemetry(sessionId, event.data.turn, {
-            inputTokens: usage.inputTokens,
-            outputTokens: usage.outputTokens
-          })
-        );
-        report(this.scheduler.nativeStatus(sessionId, "usage", JSON.stringify(usage), event.seq));
-      }
-      if (!event.data.interrupted && text.trim().length > 0) {
-        this.state.turnOutput.set(sessionId, text);
-      } else if (!this.state.turnOutput.has(sessionId) && text.length > 0) {
-        this.state.turnOutput.set(sessionId, text);
-      }
-      const effectiveOutput = text.trim().length > 0 ? text : this.state.turnOutput.get(sessionId) ?? text;
-      const old = this.state.live.get(node2.id);
-      this.state.live.set(node2.id, {
-        nodeId: node2.id,
-        sessionId,
-        running: old?.running ?? true,
-        output: effectiveOutput,
-        seq: event.seq,
-        pendingInput: [],
-        updatedAt: event.time,
-        effectiveCwd: old?.effectiveCwd,
-        changesTurns: old?.changesTurns
-      });
-      let displayMutated = false;
-      if (!event.data.interrupted && effectiveOutput.trim().length > 0) {
-        for (const display of this.state.doc.nodes.filter(
-          (n) => (n.kind === "display" && !n.fixed || n.kind === "detail" && !n.pinned) && n.sourceNodeId === node2.id
-        )) {
-          display.text = effectiveOutput;
-          display.sourceSeq = event.seq;
-          displayMutated = true;
-        }
-      }
-      this.publish();
-      if (displayMutated) this.schedulePersist();
-    }
-    if (event.type === "turn/start") this.state.turnOutput.delete(sessionId);
-    if (event.type === "turn/end")
-      report(
-        this.scheduler.finish(
-          sessionId,
-          event.data.turn,
-          event.data.reason.kind,
-          event.seq,
-          this.state.turnOutput.get(sessionId) ?? "",
-          event.data.reason.kind === "error" ? event.data.reason.error.message : void 0,
-          this.teams.isFollowup(sessionId, event.data.turn)
-        )
-      );
-  }
   publish() {
     this.state.listeners.forEach((fn) => fn());
   }
-  computeSourceVersions() {
-    const out = {};
-    for (const n of this.state.doc.nodes) {
-      if (n.flowType === variableNode.flowType) {
-        out[n.id] = `${n.id}:${this.variables.read(n, {}).version}`;
-        continue;
-      }
-      if (n.flowType === "flowspace/constant") {
-        out[n.id] = `${n.id}:${shortHash(JSON.stringify(n.config))}`;
-        continue;
-      }
-      if (n.kind === "agent") {
-        const live = this.state.live.get(n.id);
-        if (n.sessionId && live && live.seq >= 0) {
-          out[n.id] = `${n.sessionId}:${live.seq}`;
-        }
-        continue;
-      }
-      if (n.kind === "file") {
-        const baseCwd = this.resolveWorkspaceRoot(n.worktreePath ?? n.cwd);
-        out[n.id] = `${n.id}:${computeFileNodeFingerprint(n, baseCwd)}`;
-        continue;
-      }
-      if (n.kind === "board") {
-        out[n.id] = `${n.id}:${shortHash(resolveBoardReference(n).text)}`;
-        continue;
-      }
-      if (n.kind === "note" || n.kind === "display" || n.kind === "git" || n.kind === "changes" || n.kind === "terminal") {
-        out[n.id] = `${n.id}:${shortHash(n.text)}`;
-      }
-    }
-    return out;
-  }
-  referenceVersion(edge2, source, sourceVersions) {
-    if (edge2.snapshotContent) return `${edge2.source}:${shortHash(JSON.stringify(edge2.snapshotContent))}`;
-    if (source?.kind === "board" && (edge2.sourceItemKey !== void 0 || !edge2.snapshotText)) {
-      if (edge2.sourceItemKey === void 0 && sourceVersions[source.id]) return sourceVersions[source.id];
-      return `${source.id}:${shortHash(resolveBoardReference(source, edge2.sourceItemKey).text)}`;
-    }
-    return edge2.snapshotText ? `${edge2.source}:${shortHash(edge2.snapshotText)}` : sourceVersions[edge2.source] ?? edge2.currentVersion;
-  }
-  syncLiveReferenceVersions(doc, sourceVersions = this.computeSourceVersions()) {
-    const nodes = new Map(doc.nodes.map((node2) => [node2.id, node2]));
-    for (const edge2 of doc.edges) {
-      if (edge2.kind === "reference") {
-        edge2.currentVersion = this.referenceVersion(edge2, nodes.get(edge2.source), sourceVersions);
-      }
-    }
-    return sourceVersions;
-  }
-  async prepareReferences(sessionId) {
-    const node2 = this.state.doc.nodes.find((n) => n.sessionId === sessionId);
-    if (!node2) return [];
-    const entries = [];
-    for (const edge2 of this.state.doc.edges.filter(
-      (e) => e.target === node2.id && (e.kind === "reference" || e.trigger === "off")
-    )) {
-      const source = this.state.doc.nodes.find((n) => n.id === edge2.source);
-      if (!source) continue;
-      const captured = source.flowType === variableNode.flowType ? this.variables.reference(source) : source.kind === "agent" ? await this.runtime.capture(source, edge2.mode) : await this.runtime.reference(source, edge2);
-      if (captured.referenceKind === "board-card" && captured.missing) continue;
-      const version = `${captured.sourceSessionId ?? captured.sourceNodeId}:${captured.version ?? captured.seq ?? captured.text}`;
-      edge2.currentVersion = version;
-      if (edge2.kind === "reference" && !edge2.always && edge2.sentVersion === version)
-        continue;
-      entries.push({ snapshot: captured, edgeId: edge2.id, version });
-    }
-    if (new Set(
-      entries.filter((e) => e.snapshot.kind === "session").map((e) => e.snapshot.sourceSessionId)
-    ).size > 3)
-      throw new Error("\u4E00\u6B21\u4F1A\u8BDD\u5F15\u7528\u6700\u591A\u5305\u542B\u4E09\u4E2A\u6765\u6E90");
-    return entries;
-  }
-  async persist() {
-    clearTimeout(this.deferredPersistTimer);
-    this.syncLiveReferenceVersions(this.state.doc);
-    const cleanDoc = sanitizeDocumentForWire(this.state.doc);
-    this.state.doc = cleanDoc;
-    await this.domain.table("documents").put("main", structuredClone(cleanDoc));
-    const retainedTemplates = new Set(
-      (cleanDoc.templates ?? []).map((t) => t.id)
-    );
-    for (const id of this.domain.table("templates").keys())
-      if (!retainedTemplates.has(id))
-        await this.domain.table("templates").delete(id);
-    for (const tpl of cleanDoc.templates ?? [])
-      await this.domain.table("templates").put(tpl.id, structuredClone(tpl));
-    const retainedSnapshots = new Set(
-      (cleanDoc.snapshots ?? []).map((s) => s.id)
-    );
-    for (const id of this.domain.table("snapshots").keys())
-      if (!retainedSnapshots.has(id))
-        await this.domain.table("snapshots").delete(id);
-    for (const snap of cleanDoc.snapshots ?? [])
-      await this.domain.table("snapshots").put(snap.id, structuredClone(snap));
-    const retainedRuns = new Set(this.state.runs.map((r) => r.id));
-    for (const id of this.domain.table("runs").keys())
-      if (!retainedRuns.has(id)) await this.domain.table("runs").delete(id);
-    for (const run of this.state.runs) {
-      await this.domain.table("runs").put(run.id, structuredClone(run));
-      await this.arena.settle(run);
-    }
-    this.publish();
-  }
   snapshot() {
-    const sourceVersions = this.computeSourceVersions();
+    const sourceVersions = this.references.computeSourceVersions();
     const docCopy = sanitizeDocumentForWire(this.state.doc);
-    this.syncLiveReferenceVersions(docCopy, sourceVersions);
+    this.references.syncLiveReferenceVersions(docCopy, sourceVersions);
     return {
       document: docCopy,
       runs: structuredClone(this.state.runs),
@@ -12379,92 +13892,8 @@ ${resolvedTask}` : resolvedTask;
   async listModelRoutes() {
     return this.teamAssets.listModelRoutes();
   }
-  async availableModel(index) {
-    const models = await this.teamAssets.listModelRoutes();
-    const fixtures = models.filter((model2) => model2.provider === "flowspace-test");
-    const routes = fixtures.length ? fixtures : models;
-    if (!routes.length) throw new Error("\u8BF7\u5148\u914D\u7F6E\u53EF\u7528\u7684\u6A21\u578B");
-    const { provider, model } = routes[(Number(index) || 0) % routes.length];
-    return { provider, model };
-  }
-  async save(document) {
-    return this.scheduler.transact(
-      () => this.saveDocument(documentSchema.parse(sanitizeDocumentForWire(document)))
-    );
-  }
-  async saveDocument(next, portable = false, importedAssets) {
-    const previous = this.state.doc;
-    if (!portable && next.id === previous.id)
-      next = rebaseContainerChanges(next, this.containers.changes());
-    next.containerRevision = previous.containerRevision;
-    if (!portable) next = mergePendingGeneration(next, previous);
-    next.generationRevision = previous.generationRevision;
-    const previousNodes = new Map(this.state.doc.nodes.map((node2) => [node2.id, node2]));
-    const previousEdges = new Map(this.state.doc.edges.map((edge2) => [edge2.id, edge2]));
-    for (const node2 of next.nodes) {
-      const prior = previousNodes.get(node2.id);
-      const old = portable && prior?.teamRef?.teamId !== node2.teamRef?.teamId ? void 0 : prior;
-      if (old?.sessionId) {
-        copyBoundNodeFields(node2, old);
-        node2.teamRef = old.teamRef;
-        if (node2.teamRef) delete node2.teamConfig;
-      }
-      if (node2.sessionId && this.teams.isLead(node2.sessionId) && !this.teams.ownsNode(node2.sessionId, node2.id))
-        throw new Error("\u56E2\u961F\u4E3B\u7BA1\u4F1A\u8BDD\u5FC5\u987B\u7531\u5BF9\u5E94\u7684\u753B\u5E03\u56E2\u961F\u8282\u70B9\u521B\u5EFA");
-      if (old) node2.lastSubmittedTask = old.lastSubmittedTask;
-      syncUntitledAgentNode(node2);
-      if (node2.worktreePath) this.workspaceFs.trackWorktree(node2.worktreePath);
-      if (node2.kind === "agent" && node2.sessionId && old && old.planMode !== node2.planMode) {
-        void this.runtime.ensure(node2).catch(() => {
-        });
-      }
-    }
-    for (const edge2 of next.edges) {
-      const old = previousEdges.get(edge2.id);
-      if (old?.originMode === "fork") {
-        edge2.originMode = "fork";
-        edge2.mode = old.mode;
-      }
-      if (old && edge2.sentVersion === void 0 && old.sentVersion) {
-        edge2.sentVersion = old.sentVersion;
-      } else if (edge2.sentVersion === "") {
-        delete edge2.sentVersion;
-      }
-    }
-    const byId = new Map(next.nodes.map((node2) => [node2.id, node2]));
-    for (const edge2 of next.edges) {
-      const source = byId.get(edge2.source);
-      if (source?.flowType === "flowspace/merge-sort" && edge2.kind === "continuation")
-        edge2.sourcePort = mergeResultPort(source.config, edge2.sourcePort);
-    }
-    for (const node2 of next.nodes) {
-      const merge = node2.fanout && byId.get(node2.fanout.mergeId);
-      if (merge) for (const port of node2.ports ?? []) {
-        if (port.direction === "out" && port.kind === "continuation" && port.nodes.includes(merge.id))
-          port.portId = mergeResultPort(merge.config, port.portId);
-      }
-      if (node2.staffOf !== void 0 && !byId.has(node2.staffOf)) delete node2.staffOf;
-    }
-    checkDocument(next);
-    validateTriggers(next);
-    await reconcileFanoutDrafts(
-      next,
-      portable ? emptyDocument() : previous,
-      this.state.runs,
-      (fanId) => resolveStaticFanout(this.ctx, this.runtime, next, fanId)
-    );
-    if (importedAssets) await this.teamAssets.addImported(importedAssets);
-    this.state.doc = sanitizeDocumentForWire(next);
-    for (const [id, dispose] of this.canvasToolRestrictions) {
-      if (next.nodes.some((node2) => node2.sessionId === id && node2.canvasToolsOnly)) continue;
-      dispose();
-      this.canvasToolRestrictions.delete(id);
-    }
-    await this.persist();
-    await this.dataFileWatch.sync(next);
-    await this.renameLaneSessions(previous, next);
-    this.syncTeams();
-    return structuredClone(this.state.doc);
+  save(document) {
+    return this.documents.save(document);
   }
   async revertContainerChange(id) {
     await this.scheduler.transact(async () => {
@@ -12479,113 +13908,28 @@ ${resolvedTask}` : resolvedTask;
     return this.triggers.launch(request.nodeId, request.values ?? {});
   }
   debugStep(request) {
-    return this.scheduler.debugStep(request.runId, request.stepId, request.action, request.task);
+    return this.scheduler.debugStep(
+      request.runId,
+      request.stepId,
+      request.action,
+      request.task
+    );
   }
-  async generateReport(request) {
-    const run = this.state.runs.find((run2) => run2.id === request.runId);
-    if (!run || !["completed", "cancelled", "error", "interrupted"].includes(run.state)) throw new Error("\u8FD0\u884C\u7ED3\u675F\u540E\u624D\u80FD\u751F\u6210\u6218\u62A5");
-    if (run.report) return run.report;
-    const existing = this.reportRequests.get(run.id);
-    if (existing) return existing;
-    const job = buildReport(this.ctx, structuredClone(run), request.model).then((report) => this.scheduler.transact(async () => {
-      run.report = report;
-      await this.persist();
-      return report;
-    })).finally(() => this.reportRequests.delete(run.id));
-    this.reportRequests.set(run.id, job);
-    return job;
+  generateReport(request) {
+    return this.documents.generateReport(request);
   }
-  refreshDataFiles(ids) {
-    return this.scheduler.transact(async () => {
-      const previous = this.state.doc;
-      const next = structuredClone(previous);
-      const changed = await reconcileFanoutDrafts(
-        next,
-        previous,
-        this.state.runs,
-        (fanId) => resolveStaticFanout(this.ctx, this.runtime, next, fanId),
-        ids
-      );
-      if (changed) {
-        stampGeneratedBatch(next, new Set(previous.nodes.map((node2) => node2.id)), new Set(previous.edges.map((edge2) => edge2.id)));
-        this.state.doc = next;
-        await this.persist();
-        await this.renameLaneSessions(previous, next);
-      } else this.publish();
-    });
+  importWorkflow(request) {
+    return this.documents.importWorkflow(request);
   }
-  async renameLaneSessions(previous, next) {
-    const previousNodes = new Map(previous.nodes.map((node2) => [node2.id, node2]));
-    const laneGroups = (nodes) => new Map(nodes.flatMap((node2) => node2.fanout ? [[node2.fanout.fanId, node2]] : []));
-    const priorGroups = laneGroups(previous.nodes), groups = laneGroups(next.nodes);
-    for (const lane of next.nodes) {
-      if (!lane.generatedBy || !lane.sessionId) continue;
-      const prior = previousNodes.get(lane.id);
-      const title = laneTitle(groups.get(lane.generatedBy), lane);
-      if (!title || prior && prior.sessionId === lane.sessionId && title === laneTitle(priorGroups.get(lane.generatedBy), prior)) continue;
-      await this.ctx.sessionController.rename({ sessionId: lane.sessionId, title }).catch((error) => this.ctx.logger.warn("FlowSpace \u6CF3\u9053\u4F1A\u8BDD\u91CD\u547D\u540D\u5931\u8D25: %s", error));
-    }
-  }
-  /**
-   * Upgrades agents that gained role nodes to team leads and releases canvas
-   * teams that lost them. A roster that does not validate yet (a role without a
-   * model) waits; running the node reports the error.
-   */
-  syncTeams() {
-    const staffed = staffedIds(this.state.doc.nodes);
-    for (const node2 of this.state.doc.nodes) {
-      if (node2.kind !== "agent" || !node2.sessionId) continue;
-      if (isTeamNode(node2, staffed) !== this.teams.isLead(node2.sessionId))
-        void this.teams.sync(node2.id).catch(() => {
-        });
-    }
-  }
-  async importWorkflow(request) {
-    return this.scheduler.transact(async () => {
-      if (!!request.document === !!request.template) throw new Error("Choose one canvas or workflow template to import.");
-      const template2 = request.template && workflowTemplateSchema.parse(request.template);
-      const next = request.document ? documentSchema.parse(sanitizeDocumentForWire(request.document)) : structuredClone(this.state.doc);
-      if (template2) {
-        if (next.templates?.some((existing) => existing.id === template2.id)) template2.id = uid();
-        delete template2.builtin;
-        next.templates = [...next.templates ?? [], template2];
-      }
-      const nodes = template2?.nodes ?? workflowNodes(next);
-      if (!request.enableTriggers) {
-        for (const node2 of nodes)
-          if (node2.flowType === triggerNode.flowType) node2.config = { ...node2.config, enabled: false };
-      }
-      const refs = new Set(nodes.flatMap((node2) => node2.teamRef ? [node2.teamRef.teamId] : []));
-      const plan = await this.teamAssets.prepareImport(request, refs);
-      if (plan.missing.length) return { kind: "missing-models", models: plan.missing };
-      const staffed = staffedIds(nodes);
-      for (const node2 of nodes) {
-        if (node2.roleRef) node2.roleRef = plan.roleIds.get(node2.roleRef) ?? node2.roleRef;
-        if (!isTeamNode(node2, staffed)) continue;
-        if (node2.teamRef) node2.teamRef.teamId = plan.teamIds.get(node2.teamRef.teamId) ?? node2.teamRef.teamId;
-        delete node2.sessionId;
-        delete node2.lastSubmittedTask;
-      }
-      return { kind: "imported", document: await this.saveDocument(next, !!request.document, plan.additions) };
-    });
-  }
-  async draft(request) {
-    await this.scheduler.transact(async () => {
-      const node2 = this.node(request.nodeId);
-      node2.draft = request.draft;
-      syncUntitledAgentNode(node2);
-      const cleanDoc = sanitizeDocumentForWire(this.state.doc);
-      this.state.doc = cleanDoc;
-      await this.domain.table("documents").put("main", structuredClone(cleanDoc));
-      this.publish();
-    });
+  draft(request) {
+    return this.documents.draft(request);
   }
   plan(request) {
-    this.syncLiveReferenceVersions(this.state.doc);
+    this.references.syncLiveReferenceVersions(this.state.doc);
     return this.scheduler.plan(request);
   }
   start(request) {
-    this.syncLiveReferenceVersions(this.state.doc);
+    this.references.syncLiveReferenceVersions(this.state.doc);
     return this.scheduler.start(request);
   }
   rerunFailed(request) {
@@ -12598,13 +13942,25 @@ ${resolvedTask}` : resolvedTask;
     return this.scheduler.command(request.runId, request.action);
   }
   answerHuman(request) {
-    return this.scheduler.answerHuman(request.runId, request.stepId, request.option, request.values);
+    return this.scheduler.answerHuman(
+      request.runId,
+      request.stepId,
+      request.option,
+      request.values
+    );
   }
   remindEmission(request) {
     return this.scheduler.remindEmission(request.runId, request.stepId);
   }
   previewData(request, signal) {
-    return previewDataNode(this.ctx, this.runtime, this.state.doc, this.state.runs, request, signal ?? new AbortController().signal);
+    return previewDataNode(
+      this.ctx,
+      this.runtime,
+      this.state.doc,
+      this.state.runs,
+      request,
+      signal ?? new AbortController().signal
+    );
   }
   release(request) {
     return this.scheduler.release(
@@ -12613,465 +13969,59 @@ ${resolvedTask}` : resolvedTask;
       request.accept
     );
   }
-  async restoreSnapshot(request) {
-    return this.scheduler.transact(async () => {
-      const snap = (this.state.doc.snapshots ?? []).find(
-        (s) => s.id === request.snapshotId
-      );
-      if (!snap) throw new Error("\u72B6\u6001\u5FEB\u7167\u4E0D\u5B58\u5728");
-      await this.scheduler.interruptAllActive(
-        `\u5DF2\u6062\u590D\u5DE5\u4F5C\u72B6\u6001\u5FEB\u7167\u300C${snap.title}\u300D\uFF0C\u539F\u5728\u9014\u8C03\u5EA6\u5DF2\u5B89\u5168\u4E2D\u65AD`
-      );
-      const liveNodes = this.state.doc.nodes;
-      const restoredNodes = structuredClone(snap.nodes).map((n) => {
-        const cur = liveNodes.find((x) => x.id === n.id);
-        if (cur?.sessionId && cur.teamRef?.teamId === n.teamRef?.teamId) {
-          copyBoundNodeFields(n, cur);
-        }
-        return n;
-      });
-      const nextDoc = sanitizeDocumentForWire({
-        ...this.state.doc,
-        nodes: restoredNodes,
-        edges: structuredClone(snap.edges),
-        viewport: structuredClone(snap.viewport)
-      });
-      checkDocument(nextDoc);
-      validateTriggers(nextDoc);
-      this.state.doc = nextDoc;
-      await this.persist();
-      await this.dataFileWatch.sync(nextDoc);
-      this.syncTeams();
-      return structuredClone(this.state.doc);
-    });
+  restoreSnapshot(request) {
+    return this.documents.restoreSnapshot(request);
   }
-  async inspectEdgePayload(request) {
-    const run = request.runId ? this.state.runs.find((r) => r.id === request.runId) : [...this.state.runs].reverse().find((r) => r.tokens.some((t) => t.edgeId === request.edgeId));
-    const edge2 = this.state.doc.edges.find((e) => e.id === request.edgeId) ?? run?.graph.edges.find((e) => e.id === request.edgeId);
-    if (!edge2) throw new Error("\u8FDE\u7EBF\u4E0D\u5B58\u5728");
-    const source = this.state.doc.nodes.find((n) => n.id === edge2.source) ?? run?.graph.nodes.find((n) => n.id === edge2.source);
-    const target = this.state.doc.nodes.find((n) => n.id === edge2.target) ?? run?.graph.nodes.find((n) => n.id === edge2.target);
-    if (!source || !target) throw new Error("\u8FDE\u7EBF\u7AEF\u70B9\u4E0D\u5B58\u5728");
-    const sourceVersions = this.computeSourceVersions();
-    let freshness = "live";
-    if (edge2.kind === "reference") {
-      if (edge2.always) {
-        freshness = "always";
-      } else if (!edge2.sentVersion) {
-        freshness = "pending";
-      } else {
-        const currentVer = this.referenceVersion(edge2, source, sourceVersions);
-        freshness = currentVer && currentVer !== edge2.sentVersion ? "updated" : "sent";
-      }
-    }
-    const runToken = run?.tokens.findLast((token) => token.edgeId === edge2.id && (request.runId !== void 0 || !token.skip && token.source.content !== void 0));
-    let content = "";
-    let structured = runToken?.source.content ?? edge2.snapshotContent;
-    let sessionId;
-    let seq;
-    let totalDiskBytes = 0;
-    if (runToken) {
-      content = runToken.source.text;
-      sessionId = runToken.source.sourceSessionId;
-      seq = runToken.source.seq;
-    } else if (source.kind === "agent") {
-      sessionId = source.sessionId;
-      if (source.sessionId) {
-        if (edge2.mode === "fork") {
-          try {
-            var _stack = [];
-            try {
-              const obs = __using(_stack, await this.ctx.sessionQuery.observeSession(
-                source.sessionId,
-                { projectionMode: "none" }
-              ));
-              const completedTurns = obs.events.filter(
-                (e) => e.type === "turn/end" && e.data.reason.kind === "completed"
-              );
-              const lastEnd = completedTurns.at(-1);
-              seq = lastEnd?.seq ?? obs.cursor;
-              const latestSnap = await this.runtime.capture(source, "conclusion", seq).catch(() => null);
-              content = `[Fork \u5B8C\u6574\u5386\u53F2\u5206\u652F \xB7 ${completedTurns.length} \u4E2A\u5DF2\u5B8C\u6210\u56DE\u5408 \xB7 \u622A\u81F3\u4E8B\u4EF6 #${seq}]
-
-` + (latestSnap?.text || "(\u6682\u65E0\u52A9\u624B\u6587\u672C\u8F93\u51FA)");
-            } catch (_) {
-              var _error = _, _hasError = true;
-            } finally {
-              __callDispose(_stack, _error, _hasError);
-            }
-          } catch {
-            content = "(\u4F1A\u8BDD\u5386\u53F2\u6682\u4E0D\u53EF\u8BFB)";
-          }
-        } else {
-          try {
-            const cap = await this.runtime.capture(source, edge2.mode);
-            content = cap.text;
-            seq = cap.seq;
-          } catch {
-            content = source.draft || source.task || "(\u4F1A\u8BDD\u6682\u65E0\u8F93\u51FA)";
-          }
-        }
-      } else {
-        content = source.draft.trim() || source.task.trim() || "(\u5C1A\u672A\u542F\u52A8\u8349\u7A3F \u2014 \u542F\u52A8\u8FD0\u884C\u540E\u5C06\u5728\u6B64\u4F20\u9012\u8F93\u51FA)";
-      }
-    } else if (source.kind === "file" && !edge2.snapshotText && !edge2.snapshotContent) {
-      const cap = await this.runtime.reference(source, edge2);
-      structured = cap.content;
-      const paths2 = extractFileNodePaths(source);
-      const baseCwd = this.resolveWorkspaceRoot(
-        source.worktreePath ?? source.cwd
-      );
-      const previews = [cap.text];
-      for (const p of paths2.slice(0, 4)) {
-        try {
-          const full = resolve4(baseCwd, p);
-          const rel = relative3(baseCwd, full);
-          if (rel.startsWith("..") || isAbsolute3(rel)) continue;
-          const st = statSync2(full);
-          if (st.isFile()) {
-            totalDiskBytes += st.size;
-            const preview = await this.readWorkspaceFile({
-              path: p,
-              cwd: baseCwd
-            });
-            previews.push(
-              `
---- ${preview.path} (${st.size} bytes) ---
-${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 4e3 ? "\n\u2026[\u9884\u89C8\u5DF2\u622A\u65AD]" : ""}`
-            );
-          }
-        } catch {
-        }
-      }
-      content = previews.join("\n");
-    } else {
-      const cap = await this.runtime.reference(source, edge2);
-      structured = cap.content;
-      content = cap.text;
-      sessionId = cap.sourceSessionId;
-      seq = cap.seq;
-    }
-    const byteLength = Math.max(
-      totalDiskBytes,
-      Buffer.byteLength(content, "utf8")
+  inspectEdgePayload(request) {
+    return inspectEdgePayload(
+      {
+        ctx: this.ctx,
+        state: this.state,
+        runtime: this.runtime,
+        references: this.references,
+        workspaceFs: this.workspaceFs
+      },
+      request
     );
-    const firstLine = content.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? "";
-    const summary = firstLine.length > 100 ? `${firstLine.slice(0, 100)}\u2026` : firstLine || `${source.title} \u2192 ${target.title}`;
-    const itemCount = structured?.items?.length ?? (structured?.dataType === "file" && Array.isArray(structured.value) ? structured.value.length : void 0);
-    return {
-      edgeId: edge2.id,
-      kind: edge2.kind,
-      mode: edge2.kind === "reference" ? source.kind : edge2.mode,
-      sourceTitle: source.kind === "board" ? runToken?.source.title ?? referenceTitle(source, edge2) : source.title,
-      targetTitle: target.title,
-      ...sessionId ? { sessionId } : {},
-      ...seq !== void 0 ? { seq } : {},
-      byteLength,
-      ...itemCount !== void 0 ? { itemCount, originalCount: structured?.originalCount } : {},
-      willSpill: byteLength > MAX_INLINE_CONTEXT_BYTES,
-      freshness,
-      summary,
-      content
-    };
   }
-  async bind(request) {
-    return this.scheduler.transact(async () => {
-      const node2 = this.node(request.nodeId);
-      if (node2.sessionId) return structuredClone(sanitizeDocumentForWire(this.state.doc).nodes.find((n) => n.id === node2.id));
-      if (this.state.doc.edges.some(
-        (e) => e.target === node2.id && e.mode === "fork"
-      ))
-        throw new Error("\u5206\u53C9\u8349\u7A3F\u5C06\u5728\u63A5\u7EED\u65F6\u521B\u5EFA\u4F1A\u8BDD");
-      if (request.sessionId && this.state.doc.nodes.some((n) => n.sessionId === request.sessionId))
-        throw new Error("\u8BE5\u4F1A\u8BDD\u5DF2\u5728\u753B\u5E03\u4E2D");
-      node2.workspaceId = request.workspaceId ?? node2.workspaceId;
-      node2.cwd = request.cwd ?? node2.cwd;
-      node2.branch = request.branch ?? node2.branch;
-      node2.worktreePath = request.worktreePath ?? node2.worktreePath;
-      if (node2.worktreePath) {
-        this.workspaceFs.trackWorktree(node2.worktreePath);
-      }
-      if (request.sessionId) {
-        var _stack = [];
-        try {
-          if (node2.teamRef || this.teams.isLead(request.sessionId))
-            throw new Error("\u56E2\u961F\u4E3B\u7BA1\u4F1A\u8BDD\u5FC5\u987B\u7531\u5BF9\u5E94\u7684\u753B\u5E03\u56E2\u961F\u8282\u70B9\u521B\u5EFA");
-          const observation = __using(_stack, await this.ctx.sessionQuery.observeSession(
-            request.sessionId
-          ));
-          node2.sessionId = request.sessionId;
-          node2.cwd = observation.header.cwd;
-          for (const ev of observation.events) {
-            this.recordNativeMessage(request.sessionId, ev);
-          }
-        } catch (_) {
-          var _error = _, _hasError = true;
-        } finally {
-          __callDispose(_stack, _error, _hasError);
-        }
-      } else node2.sessionId = await this.runtime.ensure(node2);
-      syncUntitledAgentNode(node2);
-      if (node2.continuationPrompt === void 0 && node2.task.trim()) {
-        node2.continuationPrompt = node2.task;
-      }
-      await this.persist();
-      if (request.sessionId) this.syncTeams();
-      return structuredClone(
-        this.state.doc.nodes.find((n) => n.id === node2.id)
-      );
-    });
+  bind(request) {
+    return this.documents.bind(request);
   }
-  async display(request) {
-    return this.scheduler.transact(async () => {
-      const source = this.state.doc.nodes.find((n) => n.id === request.nodeId);
-      if (!source) throw new Error("\u6765\u6E90\u8282\u70B9\u4E0D\u5B58\u5728");
-      const captured = request.text === void 0 ? source.kind === "agent" ? await this.runtime.capture(source, "conclusion", request.seq) : await this.runtime.reference(source) : void 0;
-      const node2 = {
-        ...newNode(
-          "display",
-          source.x + source.width + 60,
-          source.y + 40,
-          source.title + " \xB7 \u7ED3\u679C"
-        ),
-        text: request.text ?? captured?.text ?? "",
-        sourceNodeId: source.id,
-        sourceSeq: request.seq ?? captured?.seq,
-        fixed: request.fixed
-      };
-      this.state.doc.nodes.push(node2);
-      await this.persist();
-      return structuredClone(node2);
-    });
+  display(request) {
+    return this.documents.display(request);
   }
-  async sessions() {
-    const result = await this.ctx.sessionController.list(
-      {},
-      new AbortController().signal
-    );
-    const rows = result.items.filter((s) => s.origin !== "subagent");
-    const titles = await this.ctx.sessionQuery.readTitleSnapshots(
-      rows.map((s) => s.sessionId)
-    );
-    return rows.map((s, i) => ({
-      sessionId: s.sessionId,
-      title: titles[i]?.status === "fulfilled" ? titles[i].value.title?.title ?? s.sessionId : s.sessionId,
-      cwd: s.cwd,
-      running: s.running,
-      updatedAt: s.updatedAt
-    }));
+  sessions() {
+    return this.toolBridge.sessions();
   }
   workspaces() {
-    return this.ctx.workspaceRegistry.list().map((w) => ({ id: w.id, name: w.title, path: w.path }));
+    return this.toolBridge.workspaces();
   }
-  async projectStructures() {
-    const list = this.ctx.workspaceRegistry.list();
-    return Promise.all(
-      list.map(async (w) => {
-        const status = await this.git.inspect(w.path).catch(() => null);
-        if (status?.topLevel && sameFsPath(status.topLevel, w.path)) {
-          for (const wt of status.worktrees) {
-            if (wt.path && !wt.isMain) {
-              this.workspaceFs.trackWorktree(wt.path);
-            }
-          }
-        }
-        return {
-          id: w.id,
-          name: w.title,
-          path: w.path,
-          isGitRepo: Boolean(
-            status?.isGitRepo && sameFsPath(status.topLevel, w.path)
-          ),
-          currentBranch: status?.branch || void 0,
-          branches: status?.branches ?? [],
-          worktrees: status?.worktrees ?? []
-        };
-      })
-    );
+  projectStructures() {
+    return this.toolBridge.projectStructures();
   }
-  async gitInspect(request) {
-    const base = this.resolveWorkspaceRoot(request.cwd);
-    const status = await this.git.inspect(base);
-    if (status.topLevel && sameFsPath(status.topLevel, base)) {
-      for (const wt of status.worktrees) {
-        if (wt.path && !wt.isMain) {
-          this.workspaceFs.trackWorktree(wt.path);
-        }
-      }
-    }
-    return status;
+  gitInspect(request) {
+    return this.toolBridge.gitInspect(request);
   }
-  async gitDiff(request) {
-    const base = this.resolveWorkspaceRoot(request.cwd);
-    return this.git.diff(base, request);
+  gitDiff(request) {
+    return this.toolBridge.gitDiff(request);
   }
-  async gitAction(request) {
-    const base = this.resolveWorkspaceRoot(request.cwd);
-    const status = await this.git.act(base, request);
-    if (status.topLevel && sameFsPath(status.topLevel, base)) {
-      for (const wt of status.worktrees) {
-        if (wt.path && !wt.isMain) {
-          this.workspaceFs.trackWorktree(wt.path);
-        }
-      }
-    }
-    return status;
+  gitAction(request) {
+    return this.toolBridge.gitAction(request);
   }
-  async sessionChanges(request) {
-    var _stack = [];
-    try {
-      const sessionId = request.sessionId.trim();
-      if (!sessionId) return [];
-      const obs = __using(_stack, await this.ctx.sessionQuery.observeSession(
-        sessionId,
-        { projectionMode: "none" }
-      ));
-      return this.collectSessionChangesFromEvents(sessionId, obs.events);
-    } catch (_) {
-      var _error = _, _hasError = true;
-    } finally {
-      __callDispose(_stack, _error, _hasError);
-    }
+  sessionChanges(request) {
+    return this.toolBridge.sessionChanges(request);
   }
-  async sessionChangeDiff(request) {
-    const wc = getWorkspaceChanges(this.ctx);
-    if (!wc) {
-      throw new Error("\u5F53\u524D Host \u672A\u6302\u8F7D workspace-changes \u670D\u52A1");
-    }
-    const sid = request.sessionId;
-    const sum = wc.summary(sid, request.seq);
-    if (!sum) {
-      throw new Error("\u8BE5\u8F6E\u6539\u52A8\u4E34\u65F6\u5FEB\u7167\u5DF2\u8FC7\u671F\u6216\u4E0D\u5B58\u5728");
-    }
-    const signal = new AbortController().signal;
-    if (request.fileIndex !== void 0) {
-      const diff = await wc.diff(sid, request.seq, request.fileIndex, signal);
-      if (!diff) throw new Error("\u672A\u627E\u5230\u6307\u5B9A\u6587\u4EF6\u6539\u52A8\u5BF9\u6BD4");
-      if (diff.kind !== "text") {
-        return {
-          path: diff.path,
-          display: diff.display,
-          kind: diff.kind,
-          hunks: [],
-          formatted: `[${diff.kind.toUpperCase()}] ${diff.display}`
-        };
-      }
-      const formatted2 = [
-        `--- a/${diff.display}`,
-        `+++ b/${diff.display}`,
-        ...diff.hunks.flatMap((h) => [
-          `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`,
-          ...h.lines
-        ])
-      ].join("\n");
-      return {
-        path: diff.path,
-        display: diff.display,
-        kind: "text",
-        hunks: diff.hunks,
-        formatted: formatted2
-      };
-    }
-    const parts = [
-      `Turn #${sum.turn} (${sum.total} files, +${sum.added} / -${sum.deleted})`
-    ];
-    const allHunks = [];
-    for (let i = 0; i < Math.min(sum.files.length, 20); i++) {
-      const diff = await wc.diff(sid, request.seq, i, signal).catch(() => void 0);
-      if (!diff) continue;
-      if (diff.kind !== "text") {
-        parts.push(`
-[${diff.kind.toUpperCase()}] ${diff.display}`);
-        continue;
-      }
-      parts.push(`
---- a/${diff.display}
-+++ b/${diff.display}`);
-      for (const h of diff.hunks) {
-        allHunks.push(h);
-        parts.push(
-          `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`,
-          ...h.lines
-        );
-      }
-    }
-    const formatted = parts.join("\n");
-    return {
-      path: sum.cwd,
-      display: `Turn #${sum.turn}`,
-      kind: "text",
-      hunks: allHunks.slice(0, 60),
-      formatted
-    };
+  sessionChangeDiff(request) {
+    return this.toolBridge.sessionChangeDiff(request);
   }
   sessionTerminals(request) {
-    const tc = getTerminalController(this.ctx);
-    if (!tc || !request.sessionId) return [];
-    return tc.list(request.sessionId).map((t) => ({
-      id: t.id,
-      sessionId: request.sessionId,
-      title: t.title,
-      cwd: t.cwd,
-      state: t.state,
-      exitCode: t.exitCode,
-      origin: t.origin
-    }));
+    return this.toolBridge.sessionTerminals(request);
   }
-  async openSessionTerminal(request) {
-    const tc = getTerminalController(this.ctx);
-    if (!tc) throw new Error("\u5F53\u524D\u73AF\u5883\u672A\u542F\u7528 terminalController");
-    const resolved = await this.ctx.sessionController.resolveAgent(
-      request.sessionId
-    );
-    if ("error" in resolved) throw resolved.error;
-    const created = await tc.create(
-      resolved.agent,
-      { id: uid(), cols: 100, rows: 28 },
-      new AbortController().signal
-    );
-    return {
-      id: created.id,
-      sessionId: request.sessionId,
-      title: created.title,
-      cwd: created.cwd,
-      state: created.state,
-      exitCode: created.exitCode,
-      origin: created.origin
-    };
+  openSessionTerminal(request) {
+    return this.toolBridge.openSessionTerminal(request);
   }
-  async readTerminalScreen(request) {
-    const tc = getTerminalController(this.ctx);
-    if (!tc) throw new Error("\u5F53\u524D\u73AF\u5883\u672A\u542F\u7528 terminalController");
-    const sid = request.sessionId;
-    const list = tc.list(sid);
-    const chosen = (request.terminalId ? list.find((t) => t.id === request.terminalId) : void 0) ?? list[0];
-    if (!chosen) {
-      return {
-        sessionId: request.sessionId,
-        terminalId: "",
-        title: "\u65E0\u6D3B\u52A8\u7EC8\u7AEF",
-        state: "exited",
-        text: "",
-        totalLines: 0,
-        truncated: false
-      };
-    }
-    const resolved = await this.ctx.sessionController.resolveAgent(sid);
-    if ("error" in resolved) throw resolved.error;
-    const page = await tc.readScreen(resolved.agent, chosen.id, {
-      offset: 0,
-      count: Math.min(400, Math.max(20, request.lines ?? 140)),
-      maxBytes: MAX_INLINE_CONTEXT_BYTES
-    });
-    return {
-      sessionId: request.sessionId,
-      terminalId: chosen.id,
-      title: chosen.title,
-      state: chosen.state,
-      text: page.text,
-      totalLines: page.totalLines,
-      truncated: page.truncated
-    };
+  readTerminalScreen(request) {
+    return this.toolBridge.readTerminalScreen(request);
   }
   workspaceFiles(request) {
     return this.workspaceFs.listFiles(request);
@@ -13086,11 +14036,13 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
     this.state.canvasSessions = new Set(sessionIds);
   }
   async stopNode(nodeId) {
-    const node2 = this.node(nodeId);
+    const node2 = this.documents.agentNode(nodeId);
     if (!node2.sessionId) return;
     const lead = this.teams.isLead(node2.sessionId);
     if (lead) await this.scheduler.stopSettlingTeam(node2.sessionId);
-    this.ctx.sessionController.cancel({ sessionId: node2.sessionId });
+    this.ctx.sessionController.cancel({
+      sessionId: node2.sessionId
+    });
     if (lead) await this.teams.interruptMembers(node2.sessionId);
   }
   async *follow(signal) {
@@ -13103,10 +14055,11 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
     signal.addEventListener("abort", notify, { once: true });
     try {
       while (!signal.aborted && !this.disposed) {
-        if (!changed)
+        if (!changed) {
           await new Promise((resolve5) => {
             wake = resolve5;
           });
+        }
         if (signal.aborted || this.disposed) break;
         changed = false;
         wake = void 0;
@@ -13116,11 +14069,6 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
       this.state.listeners.delete(notify);
       signal.removeEventListener("abort", notify);
     }
-  }
-  node(id) {
-    const n = this.state.doc.nodes.find((n2) => n2.id === id);
-    if (!n || n.kind !== "agent") throw new Error("Agent \u8282\u70B9\u4E0D\u5B58\u5728");
-    return n;
   }
 };
 _init = __decoratorStart(_b);
