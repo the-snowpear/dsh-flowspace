@@ -1,14 +1,15 @@
-/* FlowSpace stylesheet entry — layered identically to omp-studio agent-canvas prototype */
+/* FlowSpace stylesheet entry — explicit CSS cascade layers */
+@layer tokens, base, components, surfaces, compact, extensions, overrides;
+
 @import "./styles/tokens.css";
-@import "./styles/shell.css";
-@import "./styles/nodes.css";
-@import "./styles/board.css";
-@import "./styles/wires.css";
-@import "./styles/surfaces.css";
-@import "./styles/extensions.css";
-@import "./styles/polish.css";
-@import "./styles/teams.css";
-@import "./styles/team-room.css";
-@import "./styles/team-canvas.css";
-@import "./styles/compact.css";
-@import "./styles/flow-ext.css";
+@import "./styles/shell.css" layer(base);
+@import "./styles/nodes.css" layer(components);
+@import "./styles/board.css" layer(components);
+@import "./styles/wires.css" layer(components);
+@import "./styles/surfaces.css" layer(surfaces);
+@import "./styles/teams.css" layer(surfaces);
+@import "./styles/team-room.css" layer(surfaces);
+@import "./styles/team-canvas.css" layer(surfaces);
+@import "./styles/compact.css" layer(compact);
+@import "./styles/extensions.css" layer(extensions);
+@import "./styles/flow-ext.css" layer(extensions);

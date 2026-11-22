@@ -227,15 +227,16 @@
 
 /* 4-Tier Derived Structure Cards & Skeleton Edges (M06) */
 .fs-root .fs-structure-edge {
-  stroke: var(--border-strong);
-  stroke-width: 1.35;
-  stroke-dasharray: 4 4;
-  opacity: 0.72;
+  stroke: var(--text-3);
+  stroke-width: 1;
+  stroke-dasharray: 0.01 5;
+  opacity: 0.4;
   pointer-events: none;
 }
 .fs-root .fs-structure-edge.is-active {
-  stroke: var(--accent);
-  opacity: 0.95;
+  stroke: var(--running);
+  opacity: 0.7;
+  animation: fs-message-beads 2.6s linear infinite;
 }
 
 .fs-root .fs-struct-card {
@@ -245,32 +246,38 @@
   flex-direction: column;
   justify-content: center;
   gap: 4px;
-  padding: 8px 11px;
-  border-radius: var(--r-8);
-  border: 1px dashed var(--border-strong);
-  background: var(--glass);
-  backdrop-filter: blur(8px);
+  padding: 8px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  backdrop-filter: none;
+  box-shadow: var(--card-hi), var(--card-shadow);
   color: var(--text);
   cursor: pointer;
   user-select: none;
   transition:
-    border-color var(--dur-fast) var(--ease),
-    background var(--dur-fast) var(--ease);
+    border-color 180ms var(--ease),
+    box-shadow 240ms var(--ease-out);
 }
 .fs-root .fs-struct-card:hover {
   border-color: var(--border-float);
-  background: var(--surface-2);
+  background: var(--card-bg);
 }
 .fs-root .fs-struct-card.selected {
   border-style: solid;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  border-color: color-mix(in oklab, var(--accent) 62%, transparent);
+  box-shadow: var(--card-hi), 0 0 0 3px var(--accent-soft), var(--card-shadow);
 }
 .fs-root .fs-struct-head {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+.fs-root .fs-struct-head .ic {
+  width: 14px;
+  height: 14px;
+  color: var(--text-3);
 }
 .fs-root .fs-struct-head strong {
   flex: 1;
@@ -283,8 +290,9 @@
 .fs-root .fs-struct-badge {
   padding: 1px 6px;
   border-radius: var(--r-full);
-  background: var(--surface-3);
-  color: var(--text-2);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--text-3);
   font-size: 10.5px;
   font-family: var(--font-mono);
 }
@@ -630,20 +638,18 @@
 }
 .fs-root .port-multi-count {
   font-style: normal;
-  min-width: 20px;
-  height: 18px;
+  min-width: 19px;
+  height: 17px;
   padding: 0 5px;
   border-radius: var(--r-full);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font: 700 10px/1 var(--font-mono);
-  background: var(--surface);
-  color: var(--accent);
-  border: 1.5px solid var(--accent);
-  box-shadow:
-    0 0 0 3px var(--accent-softer),
-    0 4px 12px -2px var(--shadow);
+  background: var(--ko);
+  color: var(--pc);
+  border: 1.5px solid currentColor;
+  box-shadow: 0 0 0 2.5px var(--ko);
   transition:
     scale var(--dur) var(--ease-spring),
     background-color var(--dur-fast) var(--ease),
@@ -651,8 +657,9 @@
     box-shadow var(--dur-fast) var(--ease);
 }
 .fs-root .port-continuation.port-in.is-multi .port-multi-count {
-  color: var(--text);
-  border-color: var(--accent);
+  color: var(--pc);
+  border-color: currentColor;
+  border-radius: 6px;
 }
 .fs-root .port-in.is-multi:hover .port-multi-count,
 .fs-root .port-in.is-multi.is-hub-open .port-multi-count {
@@ -665,33 +672,51 @@
     0 0 18px -2px var(--accent);
 }
 
-/* Magnetic Target Lock State on Input Ports */
+/* Magnetic Target Lock State on Input Ports (@layer extensions beats @layer components without !important) */
 .fs-root .port-in.is-snap-locked {
-  opacity: 1 !important;
-  scale: 1.35 !important;
-  color: var(--accent) !important;
+  opacity: 1;
+  scale: 1.35;
+  color: var(--accent);
   z-index: 9;
+  --port-well-color: var(--on-accent, #fff);
+  --port-glow-color: color-mix(in oklab, var(--accent) 55%, transparent);
 }
-/* Spotlight & Unplugged Ghost Wire States */
+.fs-root .port.port-in.is-snap-locked > .port-mark {
+  scale: 1.5;
+}
+.fs-root .port-in.is-snap-locked .port-halo,
+.fs-root .port-continuation.port-in.is-snap-locked > .port-mark::before {
+  opacity: 0.7;
+  scale: 0.86;
+}
+.fs-root .port-in.is-snap-locked .port-halo {
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 7px var(--port-glow-color));
+}
+.fs-root .port-continuation.port-in.is-snap-locked > .port-mark::before {
+  border-width: 1.5px;
+  box-shadow: 0 0 14px 1px var(--port-glow-color);
+}
+/* Spotlight & Unplugged Ghost Wire States (no blur filters inside the zoomed world) */
 .fs-root .edge-path.edge-spotlight {
-  stroke: var(--accent) !important;
-  stroke-width: 3.1 !important;
-  opacity: 1 !important;
-  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 75%, transparent));
+  stroke: var(--accent);
+  stroke-width: 2.4;
+  opacity: 1;
+  filter: none;
 }
 .fs-root .edge-path.edge-reconnecting-ghost {
-  opacity: 0.14 !important;
-  stroke-dasharray: 4 6 !important;
-  filter: none !important;
-  animation: none !important;
+  opacity: 0.14;
+  stroke-dasharray: 4 6;
+  filter: none;
+  animation: none;
 }
 
 /* Enhanced Temporary Drag Wire + Plug Orb */
 .fs-root .temporary-edge-glow {
   stroke: var(--accent);
-  stroke-width: 7;
-  opacity: 0.22;
-  filter: blur(3px);
+  stroke-width: 8;
+  opacity: 0.14;
+  filter: none;
   pointer-events: none;
 }
 .fs-root .temporary-edge-glow.is-disconnecting {
@@ -703,8 +728,8 @@
   stroke-width: 2.8;
 }
 .fs-root .temporary-edge.is-disconnecting {
-  stroke: var(--red) !important;
-  filter: drop-shadow(0 0 5px var(--red));
+  stroke: var(--red);
+  filter: none;
 }
 .fs-root .fs-wire-origin-dot {
   fill: var(--surface);
@@ -726,16 +751,16 @@
   fill: var(--accent);
   stroke: var(--surface);
   stroke-width: 1.8;
-  filter: drop-shadow(0 0 6px var(--accent));
+  filter: none;
   pointer-events: none;
 }
 .fs-root .fs-wire-plug-tip.is-snapped {
   fill: var(--green);
-  filter: drop-shadow(0 0 8px var(--green));
+  filter: none;
 }
 .fs-root .fs-wire-plug-tip.is-disconnecting {
   fill: var(--red);
-  filter: drop-shadow(0 0 7px var(--red));
+  filter: none;
 }
 
 /* Hover Safe Corridor & Overlay Filament SVG */
@@ -775,7 +800,7 @@
   stroke: var(--accent);
   stroke-width: 2.6;
   stroke-dasharray: none;
-  filter: drop-shadow(0 0 5px var(--accent));
+  filter: none;
 }
 .fs-root .fs-hub-filament.is-dim {
   opacity: 0.28;

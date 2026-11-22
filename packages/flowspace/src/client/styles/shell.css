@@ -562,8 +562,8 @@
 }
 /* ---------- Liquid Glass capsules ----------
    Shared material for every floating canvas bar and the minimap:
-   translucent tint + strong backdrop blur/saturation, a top sheen,
-   specular inner edges, and a gradient rim drawn by ::before. */
+   nearly clear backdrop, a light-catching rim, specular hover hotspot,
+   and an inner glow pooling at the lower edge. */
 .fs-root .canvas-title,
 .fs-root .toolbar-actions,
 .fs-root .pointer-tools,
@@ -572,18 +572,12 @@
 .fs-root .fs-minimap {
   pointer-events: auto;
   isolation: isolate;
-  border: 1px solid var(--lg-rim);
+  border: 0.5px solid var(--glass-edge);
   border-radius: var(--r-full);
-  background:
-    linear-gradient(180deg, var(--lg-sheen) 0%, transparent 52%),
-    var(--lg-tint);
-  backdrop-filter: var(--lg-filter);
-  -webkit-backdrop-filter: var(--lg-filter);
-  box-shadow:
-    inset 0 1px 0.5px var(--lg-edge-hi),
-    inset 0 -1px 0.5px var(--lg-edge-lo),
-    inset 0 0 14px var(--lg-glow),
-    var(--lg-shadow);
+  background: var(--glass-tint);
+  backdrop-filter: var(--glass-filter);
+  -webkit-backdrop-filter: var(--glass-filter);
+  box-shadow: var(--glass-inner), var(--glass-shadow);
 }
 .fs-root .canvas-title,
 .fs-root .toolbar-actions,
@@ -606,11 +600,11 @@
   padding: 1px;
   border-radius: inherit;
   background: linear-gradient(
-    135deg,
-    var(--lg-edge-hi) 0%,
-    transparent 32%,
-    transparent 68%,
-    var(--lg-edge-hi) 100%
+    158deg,
+    var(--glass-rim-hi) 0%,
+    transparent 30%,
+    transparent 62%,
+    var(--glass-rim-lo) 100%
   );
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
@@ -619,24 +613,35 @@
   mask:
     linear-gradient(#000 0 0) content-box exclude,
     linear-gradient(#000 0 0);
-  opacity: 0.7;
+  opacity: 1;
   pointer-events: none;
 }
-.fs-root .toolbar-actions .toolbar-button,
-.fs-root .toolbar-actions .toolbar-search,
-.fs-root .pointer-tools .icon-button,
-.fs-root .view-tools .icon-button,
-.fs-root .view-tools .zoom-label {
-  border-radius: var(--r-full);
-  transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease),
-    box-shadow var(--dur-fast) var(--ease);
+/* Specular hotspot: a soft glint that slides under the pointer (--lx / --ly). */
+.fs-root .canvas-title::after,
+.fs-root .toolbar-actions::after,
+.fs-root .pointer-tools::after,
+.fs-root .view-tools::after,
+.fs-root .fs-minimap::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: radial-gradient(
+    140px 64px at var(--lx, 50%) var(--ly, 0%),
+    var(--glass-spec),
+    transparent 72%
+  );
+  opacity: 0;
+  transition: opacity 360ms var(--ease-soft);
+  pointer-events: none;
 }
-.fs-root .toolbar-actions .toolbar-button.active,
-.fs-root .pointer-tools .icon-button.active,
-.fs-root .view-tools .icon-button.active {
-  box-shadow: inset 0 1px 0.5px var(--lg-edge-hi);
+.fs-root .canvas-title:hover::after,
+.fs-root .toolbar-actions:hover::after,
+.fs-root .pointer-tools:hover::after,
+.fs-root .view-tools:hover::after,
+.fs-root .fs-minimap:hover::after {
+  opacity: 1;
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .fs-root .canvas-title,
@@ -645,7 +650,7 @@
   .fs-root .view-tools,
   .fs-root .canvas-hint,
   .fs-root .fs-minimap {
-    background: var(--lg-tint-solid);
+    background: var(--glass-tint-solid);
   }
 }
 @media (prefers-reduced-transparency: reduce) {
@@ -655,16 +660,16 @@
   .fs-root .view-tools,
   .fs-root .canvas-hint,
   .fs-root .fs-minimap {
-    background: var(--lg-tint-solid);
+    background: var(--glass-tint-solid);
   }
 }
 .fs-root .canvas-title {
   display: flex;
-  gap: 8px;
+  gap: 9px;
   align-items: center;
   min-width: 0;
   height: 36px;
-  padding: 0 15px 0 13px;
+  padding: 0 16px 0 12px;
   animation: var(--motion-reveal);
 }
 .fs-root .canvas-title > span:first-child {
@@ -678,6 +683,7 @@
 .fs-root .canvas-title b {
   font-size: 12.5px;
   font-weight: 600;
+  letter-spacing: -0.005em;
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
@@ -699,9 +705,12 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  border-radius: 8px;
+  border-radius: var(--r-full);
   font-size: 12px;
-  color: var(--text-2);
+  color: var(--text-3);
+  transition:
+    color 160ms var(--ease),
+    background-color 160ms var(--ease);
 }
 .fs-root .toolbar-button:hover,
 .fs-root .toolbar-search:hover {
@@ -713,14 +722,71 @@
   width: 14px;
   height: 14px;
 }
-.fs-root .toolbar-actions > kbd {
-  margin: 0 5px 0 0;
+/* Toggles inside a capsule: hover is a faint film; "on" is a raised glass droplet. */
+.fs-root .toolbar-actions .toolbar-button,
+.fs-root .toolbar-actions .toolbar-search,
+.fs-root .toolbar-actions .icon-button,
+.fs-root .pointer-tools .icon-button,
+.fs-root .view-tools .icon-button {
+  border: 0;
+  border-radius: var(--r-full);
+  color: var(--text-3);
+  background: transparent;
+  transition:
+    color 180ms var(--ease),
+    background-color 180ms var(--ease),
+    box-shadow 260ms var(--ease-out),
+    scale 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-.fs-root .toolbar-separator {
+.fs-root .view-tools .zoom-label {
+  border-radius: var(--r-full);
+  color: var(--text-3);
+}
+.fs-root .toolbar-actions .toolbar-button {
+  padding: 0 11px;
+}
+.fs-root .toolbar-actions .toolbar-button:hover,
+.fs-root .toolbar-actions .toolbar-search:hover,
+.fs-root .toolbar-actions .icon-button:hover,
+.fs-root .pointer-tools .icon-button:hover,
+.fs-root .view-tools .icon-button:hover {
+  color: var(--text);
+  background: var(--glass-hover);
+}
+.fs-root .toolbar-actions .toolbar-button:active,
+.fs-root .toolbar-actions .toolbar-search:active,
+.fs-root .toolbar-actions .icon-button:active,
+.fs-root .pointer-tools .icon-button:active,
+.fs-root .view-tools .icon-button:active {
+  scale: 0.94;
+  transition-duration: 180ms, 180ms, 260ms, 90ms;
+}
+.fs-root .toolbar-actions .toolbar-button.active,
+.fs-root .pointer-tools .icon-button.active,
+.fs-root .view-tools .icon-button.active {
+  color: var(--text);
+  background: var(--glass-drop-bg);
+  box-shadow: var(--glass-drop-shadow);
+}
+.fs-root .toolbar-actions .toolbar-button.active .ic,
+.fs-root .pointer-tools .icon-button.active .ic,
+.fs-root .view-tools .icon-button.active .ic {
+  color: var(--accent);
+}
+.fs-root .toolbar-actions > kbd {
+  margin: 0 4px 0 0;
+  border: 0;
+  border-radius: 7px;
+  background: var(--glass-drop-bg);
+  box-shadow: var(--glass-drop-shadow);
+  color: var(--text-3);
+}
+.fs-root .toolbar-separator,
+.fs-root .toolbar-actions .toolbar-separator {
   width: 1px;
-  height: 16px;
-  background: var(--border-strong);
-  margin: 0 4px;
+  height: 18px;
+  margin: 0 5px;
+  background: linear-gradient(180deg, transparent, var(--glass-sep) 30%, var(--glass-sep) 70%, transparent);
 }
 
 .fs-root .fs-canvas-area {
@@ -731,50 +797,51 @@
   background-color: var(--canvas);
   container: canvas-area / inline-size;
 }
-/* Quiet Studio Graphite / Paper Vignette (design.md:9 — zero perpetual shifting haze) */
+/* Quiet Studio Graphite / Paper Ambient Light & Vignette */
 .fs-root .fs-canvas-area::before {
   content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(
-    78% 70% at 50% 40%,
-    transparent 46%,
-    var(--studio-vignette) 100%
-  );
+  background:
+    radial-gradient(1100px 720px at 8% -12%, var(--amb-a), transparent 62%),
+    radial-gradient(900px 640px at 108% 112%, var(--amb-b), transparent 60%),
+    radial-gradient(700px 520px at 92% 4%, var(--amb-c), transparent 64%),
+    radial-gradient(80% 72% at 50% 44%, transparent 56%, var(--studio-vignette) 100%);
 }
 .fs-root .fs-viewport {
   position: absolute;
   inset: 0;
   overflow: clip;
+  contain: strict;
   touch-action: none;
-  background-image:
-    radial-gradient(rgb(var(--grid-rgb) / 0.22) 1.15px, transparent 1.45px),
-    radial-gradient(
-      rgb(var(--grid-rgb) / calc(0.115 * var(--ga, 1))) 0.95px,
-      transparent 1.25px
-    );
-  background-size:
-    calc(var(--gs, 24px) * 5) calc(var(--gs, 24px) * 5),
-    var(--gs, 24px) var(--gs, 24px);
-  background-position: var(--gx, 0) var(--gy, 0);
+  background-image: none;
   transition:
     left var(--dur-slow) var(--ease-nav),
     right var(--dur-slow) var(--ease-nav);
 }
-/* Restrained Pointer Spotlight */
+/* Pointer spotlight retired: it restyled the whole canvas on every mouse move. */
 .fs-root .fs-viewport::before {
+  content: none;
+}
+.fs-root .fs-grid {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+  will-change: transform;
+  background-image:
+    radial-gradient(rgb(var(--grid-rgb) / 0.2) 1.1px, transparent 1.5px),
+    radial-gradient(rgb(var(--grid-rgb) / calc(0.1 * var(--ga, 1))) 0.9px, transparent 1.3px);
+  background-size: 120px 120px, 24px 24px;
+}
+.fs-root .fs-world[data-moving] > .fs-scene-clip::after {
+  /* Catch hover over the moving scene without changing every card's inherited pointer-events. */
   content: "";
   position: absolute;
   inset: 0;
-  pointer-events: none;
-  background: radial-gradient(
-    380px circle at var(--mx, -999px) var(--my, -999px),
-    color-mix(in oklab, var(--accent) calc(8% * var(--glow)), transparent),
-    transparent 70%
-  );
-  opacity: calc(var(--spot, 0) * 0.65);
-  transition: opacity var(--dur-hero) var(--ease);
+  z-index: 100;
 }
 .fs-root .fs-canvas-area.has-left-window .fs-viewport {
   left: 50%;
@@ -846,10 +913,8 @@
   border: 1px solid var(--accent);
   background: var(--accent-softer);
   z-index: 8;
-  border-radius: 6px;
-  box-shadow:
-    0 0 0 1px var(--accent-soft),
-    inset 0 0 24px var(--accent-softer);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px var(--accent-soft);
 }
 
 /* Offscreen Waiting Indicators */
@@ -874,8 +939,10 @@
   font-weight: 600;
   pointer-events: auto;
   --ring: var(--amber-soft);
-  animation: cv-breathe var(--loop-drift) var(--ease-loop) infinite;
-  box-shadow: 0 8px 20px -8px var(--amber);
+  animation: none;
+  box-shadow:
+    0 0 0 3px var(--amber-soft),
+    0 10px 24px -10px var(--amber);
 }
 .fs-root .offscreen-indicator:hover {
   filter: brightness(1.08);
@@ -1594,4 +1661,383 @@
   height: 180px;
   overflow: auto;
   padding: 6px 14px 12px;
+}
+
+/* ============================================================
+   Shell refinements, Minimap, Cursor floor light & Theme eclipse
+   ============================================================ */
+.fs-root .rail-button {
+  border-radius: 11px;
+  transition:
+    color 160ms var(--ease),
+    background-color 160ms var(--ease);
+}
+.fs-root .rail-button.active {
+  background: var(--accent-soft);
+}
+.fs-root .side-search {
+  border-radius: 10px;
+}
+.fs-root .sidebar-agent,
+.fs-root .sidebar-workflow,
+.fs-root .project-name,
+.fs-root .side-library-link {
+  border-radius: 9px;
+  transition:
+    color 160ms var(--ease),
+    background-color 160ms var(--ease);
+}
+.fs-root .sidebar-workflow.selected {
+  background: var(--accent-soft);
+  box-shadow: none;
+}
+.fs-root .side-library-link {
+  border-style: solid;
+  border-color: var(--border);
+}
+
+/* Minimap: all map, no chrome */
+.fs-root .fs-canvas-column {
+  --minimap-w: 202px;
+}
+.fs-root .fs-minimap {
+  width: var(--minimap-w);
+  padding: 4px;
+  border-radius: 16px;
+}
+.fs-root .fs-minimap > svg {
+  width: 192px;
+  margin: 0;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--canvas) 38%, transparent);
+  transition: height 320ms var(--ease-out);
+}
+.fs-root .fs-minimap .mini-node {
+  rx: 2px;
+}
+.fs-root .fs-minimap .mini-viewport {
+  fill: color-mix(in oklab, var(--accent) 7%, transparent);
+  stroke: color-mix(in oklab, var(--accent) 78%, transparent);
+  stroke-width: 1;
+}
+.fs-root .fs-minimap-close {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-full);
+  color: var(--text-2);
+  background: var(--glass-drop-bg);
+  box-shadow: var(--glass-drop-shadow);
+  backdrop-filter: blur(8px) saturate(1.6);
+  -webkit-backdrop-filter: blur(8px) saturate(1.6);
+  opacity: 0;
+  scale: 0.8;
+  transition:
+    opacity 180ms var(--ease),
+    scale 280ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    color 160ms var(--ease);
+}
+.fs-root .fs-minimap-close .ic {
+  width: 10px;
+  height: 10px;
+}
+.fs-root .fs-minimap:hover .fs-minimap-close,
+.fs-root .fs-minimap-close:focus-visible {
+  opacity: 1;
+  scale: 1;
+}
+.fs-root .fs-minimap-close:hover {
+  color: var(--text);
+}
+@media (hover: none) and (pointer: coarse) {
+  .fs-root .fs-minimap-close {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+/* Cursor light: sits between the dot grid and the world; every layer moves by transform alone. */
+.fs-root .fs-cursor-fx {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  contain: strict;
+  opacity: 0;
+  transition: opacity 520ms var(--ease-soft);
+}
+.fs-root .fs-cursor-fx[data-on] {
+  opacity: 1;
+  transition-duration: 240ms;
+}
+.fs-root .fs-viewport.is-hidden .fs-cursor-fx {
+  display: none;
+}
+.fs-root .fx-halo {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 560px;
+  height: 560px;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    var(--fx-halo-core) 0%,
+    var(--fx-halo-mid) 46%,
+    transparent 100%
+  );
+  will-change: transform;
+}
+.fs-root .fx-lens {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 300px;
+  height: 300px;
+  border-radius: 50%;
+  overflow: hidden;
+  -webkit-mask-image: radial-gradient(closest-side, #000 0%, rgba(0, 0, 0, 0.62) 40%, transparent 100%);
+  mask-image: radial-gradient(closest-side, #000 0%, rgba(0, 0, 0, 0.62) 40%, transparent 100%);
+  will-change: transform;
+}
+.fs-root .fx-lens-grid {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+  background-image:
+    radial-gradient(var(--fx-dot-major) 1.45px, transparent 1.95px),
+    radial-gradient(
+      color-mix(in oklab, var(--fx-dot) calc(100% * var(--ga, 1)), transparent) 1.2px,
+      transparent 1.7px
+    );
+  background-size: 120px 120px, 24px 24px;
+}
+/* Press on empty canvas: a single hairline ring blooms out and dissolves. */
+.fs-root .fx-ripple {
+  position: absolute;
+  left: -64px;
+  top: -64px;
+  width: 128px;
+  height: 128px;
+  border-radius: 50%;
+  border: 1px solid var(--fx-ring);
+  background: radial-gradient(closest-side, transparent 55%, var(--fx-halo-core) 100%);
+  pointer-events: none;
+  animation: fs-fx-ripple 760ms var(--ease-out) forwards;
+}
+@keyframes fs-fx-ripple {
+  from {
+    scale: 0.1;
+    opacity: 0.95;
+  }
+  to {
+    scale: 1;
+    opacity: 0;
+  }
+}
+
+/* Theme switch: a 1.5s eclipse */
+:root[data-theme-transition]::view-transition {
+  pointer-events: none;
+}
+:root[data-theme-transition]::view-transition-group(root) {
+  animation: fs-vt-hold 1s linear infinite;
+  overflow: clip;
+}
+:root[data-theme-transition]::view-transition-image-pair(root) {
+  isolation: isolate;
+  transform-origin: var(--tx) var(--ty);
+}
+:root[data-theme-transition]::view-transition-old(root),
+:root[data-theme-transition]::view-transition-new(root) {
+  mix-blend-mode: normal;
+  animation: none;
+}
+:root[data-theme-transition]::view-transition-old(root) {
+  z-index: 0;
+}
+:root[data-theme-transition]::view-transition-new(root) {
+  z-index: 1;
+  mask-image: var(--vt-wave-mask, linear-gradient(transparent, transparent));
+}
+@keyframes fs-vt-hold {
+  from, to { z-index: 0; }
+}
+:root[data-theme-transition] .fs-theme-fx {
+  view-transition-name: fs-theme-fx;
+}
+.fs-theme-fx {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  overflow: hidden;
+  pointer-events: none;
+  contain: strict;
+}
+:root[data-theme-transition]::view-transition-group(fs-theme-fx) {
+  z-index: 2;
+  animation: none;
+}
+:root[data-theme-transition]::view-transition-new(fs-theme-fx),
+:root[data-theme-transition]::view-transition-old(fs-theme-fx) {
+  animation: none;
+}
+.fs-theme-wave > i {
+  position: absolute;
+  left: var(--ox);
+  top: var(--oy);
+  display: block;
+  pointer-events: none;
+}
+.fs-theme-fx .tfx-ring {
+  width: 600px;
+  height: 600px;
+  margin: -300px 0 0 -300px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    #7a90ff,
+    #5ad1ff,
+    #42d6c6,
+    #ffd36e,
+    #ff8ab4,
+    #a99bff,
+    #7a90ff
+  );
+  -webkit-mask-image: radial-gradient(
+    closest-side,
+    transparent 84%,
+    #000 89%,
+    rgba(0, 0, 0, 0.4) 91.5%,
+    transparent 94%
+  );
+  mask-image: radial-gradient(
+    closest-side,
+    transparent 84%,
+    #000 89%,
+    rgba(0, 0, 0, 0.4) 91.5%,
+    transparent 94%
+  );
+  scale: 0;
+  animation:
+    tfx-ring 1500ms cubic-bezier(0.7, 0, 0.2, 1) both,
+    tfx-ring-fade 1500ms linear both,
+    tfx-spin 1500ms cubic-bezier(0.3, 0, 0.3, 1) both;
+}
+.fs-theme-fx .tfx-ring-echo {
+  background: conic-gradient(from 180deg, #ffffff, #c9d4ff, #ffffff, #ffe2f0, #ffffff);
+  -webkit-mask-image: radial-gradient(closest-side, transparent 90%, #000 92%, transparent 94%);
+  mask-image: radial-gradient(closest-side, transparent 90%, #000 92%, transparent 94%);
+  animation-delay: 90ms, 90ms, 90ms;
+  animation-duration: 1410ms, 1410ms, 1410ms;
+}
+@keyframes tfx-ring {
+  from { scale: 0; }
+  to { scale: var(--rs); }
+}
+@keyframes tfx-ring-fade {
+  0% { opacity: 0; }
+  8% { opacity: 1; }
+  70% { opacity: 0.85; }
+  100% { opacity: 0; }
+}
+@keyframes tfx-spin {
+  from { rotate: 0deg; }
+  to { rotate: 200deg; }
+}
+.fs-theme-fx .tfx-core {
+  width: 520px;
+  height: 520px;
+  margin: -260px 0 0 -260px;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    rgba(255, 255, 255, 0.95),
+    rgba(150, 168, 255, 0.55) 28%,
+    rgba(122, 144, 255, 0.16) 58%,
+    transparent 100%
+  );
+  animation: tfx-core 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.fs-theme-wave[data-to="light"] .tfx-core {
+  background: radial-gradient(
+    closest-side,
+    #ffffff,
+    rgba(255, 238, 190, 0.85) 26%,
+    rgba(255, 196, 110, 0.25) 60%,
+    transparent 100%
+  );
+}
+@keyframes tfx-core {
+  0% { scale: 0.08; opacity: 0; }
+  14% { opacity: 1; }
+  100% { scale: 1.7; opacity: 0; }
+}
+.fs-theme-fx .tfx-spark {
+  width: 2px;
+  height: 18px;
+  margin: -9px 0 0 -1px;
+  border-radius: 2px;
+  background: linear-gradient(
+    180deg,
+    hsl(var(--h) 95% 78%),
+    hsl(var(--h) 95% 64% / 0)
+  );
+  opacity: 0;
+  animation: tfx-spark var(--du) cubic-bezier(0.12, 0.8, 0.3, 1) var(--dl) both;
+}
+@keyframes tfx-spark {
+  0% { transform: rotate(var(--a)) translateY(-8px) scaleY(0.2); opacity: 0; }
+  12% { opacity: 1; }
+  100% { transform: rotate(var(--a)) translateY(calc(var(--d) * -1)) scaleY(1.4); opacity: 0; }
+}
+.fs-theme-fx .tfx-rays {
+  width: 1600px;
+  height: 1600px;
+  margin: -800px 0 0 -800px;
+  border-radius: 50%;
+  background: repeating-conic-gradient(
+    from 0deg,
+    rgba(255, 226, 160, 0) 0deg,
+    rgba(255, 226, 160, 0.34) 3deg,
+    rgba(255, 226, 160, 0) 7deg,
+    rgba(255, 226, 160, 0) 15deg
+  );
+  -webkit-mask-image: radial-gradient(closest-side, #000 6%, rgba(0, 0, 0, 0.45) 40%, transparent 100%);
+  mask-image: radial-gradient(closest-side, #000 6%, rgba(0, 0, 0, 0.45) 40%, transparent 100%);
+  animation: tfx-rays 1500ms cubic-bezier(0.3, 0, 0.2, 1) both;
+}
+@keyframes tfx-rays {
+  0% { scale: 0.3; rotate: -18deg; opacity: 0; }
+  22% { opacity: 1; }
+  100% { scale: 1.35; rotate: 24deg; opacity: 0; }
+}
+.fs-theme-fx .tfx-star {
+  left: var(--sx);
+  top: var(--sy);
+  width: calc(var(--sz) * 7);
+  height: calc(var(--sz) * 7);
+  margin: calc(var(--sz) * -3.5) 0 0 calc(var(--sz) * -3.5);
+  background:
+    radial-gradient(circle, #ffffff 0 12%, rgba(200, 212, 255, 0.5) 18%, transparent 30%),
+    linear-gradient(90deg, transparent 46%, rgba(220, 228, 255, 0.85) 50%, transparent 54%),
+    linear-gradient(0deg, transparent 46%, rgba(220, 228, 255, 0.85) 50%, transparent 54%);
+  -webkit-mask-image: radial-gradient(closest-side, #000 30%, transparent 100%);
+  mask-image: radial-gradient(closest-side, #000 30%, transparent 100%);
+  opacity: 0;
+  animation: tfx-star 430ms cubic-bezier(0.2, 0.9, 0.3, 1) var(--dl) both;
+}
+@keyframes tfx-star {
+  0% { scale: 0; rotate: -30deg; opacity: 0; }
+  35% { scale: 1.5; rotate: 0deg; opacity: 1; }
+  100% { scale: 0.5; rotate: 20deg; opacity: 0; }
 }

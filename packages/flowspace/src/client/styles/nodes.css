@@ -1075,9 +1075,10 @@
 }
 .fs-root .node-resizer:hover,
 .fs-root .window-resizer:hover,
-.fs-root .group-resizer:hover {
+.fs-root .group-resizer:hover,
+.fs-root .workflow-group.selected > .group-resizer:hover {
   border-color: var(--accent);
-  opacity: 1 !important;
+  opacity: 1;
 }
 
 /* ---------- Note, Display, Detail, File & Board Cards ---------- */
@@ -1537,6 +1538,682 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
+}
+
+/* ============================================================
+   Node Cards, Shape-Coded Ports, Live States & Groups
+   (Consolidated visual polish — compositor-only motion)
+   ============================================================ */
+.fs-root .node {
+  border-radius: var(--r-card);
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  box-shadow: var(--card-hi), var(--card-shadow);
+  transition:
+    width 320ms var(--ease-out),
+    height 320ms var(--ease-out),
+    border-color 200ms var(--ease),
+    box-shadow 260ms var(--ease-out),
+    opacity 200ms var(--ease);
+}
+.fs-root .node:hover {
+  border-color: color-mix(in oklab, var(--kc) 22%, var(--card-border));
+  box-shadow: var(--card-hi), var(--card-shadow);
+}
+/* Elevation / glow layer: shadows fade in via opacity only (compositor-friendly). */
+.fs-root .node::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: none;
+  box-shadow: var(--card-shadow-hover);
+  opacity: 0;
+  transition: opacity 320ms var(--ease-out);
+}
+.fs-root .node:hover::after,
+.fs-root .node.selected::after {
+  opacity: 1;
+}
+/* Rim light: a thin kind-tinted highlight along the top edge, brighter on intent. */
+.fs-root .node::before,
+.fs-root .node.status-running::before,
+.fs-root .node.status-waiting::before,
+.fs-root .node.status-input::before,
+.fs-root .node.needs-confirmation::before {
+  content: "";
+  position: absolute;
+  inset: -1px 22px auto;
+  height: 1px;
+  padding: 0;
+  border-radius: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--kc) 70%, #fff) 50%,
+    transparent
+  );
+  -webkit-mask: none;
+  mask: none;
+  opacity: 0.28;
+  animation: none;
+  transition: opacity 320ms var(--ease-out);
+  z-index: 7;
+}
+.fs-root .node:is(:hover, .selected, .status-running, .status-waiting, .status-input, .needs-confirmation)::before {
+  opacity: 0.9;
+}
+.fs-root .node.selected {
+  border-color: color-mix(in oklab, var(--accent) 62%, transparent);
+  box-shadow:
+    var(--card-hi),
+    0 0 0 3.5px var(--accent-soft),
+    var(--card-shadow);
+}
+.fs-root .node-enter {
+  animation: fs-card-in 560ms var(--ease-spring) backwards;
+}
+@keyframes fs-card-in {
+  from {
+    opacity: 0;
+    scale: 0.965;
+    translate: 0 8px;
+  }
+}
+.fs-root .node-note {
+  background: var(--note-bg);
+  border-color: var(--note-border);
+}
+/* Drafts read as "not started" through the avatar, not a dashed outline. */
+.fs-root .node.status-draft {
+  border-style: solid;
+  border-color: color-mix(in oklab, var(--accent) 22%, var(--card-border));
+}
+
+/* Header (heights stay in sync with geometry.ts portY: 48 full / 42 compact) */
+.fs-root .node-header {
+  height: 48px;
+  gap: 10px;
+  padding: 0 12px 0 14px;
+  border-bottom: 0;
+}
+.fs-root .node-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: linear-gradient(
+    150deg,
+    color-mix(in oklab, var(--kc) 26%, var(--surface)) 0%,
+    color-mix(in oklab, var(--kc) 9%, var(--surface)) 100%
+  );
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--kc) 24%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+.fs-root .agent-avatar {
+  border-radius: 50%;
+}
+.fs-root .status-draft .node-avatar {
+  background: color-mix(in oklab, var(--accent) 6%, var(--surface));
+  box-shadow: inset 0 0 0 1.25px color-mix(in oklab, var(--accent) 45%, transparent);
+}
+.fs-root .node-heading {
+  gap: 0;
+}
+.fs-root .node-heading strong {
+  font: 600 13.5px/1.3 var(--font-display);
+  letter-spacing: -0.012em;
+}
+.fs-root .node-heading small {
+  padding: 0;
+  background: none;
+  translate: none;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.fs-root .node-heading small::before {
+  content: "·";
+  margin: 0 6px 0 7px;
+  opacity: 0.7;
+}
+.fs-root .node-actions .icon-button {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  color: var(--glyph);
+}
+.fs-root .node-actions .icon-button:not(:disabled):hover {
+  color: var(--text);
+}
+/* Secondary header actions surface on intent; Stop stays visible. */
+@media (hover: hover) {
+  .fs-root .node.full .node-actions > .icon-button:not(.node-stop-button) {
+    opacity: 0;
+    transition: opacity 200ms var(--ease);
+  }
+  .fs-root .node.full:is(:hover, :focus-within, .selected) .node-actions > .icon-button {
+    opacity: 1;
+  }
+}
+.fs-root .node-actions .node-stop-button {
+  border-radius: var(--r-full);
+}
+
+/* Status row */
+.fs-root .agent-status-row {
+  padding: 0 14px;
+  gap: 6px;
+}
+.fs-root .fs-plan-chip {
+  height: 21px;
+  padding: 0 8px;
+  border: 0;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--text-3);
+  transition:
+    color 160ms var(--ease),
+    background-color 160ms var(--ease),
+    box-shadow 160ms var(--ease);
+}
+.fs-root .fs-plan-chip:hover {
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.fs-root .fs-plan-chip.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+/* Tabs: quiet underline instead of a boxed segmented control */
+.fs-root .node-tabs {
+  height: 32px;
+  margin: 0 14px;
+  padding: 0;
+  gap: 18px;
+  border-radius: 0;
+  background: none;
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+.fs-root .node-tabs button {
+  position: relative;
+  flex: none;
+  padding: 0 1px;
+  border-radius: 0;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 500;
+  transition: color 180ms var(--ease);
+}
+.fs-root .node-tabs button::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--kc);
+  scale: 0 1;
+  transition: scale 320ms var(--ease-out);
+}
+.fs-root .node-tabs button:hover {
+  color: var(--text-2);
+}
+.fs-root .node-tabs button[aria-selected="true"] {
+  color: var(--text);
+  font-weight: 600;
+  background: none;
+  box-shadow: none;
+}
+.fs-root .node-tabs button[aria-selected="true"]::after {
+  scale: 1 1;
+}
+.fs-root .node-tabs button > span {
+  background: var(--surface-2);
+}
+
+/* Body */
+.fs-root .node-scroll {
+  border-top: 0;
+  padding: 12px 14px 12px;
+}
+.fs-root .task-label {
+  color: var(--text-faint);
+  font: 500 11px/1.4 var(--font-ui);
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+.fs-root .task-editor {
+  color: var(--text-2);
+  line-height: 1.68;
+}
+.fs-root .task-editor:focus {
+  color: var(--text);
+}
+.fs-root .context-label {
+  color: var(--text-faint);
+}
+
+/* Context capsules */
+.fs-root .capsule {
+  height: 24px;
+  padding: 0 10px 0 8px;
+  border: 0;
+  border-radius: var(--r-full);
+  box-shadow: inset 0 0 0 1px var(--cap-pending-border);
+  transition:
+    background-color 160ms var(--ease),
+    box-shadow 160ms var(--ease),
+    translate 220ms var(--ease-out);
+}
+.fs-root .capsule:hover {
+  box-shadow: inset 0 0 0 1px var(--cap-pending);
+}
+.fs-root .capsule-sent {
+  box-shadow: inset 0 0 0 1px var(--cap-sent-border);
+}
+.fs-root .capsule-updated {
+  box-shadow: inset 0 0 0 1px var(--cap-updated-border);
+}
+.fs-root .capsule-always {
+  box-shadow: inset 0 0 0 1px var(--cap-always-border);
+}
+
+/* Footer: a hairline that fades at both ends, no boxed band */
+.fs-root .agent-footer {
+  height: 48px;
+  padding: 0 10px 0 12px;
+  border-top: 0;
+  background: linear-gradient(
+      90deg,
+      transparent,
+      var(--border) 14%,
+      var(--border) 86%,
+      transparent
+    )
+    top / 100% 1px no-repeat;
+}
+.fs-root .model-picker,
+.fs-root .mode-picker {
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 9px;
+  color: var(--text-3);
+  transition:
+    color 160ms var(--ease),
+    background-color 160ms var(--ease);
+}
+.fs-root .mode-picker {
+  box-shadow: none;
+  background: var(--surface-2);
+}
+.fs-root .agent-controls .button {
+  min-height: 30px;
+  padding: 0 14px;
+  border-radius: 10px;
+}
+
+/* Progress: a thin luminous thread hugging the bottom edge */
+.fs-root .progress-line {
+  height: 2px;
+  left: 20px;
+  right: 20px;
+  background: transparent;
+}
+.fs-root .progress-line i {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--running) 30%,
+    color-mix(in oklab, var(--running) 55%, #fff) 50%,
+    var(--running) 70%,
+    transparent
+  );
+  box-shadow: none;
+  opacity: 0.85;
+}
+
+/* Ports: shape-coded sockets punched into the card edge */
+.fs-root .port {
+  --pc: var(--cap-pending);
+  --ko: var(--surface);
+  opacity: 0.4;
+}
+.fs-root .port-continuation {
+  --pc: var(--text-2);
+}
+.fs-root .node-note > .port {
+  --ko: var(--note-bg);
+}
+.fs-root .port-mark {
+  position: relative;
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  pointer-events: none;
+  transition: scale 320ms var(--ease-spring);
+}
+.fs-root .port-mark,
+.fs-root .port-mark::before,
+.fs-root .port-multi-count {
+  corner-shape: round;
+}
+.fs-root .port-symbol {
+  display: block;
+  overflow: visible;
+}
+.fs-root .port-rim {
+  stroke: var(--ko);
+  stroke-width: 5;
+  paint-order: stroke fill;
+}
+.fs-root rect.port-rim {
+  transition-property: x, y, width, height, rx;
+}
+.fs-root .port-well,
+.fs-root .port-core {
+  transition-property: d, r, stroke-width, stroke, fill, scale;
+}
+.fs-root rect.port-rim,
+.fs-root .port-well,
+.fs-root .port-core {
+  transition-duration: var(--dur);
+  transition-timing-function: var(--ease);
+}
+.fs-root path.port-well,
+.fs-root path.port-core {
+  fill: none;
+}
+.fs-root path.port-well {
+  stroke: var(--port-well-color, var(--ko));
+}
+.fs-root circle.port-well {
+  fill: var(--port-well-color, var(--ko));
+}
+.fs-root .port .port-core {
+  transform-box: fill-box;
+  transform-origin: center;
+  scale: 0;
+}
+.fs-root .port.is-linked .port-core {
+  scale: 1;
+}
+.fs-root .port:is(:hover, .port-target) > .port-mark,
+.fs-root .port-target > .proxy-pin {
+  scale: 1.28;
+}
+.fs-root .port-reference:is(:hover, .port-target) .port-well {
+  r: 2px;
+}
+.fs-root .port-reference:is(:hover, .port-target) .port-core {
+  r: 0px;
+}
+.fs-root .port-continuation:is(:hover, .port-target) > .port-mark {
+  scale: 1.12;
+}
+.fs-root .port-continuation:is(:hover, .port-target) .port-rim {
+  x: -5px;
+  y: -8px;
+  width: 10px;
+  height: 16px;
+  rx: 5px;
+}
+.fs-root .port-continuation:is(:hover, .port-target) :is(.port-well, .port-core) {
+  d: path("M-1.5 -3 L1.5 0 L-1.5 3");
+}
+.fs-root .port-continuation:is(:hover, .port-target) .port-well {
+  stroke-width: 0.875;
+}
+.fs-root .port-continuation:is(:hover, .port-target) .port-core {
+  stroke-width: 0;
+}
+.fs-root .node > .port:hover {
+  color: var(--accent);
+}
+.fs-root .port-halo {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.fs-root .port-continuation > .port-mark::before {
+  content: "";
+  position: absolute;
+  inset: -2px 0.5px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+}
+.fs-root .port-halo,
+.fs-root .port-continuation > .port-mark::before {
+  opacity: 0;
+  scale: 0.55;
+  pointer-events: none;
+  transition:
+    opacity 220ms var(--ease),
+    scale 420ms var(--ease-spring),
+    filter 240ms var(--ease),
+    box-shadow 240ms var(--ease);
+}
+.fs-root .port:hover .port-halo,
+.fs-root .port-continuation:hover > .port-mark::before {
+  opacity: 0.5;
+  scale: 1;
+}
+.fs-root .connecting-reference .node:not(.is-invalid-target) > .port-reference.port-in:not(.is-snap-locked) .port-halo,
+.fs-root .connecting-continuation .node:not(.is-invalid-target) > .port-continuation.port-in:not(.is-snap-locked) > .port-mark::before {
+  animation: fs-port-sonar 1.6s var(--ease-out) infinite;
+}
+
+/* Live sockets: the control output reports what the node is doing */
+.fs-root .node.status-running > .port-continuation.port-out,
+.fs-root .node.status-waiting > .port-continuation.port-out {
+  opacity: 1;
+  scale: 1;
+}
+.fs-root .node.status-running > .port-continuation.port-out {
+  color: var(--running);
+}
+.fs-root .node.status-running > .port-continuation.port-out:not(:hover) {
+  --port-well-color: color-mix(in oklab, var(--running) 22%, var(--ko));
+}
+.fs-root .node.status-running > .port-continuation.port-out .port-core {
+  scale: 1;
+  animation: fs-port-charge 1.4s var(--ease-loop) infinite;
+}
+.fs-root .node.status-running > .port-continuation.port-out > .port-mark::before {
+  animation: fs-port-sonar 1.8s var(--ease-out) infinite;
+}
+.fs-root .node.status-waiting > .port-continuation.port-out {
+  color: var(--amber);
+}
+.fs-root .node.status-waiting > .port-continuation.port-out > .port-mark::before {
+  animation: fs-port-breathe 2.4s var(--ease-loop) infinite;
+}
+.fs-root .node.status-completed > .port-continuation.port-out.is-linked {
+  color: var(--green);
+}
+
+/* Group pins enlarge in place. Drag targets close their well to a solid pin. */
+.fs-root .proxy-pin {
+  --ko: var(--surface);
+  flex: none;
+  color: var(--cap-pending);
+  transition: scale var(--dur) var(--ease-spring);
+}
+.fs-root .proxy-continuation {
+  color: var(--text-2);
+}
+.fs-root .composite-port-row .port-rim {
+  pointer-events: fill;
+}
+.fs-root .port-editor-row .proxy-pin {
+  width: 10px;
+  height: 10px;
+}
+.fs-root .port-editor-row .proxy-continuation {
+  width: 7px;
+  height: 14px;
+}
+.fs-root .port-editor-row .port-symbol {
+  position: absolute;
+  left: calc(50% - 10px);
+  top: calc(50% - 10px);
+}
+.fs-root .port-target > .proxy-reference .port-well {
+  r: 0px;
+}
+.fs-root .port-target > .proxy-continuation .port-well {
+  stroke-width: 0;
+}
+
+@keyframes fs-port-sonar {
+  0% { opacity: 0.75; scale: 0.7; }
+  100% { opacity: 0; scale: 1.9; }
+}
+@keyframes fs-port-charge {
+  0%, 100% { scale: 0.6 0.5; opacity: 0.6; }
+  50% { scale: 1 1.15; opacity: 1; }
+}
+@keyframes fs-port-breathe {
+  0%, 100% { opacity: 0.12; scale: 0.9; }
+  50% { opacity: 0.55; scale: 1.05; }
+}
+
+/* Live states */
+.fs-root .node.status-running {
+  border-color: color-mix(in oklab, var(--running) 34%, var(--card-border));
+  box-shadow: var(--card-hi), var(--card-shadow);
+}
+.fs-root .node.status-running::after {
+  opacity: 1;
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--running) 18%, transparent),
+    0 14px 46px -14px color-mix(in oklab, var(--running) calc(60% * var(--glow)), transparent),
+    var(--card-shadow);
+  animation: fs-breathe 3.2s var(--ease-loop) infinite;
+}
+.fs-root .node-aura {
+  position: absolute;
+  inset: -1px;
+  width: calc(100% + 2px);
+  height: calc(100% + 2px);
+  overflow: visible;
+  pointer-events: none;
+  z-index: 6;
+}
+.fs-root .node-aura rect {
+  x: 0.75px;
+  y: 0.75px;
+  width: calc(100% - 1.5px);
+  height: calc(100% - 1.5px);
+  rx: calc(var(--r-card) - 0.25px);
+  fill: none;
+  stroke: var(--running);
+  stroke-linecap: round;
+}
+.fs-root .node-aura .aura-tail {
+  stroke-width: 1.5;
+  stroke-dasharray: 150 850;
+  opacity: 0.32;
+  animation: fs-orbit 3.4s linear infinite;
+}
+.fs-root .node-aura .aura-head {
+  stroke-width: 2;
+  stroke-dasharray: 34 966;
+  stroke: color-mix(in oklab, var(--running) 55%, #fff);
+  animation: fs-orbit-head 3.4s linear infinite;
+}
+@keyframes fs-orbit {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -1000; }
+}
+@keyframes fs-orbit-head {
+  from { stroke-dashoffset: -116; }
+  to { stroke-dashoffset: -1116; }
+}
+@keyframes fs-breathe {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+.fs-root .status-running .agent-avatar::before {
+  inset: -3.5px;
+  border-width: 1.5px;
+  border-top-color: var(--running);
+  border-right-color: transparent;
+  animation-duration: 1.1s;
+}
+.fs-root .node.status-waiting,
+.fs-root .node.status-input,
+.fs-root .node.needs-confirmation {
+  border-color: color-mix(in oklab, var(--amber) 48%, var(--card-border));
+}
+.fs-root .node:is(.status-waiting, .status-input, .needs-confirmation)::after {
+  opacity: 1;
+  box-shadow:
+    0 0 0 3px color-mix(in oklab, var(--amber) 14%, transparent),
+    0 14px 40px -16px color-mix(in oklab, var(--amber) calc(55% * var(--glow)), transparent),
+    var(--card-shadow);
+  animation: fs-breathe 2.6s var(--ease-loop) infinite;
+}
+.fs-root .node.status-completed,
+.fs-root .node.status-done {
+  border-color: color-mix(in oklab, var(--green) 26%, var(--card-border));
+}
+.fs-root .node:is(.status-error, .status-aborted, .status-interrupted) {
+  border-color: color-mix(in oklab, var(--red) 40%, var(--card-border));
+}
+.fs-root .node:is(.is-muted, .participation-paused, [data-participation="paused"]) {
+  filter: none;
+  opacity: 0.62;
+  border-style: solid;
+}
+.fs-root .node:is(.is-bypassed, .participation-bypassed, [data-participation="bypassed"]) {
+  border-style: solid;
+}
+
+/* Groups: soft tinted regions, no dashed frames */
+.fs-root .workflow-group {
+  border: 1px solid color-mix(in oklab, var(--group-color) 20%, transparent);
+  border-radius: var(--r-group);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--group-color) 7%, transparent) 0%,
+      color-mix(in oklab, var(--group-color) 2.5%, transparent) 180px
+    );
+  box-shadow: inset 0 1px 0 color-mix(in oklab, #fff 5%, transparent);
+}
+.fs-root .workflow-group.selected {
+  border-color: color-mix(in oklab, var(--group-color) 55%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, #fff 5%, transparent),
+    0 0 0 4px color-mix(in oklab, var(--group-color) 10%, transparent);
+}
+.fs-root .nested-group {
+  border-style: solid;
+}
+.fs-root .group-header {
+  padding: 0 10px 0 16px;
+}
+.fs-root .group-mark {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--group-color) 18%, transparent);
+}
+.fs-root .group-header > strong {
+  font-weight: 600;
+  letter-spacing: -0.008em;
+}
+.fs-root .group-run {
+  height: 24px;
+  border-radius: var(--r-full);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--group-color) 22%, transparent);
 }
 
 /* ---------- Full-Page Focused Conversation Surface ---------- */
