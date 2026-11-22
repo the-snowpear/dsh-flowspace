@@ -19,6 +19,12 @@ import {
   newNode,
   uid,
 } from "../core/document.ts";
+import {
+  stripEdgeForPortableTemplate,
+  stripForFreshInstance,
+  stripForPortableTemplate,
+  syncTemplateAuthoredFields,
+} from "../core/nodeFields.ts";
 import { inferGroupPorts } from "./geometry.ts";
 import { createFanoutPair } from "../core/fanout.ts";
 import { authoredPairHeight, remapFanout, remapLaneNode } from "./laneIds.ts";
@@ -1178,19 +1184,7 @@ export function captureTemplate(
       const revision = clone.teamRef && teams.find((team) => team.id === clone.teamRef?.teamId)?.revision;
       if (clone.teamRef && revision !== undefined) clone.teamRef.revision = revision;
       /* Strip all machine/session-bound state so exported templates stay portable */
-      delete clone.sessionId;
-      delete clone.lastSubmittedTask;
-      delete clone.window;
-      delete clone.nudge;
-      delete clone.workspaceId;
-      delete clone.cwd;
-      delete clone.branch;
-      delete clone.worktreePath;
-      delete clone.changesSessionId;
-      delete clone.changesSeq;
-      delete clone.changesTurn;
-      delete clone.terminalSessionId;
-      delete clone.terminalId;
+      stripForPortableTemplate(clone);
       return {
         ...clone,
         id: slot,
@@ -1214,10 +1208,7 @@ export function captureTemplate(
   const edges = doc.edges
     .filter((e) => !e.generatedBy && inside.has(e.source) && inside.has(e.target))
     .map((e) => {
-      const clone = structuredClone(e);
-      delete clone.sentVersion;
-      delete clone.currentVersion;
-      delete clone.originMode;
+      const clone = stripEdgeForPortableTemplate(structuredClone(e));
       return {
         ...clone,
         id: uid(),
@@ -1310,10 +1301,7 @@ export function instantiateTemplate(
     const clone = structuredClone(n);
     remapLaneNode(clone, idMap);
     if (clone.ports) clone.ports = remapGroupPorts(clone.ports, idMap);
-    delete clone.sessionId;
-    delete clone.lastSubmittedTask;
-    delete clone.window;
-    delete clone.nudge;
+    stripForFreshInstance(clone);
     const slotKey = n.templateSlotId ?? n.id;
     return {
       ...clone,
@@ -1475,18 +1463,8 @@ export function synchronizeTemplate(
         if (contract && !prompt.endsWith(contract)) existing.continuationPrompt = [prompt, contract].filter(Boolean).join("\n\n");
       }
       if (!keepTasks && !existing.sessionId) {
-        existing.title = src.title;
-        existing.task = src.task;
-        existing.draft = src.task;
-        existing.continuationPrompt = src.continuationPrompt;
-        existing.text = src.text;
-        existing.planMode = src.planMode;
-        existing.teamRef = structuredClone(src.teamRef);
-        existing.roleLabel = src.roleLabel;
-        existing.participation = src.participation;
-        existing.rerun = src.rerun;
-        existing.expanded = src.expanded;
-        if (src.columns) existing.columns = structuredClone(src.columns);
+        syncTemplateAuthoredFields(existing, src);
+        existing.staffOf = src.staffOf ? slotToNodeId.get(src.staffOf) : undefined;
       }
     } else {
       const freshId = slotToNodeId.get(slot)!;
@@ -1494,10 +1472,7 @@ export function synchronizeTemplate(
       remapLaneNode(clone, slotToNodeId);
       if (clone.ports) clone.ports = remapGroupPorts(clone.ports, slotToNodeId);
       if (clone.staffOf) clone.staffOf = slotToNodeId.get(clone.staffOf);
-      delete clone.sessionId;
-      delete clone.lastSubmittedTask;
-      delete clone.window;
-      delete clone.nudge;
+      stripForFreshInstance(clone);
       doc.nodes.push({
         ...clone,
         id: freshId,

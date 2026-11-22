@@ -37,14 +37,8 @@ import { isFanoutMaster } from "../core/graph.ts";
 import { ConfigForm, EdgeLogicForm } from "./nodes/ConfigForm.tsx";
 import { DataCallDetails } from "./nodes/DataCallDetails.tsx";
 
-export type AlignMode =
-  | "left"
-  | "center"
-  | "right"
-  | "top"
-  | "middle"
-  | "bottom";
-export type DistributeAxis = "horizontal" | "vertical";
+import type { AlignMode, DistributeAxis } from "./subgraphs.ts";
+export type { AlignMode, DistributeAxis };
 
 function needsManualRelease(token: FlowToken) {
   return !token.ready && !token.consumed && !token.dismissed && (token.delayUntil === undefined || token.needsRelease);
@@ -61,28 +55,6 @@ export interface StructureInspectorItem {
   sessionId?: string;
 }
 
-type StepWithTelemetry = RunStep & {
-  telemetry?: {
-    stepCount: number;
-    inputTokens: number;
-    outputTokens: number;
-    durationMs?: number;
-  };
-};
-
-type TokenWithLoopGate = FlowToken & {
-  loopCapReached?: boolean;
-};
-
-type ExtendedBridge = CanvasBridge & {
-  extendLoop?: (req: {
-    runId: string;
-    edgeId?: string;
-    nodeId?: string;
-    extraRounds?: number;
-  }) => Promise<void>;
-};
-
 export function formatTime(at: number): string {
   return new Date(at).toLocaleTimeString(
     getLanguage() === "en" ? "en-GB" : "zh-CN",
@@ -97,7 +69,7 @@ export function formatDate(at: number): string {
   );
 }
 
-export function formatStepDuration(step: StepWithTelemetry): string | null {
+export function formatStepDuration(step: RunStep): string | null {
   const ms =
     step.telemetry?.durationMs ??
     (step.endedAt && step.endedAt >= step.createdAt
@@ -112,7 +84,7 @@ export function formatStepDuration(step: StepWithTelemetry): string | null {
   return `${mins}m ${rem}s`;
 }
 
-export function formatStepTelemetrySummary(step: StepWithTelemetry): string {
+export function formatStepTelemetrySummary(step: RunStep): string {
   const parts: string[] = [];
   if (step.telemetry) {
     if (step.telemetry.stepCount > 0) {
@@ -592,7 +564,7 @@ export function InspectorPanel({
       onExtendLoop(runId, edgeId, nodeId);
       return;
     }
-    const ext = (bridge as ExtendedBridge | undefined)?.extendLoop;
+    const ext = bridge?.extendLoop;
     if (ext) {
       void ext.call(bridge, { runId, edgeId, nodeId, extraRounds: 1 });
     }
@@ -767,7 +739,7 @@ export function InspectorPanel({
       const targetNode = doc.nodes.find((n) => n.id === selectedEdge.target);
       const hasStructuredOutput = selectedEdge.kind === "continuation" && selectedEdge.trigger !== "off" &&
         sourceNode?.kind === "agent" && targetNode && structuredInput(targetNode, selectedEdge.targetPort);
-      const waitingTokens: { run: FlowspaceRun; token: TokenWithLoopGate }[] =
+      const waitingTokens: { run: FlowspaceRun; token: FlowToken }[] =
         snapshot?.runs
           .filter((r) => ["running", "waiting", "paused"].includes(r.state))
           .flatMap((run) =>
@@ -777,7 +749,7 @@ export function InspectorPanel({
                   tk.edgeId === selectedEdge.id &&
                   needsManualRelease(tk),
               )
-              .map((token) => ({ run, token: token as TokenWithLoopGate })),
+              .map((token) => ({ run, token })),
           ) ?? [];
 
       return (
@@ -1879,9 +1851,9 @@ function summarizeRunSteps(
   snapshot: FlowspaceSnapshot | null,
 ) {
   const nodes = new Map(run.graph.nodes.map(node => [node.id, node]));
-  const steps = new Map(run.steps.map(step => [step.nodeId, step as StepWithTelemetry]));
+  const steps = new Map(run.steps.map(step => [step.nodeId, step]));
   const edges = new Map(run.graph.edges.map(edge => [edge.id, edge]));
-  const gates = new Map<string, TokenWithLoopGate>();
+  const gates = new Map<string, FlowToken>();
   for (const token of run.tokens) {
     if (token.ready || token.consumed || token.dismissed) continue;
     const target = edges.get(token.edgeId)?.target;
@@ -1999,7 +1971,7 @@ export function RunOverviewDock({
       onExtendLoop(runId, edgeId, nodeId);
       return;
     }
-    const ext = (bridge as ExtendedBridge | undefined)?.extendLoop;
+    const ext = bridge?.extendLoop;
     if (ext) {
       void ext.call(bridge, { runId, edgeId, nodeId, extraRounds: 1 });
     }
@@ -2010,7 +1982,7 @@ export function RunOverviewDock({
       run.steps
         .filter((s) => s.state === "completed" && Boolean(s.output?.trim()))
         .map((step) => ({
-          step: step as StepWithTelemetry,
+          step,
           nodeTitle:
             run.graph.nodes.find((n) => n.id === step.nodeId)?.title ??
             step.nodeId,
@@ -2074,7 +2046,7 @@ export function RunOverviewDock({
             const edge = run.graph.edges.find((e) => e.id === token.edgeId);
             return {
               run,
-              token: token as TokenWithLoopGate,
+              token,
               edge,
               targetNode: run.graph.nodes.find((n) => n.id === edge?.target),
             };
@@ -2383,7 +2355,7 @@ export function ActivitySurface({
       onExtendLoop(runId, edgeId, nodeId);
       return;
     }
-    const ext = (bridge as ExtendedBridge | undefined)?.extendLoop;
+    const ext = bridge?.extendLoop;
     if (ext) {
       void ext.call(bridge, { runId, edgeId, nodeId, extraRounds: 1 });
     }
@@ -2398,7 +2370,7 @@ export function ActivitySurface({
           const edge = run.graph.edges.find((e) => e.id === token.edgeId);
           return {
             run,
-            token: token as TokenWithLoopGate,
+            token,
             edge,
             targetNode: run.graph.nodes.find((n) => n.id === edge?.target),
           };
@@ -2412,7 +2384,7 @@ export function ActivitySurface({
       .filter((s) => s.state === "completed" && s.output?.trim())
       .map((step) => ({
         run,
-        step: step as StepWithTelemetry,
+        step,
         nodeTitle:
           run.graph.nodes.find((n) => n.id === step.nodeId)?.title ??
           step.nodeId,
@@ -2700,7 +2672,7 @@ export function ActivitySurface({
                         {t("runTimeline", { count: run.steps.length })}
                       </summary>
                       <div>
-                        {(run.steps as StepWithTelemetry[])
+                        {run.steps
                           .toReversed()
                           .map((step) => {
                             const stepTitle =

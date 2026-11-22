@@ -13154,7 +13154,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_answerHuman_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1671,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1679,"column":3},
     },
     'flowspace/archiveRole': {
       service: 'flowspace',
@@ -13183,7 +13183,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_archiveRole_result$schema,
         jsonSchema: {"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"persona":{"type":"string"},"model":{"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"reasoningEffort":{"type":"string"}},"required":["provider","model"],"additionalProperties":true},"revision":{"type":"number"},"archived":{"type":"boolean","enum":[false,true]}},"required":["id","title","description","persona","model","revision"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1390,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1400,"column":9},
     },
     'flowspace/archiveTeam': {
       service: 'flowspace',
@@ -13212,7 +13212,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_archiveTeam_result$schema,
         jsonSchema: {"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"lead":{"type":"object","properties":{"persona":{"type":"string"},"model":{"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"reasoningEffort":{"type":"string"}},"required":["provider","model"],"additionalProperties":true}},"required":["persona","model"],"additionalProperties":true},"slots":{"type":"array","items":{"type":"object","properties":{"slotId":{"type":"string"},"roleId":{"type":"string"},"label":{"type":"string"},"model":{"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"reasoningEffort":{"type":"string"}},"required":["provider","model"],"additionalProperties":true},"maxInstances":{"type":"number"},"nodeId":{"type":"string","description":"Role node on the canvas that staffs this slot."}},"required":["slotId","roleId","label"],"additionalProperties":true}},"norms":{"type":"string"},"revision":{"type":"number"},"archived":{"type":"boolean","enum":[false,true]}},"required":["id","title","lead","slots","norms","revision"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1413,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1423,"column":9},
     },
     'flowspace/bind': {
       service: 'flowspace',
@@ -13241,7 +13241,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_bind_result$schema,
         jsonSchemaError: 'typert tool schema: recursive selected type requires a supported JSON value declaration',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1901,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1903,"column":9},
     },
     'flowspace/canvasPresence': {
       service: 'flowspace',
@@ -13270,7 +13270,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_canvasPresence_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2374,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2378,"column":3},
     },
     'flowspace/command': {
       service: 'flowspace',
@@ -13299,7 +13299,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_command_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1666,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1674,"column":3},
     },
     'flowspace/debugStep': {
       service: 'flowspace',
@@ -13328,7 +13328,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_debugStep_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1536,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1542,"column":3},
     },
     'flowspace/display': {
       service: 'flowspace',
@@ -13357,7 +13357,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_display_result$schema,
         jsonSchemaError: 'typert tool schema: recursive selected type requires a supported JSON value declaration',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1948,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1950,"column":9},
     },
     'flowspace/draft': {
       service: 'flowspace',
@@ -13386,7 +13386,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_draft_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1631,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1637,"column":9},
     },
     'flowspace/extendLoop': {
       service: 'flowspace',
@@ -13415,7 +13415,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_extendLoop_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1661,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1669,"column":3},
     },
     'flowspace/follow': {
       service: 'flowspace',
@@ -13430,7 +13430,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_follow_result$schema,
         jsonSchemaError: 'typert tool schema: recursive selected type requires a supported JSON value declaration',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2389,"column":10},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2393,"column":10},
     },
     'flowspace/generateReport': {
       service: 'flowspace',
@@ -13459,7 +13459,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_generateReport_result$schema,
         jsonSchema: {"type":"object","properties":{"summary":{"type":"string"},"seconds":{"type":"number"},"tokens":{"type":"number"},"rounds":{"type":"number"},"bestNode":{"type":"string"},"artifacts":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"nodeId":{"type":"string"},"sessionId":{"type":"string"},"turn":{"type":"number"},"seq":{"type":"number"},"time":{"type":"number"},"path":{"type":"string"},"description":{"type":"string"}},"required":["id","nodeId","sessionId","turn","seq","time","path"],"additionalProperties":true}}},"required":["summary","seconds","tokens","rounds","artifacts"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1541,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1547,"column":9},
     },
     'flowspace/gitAction': {
       service: 'flowspace',
@@ -13488,7 +13488,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_gitAction_result$schema,
         jsonSchema: {"type":"object","properties":{"isGitRepo":{"type":"boolean"},"cwd":{"type":"string"},"topLevel":{"type":"string"},"commonDir":{"type":"string"},"branch":{"type":"string"},"detached":{"type":"boolean"},"upstream":{"type":"string"},"ahead":{"type":"number"},"behind":{"type":"number"},"revision":{"type":"string"},"staged":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"origPath":{"type":"string"},"status":{"type":"string","enum":["M","A","D","R","U","?"]},"staged":{"type":"boolean"},"added":{"type":"number"},"deleted":{"type":"number"}},"required":["path","status","staged"],"additionalProperties":true}},"unstaged":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"origPath":{"type":"string"},"status":{"type":"string","enum":["M","A","D","R","U","?"]},"staged":{"type":"boolean"},"added":{"type":"number"},"deleted":{"type":"number"}},"required":["path","status","staged"],"additionalProperties":true}},"branches":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"current":{"type":"boolean"},"upstream":{"type":"string"},"ahead":{"type":"number"},"behind":{"type":"number"},"commitOid":{"type":"string"},"worktreePath":{"type":"string"}},"required":["name","current","ahead","behind","commitOid"],"additionalProperties":true}},"worktrees":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"head":{"type":"string"},"branch":{"type":"string"},"bare":{"type":"boolean"},"detached":{"type":"boolean"},"locked":{"type":"boolean"},"isMain":{"type":"boolean"}},"required":["path","head","bare","detached","locked","isMain"],"additionalProperties":true}},"commits":{"type":"array","items":{"type":"object","properties":{"oid":{"type":"string"},"shortOid":{"type":"string"},"parents":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"author":{"type":"string"},"relativeTime":{"type":"string"},"timestamp":{"type":"number"},"refs":{"type":"array","items":{"type":"string"}}},"required":["oid","shortOid","parents","subject","author","relativeTime","timestamp","refs"],"additionalProperties":true}}},"required":["isGitRepo","cwd","branch","detached","ahead","behind","revision","staged","unstaged","branches","worktrees","commits"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2052,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2056,"column":9},
     },
     'flowspace/gitDiff': {
       service: 'flowspace',
@@ -13517,7 +13517,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_gitDiff_result$schema,
         jsonSchema: {"type":"object","properties":{"title":{"type":"string"},"text":{"type":"string"},"hunks":{"type":"array","items":{"type":"object","properties":{"oldStart":{"type":"number"},"oldLines":{"type":"number"},"newStart":{"type":"number"},"newLines":{"type":"number"},"lines":{"type":"array","items":{"type":"string"}}},"required":["oldStart","oldLines","newStart","newLines","lines"],"additionalProperties":true}},"truncated":{"type":"boolean"}},"required":["title","text","hunks","truncated"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2046,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2050,"column":9},
     },
     'flowspace/gitInspect': {
       service: 'flowspace',
@@ -13546,7 +13546,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_gitInspect_result$schema,
         jsonSchema: {"type":"object","properties":{"isGitRepo":{"type":"boolean"},"cwd":{"type":"string"},"topLevel":{"type":"string"},"commonDir":{"type":"string"},"branch":{"type":"string"},"detached":{"type":"boolean"},"upstream":{"type":"string"},"ahead":{"type":"number"},"behind":{"type":"number"},"revision":{"type":"string"},"staged":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"origPath":{"type":"string"},"status":{"type":"string","enum":["M","A","D","R","U","?"]},"staged":{"type":"boolean"},"added":{"type":"number"},"deleted":{"type":"number"}},"required":["path","status","staged"],"additionalProperties":true}},"unstaged":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"origPath":{"type":"string"},"status":{"type":"string","enum":["M","A","D","R","U","?"]},"staged":{"type":"boolean"},"added":{"type":"number"},"deleted":{"type":"number"}},"required":["path","status","staged"],"additionalProperties":true}},"branches":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"current":{"type":"boolean"},"upstream":{"type":"string"},"ahead":{"type":"number"},"behind":{"type":"number"},"commitOid":{"type":"string"},"worktreePath":{"type":"string"}},"required":["name","current","ahead","behind","commitOid"],"additionalProperties":true}},"worktrees":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"head":{"type":"string"},"branch":{"type":"string"},"bare":{"type":"boolean"},"detached":{"type":"boolean"},"locked":{"type":"boolean"},"isMain":{"type":"boolean"}},"required":["path","head","bare","detached","locked","isMain"],"additionalProperties":true}},"commits":{"type":"array","items":{"type":"object","properties":{"oid":{"type":"string"},"shortOid":{"type":"string"},"parents":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"author":{"type":"string"},"relativeTime":{"type":"string"},"timestamp":{"type":"number"},"refs":{"type":"array","items":{"type":"string"}}},"required":["oid","shortOid","parents","subject","author","relativeTime","timestamp","refs"],"additionalProperties":true}}},"required":["isGitRepo","cwd","branch","detached","ahead","behind","revision","staged","unstaged","branches","worktrees","commits"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2032,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2036,"column":9},
     },
     'flowspace/importWorkflow': {
       service: 'flowspace',
@@ -13575,7 +13575,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_importWorkflow_result$schema,
         jsonSchemaError: 'typert tool schema: recursive selected type requires a supported JSON value declaration',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1600,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1606,"column":9},
     },
     'flowspace/inspectEdgePayload': {
       service: 'flowspace',
@@ -13605,7 +13605,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_inspectEdgePayload_result$schema,
         jsonSchema: {"type":"object","properties":{"edgeId":{"type":"string"},"kind":{"type":"string","enum":["reference","continuation","event"]},"mode":{"type":"string"},"sourceTitle":{"type":"string"},"targetTitle":{"type":"string"},"sessionId":{"type":"string"},"seq":{"type":"number"},"byteLength":{"type":"number"},"willSpill":{"type":"boolean"},"itemCount":{"type":"number"},"originalCount":{"type":"number"},"freshness":{"type":"string","enum":["always","pending","sent","updated","live"]},"summary":{"type":"string"},"content":{"type":"string"}},"required":["edgeId","kind","mode","sourceTitle","targetTitle","byteLength","willSpill","freshness","summary","content"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1742,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1744,"column":9},
     },
     'flowspace/launchTrigger': {
       service: 'flowspace',
@@ -13634,7 +13634,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_launchTrigger_result$schema,
         jsonSchemaError: 'typert tool schema: recursive selected type requires a supported JSON value declaration',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1531,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1537,"column":9},
     },
     'flowspace/listModelRoutes': {
       service: 'flowspace',
@@ -13647,7 +13647,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_listModelRoutes_result$schema,
         jsonSchema: {"type":"array","items":{"type":"object","properties":{"provider":{"type":"string"},"providerName":{"type":"string"},"model":{"type":"string"},"name":{"type":"string"}},"required":["provider","providerName","model","name"],"additionalProperties":true}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1422,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1432,"column":9},
     },
     'flowspace/listRoles': {
       service: 'flowspace',
@@ -13660,7 +13660,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_listRoles_result$schema,
         jsonSchema: {"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"persona":{"type":"string"},"model":{"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"reasoningEffort":{"type":"string"}},"required":["provider","model"],"additionalProperties":true},"revision":{"type":"number"},"archived":{"type":"boolean","enum":[false,true]}},"required":["id","title","description","persona","model","revision"],"additionalProperties":true}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1376,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1386,"column":3},
     },
     'flowspace/listTeams': {
       service: 'flowspace',
@@ -13673,7 +13673,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_listTeams_result$schema,
         jsonSchema: {"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"lead":{"type":"object","properties":{"persona":{"type":"string"},"model":{"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"reasoningEffort":{"type":"string"}},"required":["provider","model"],"additionalProperties":true}},"required":["persona","model"],"additionalProperties":true},"slots":{"type":"array","items":{"type":"object","properties":{"slotId":{"type":"string"},"roleId":{"type":"string"},"label":{"type":"string"},"model":{"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"reasoningEffort":{"type":"string"}},"required":["provider","model"],"additionalProperties":true},"maxInstances":{"type":"number"},"nodeId":{"type":"string","description":"Role node on the canvas that staffs this slot."}},"required":["slotId","roleId","label"],"additionalProperties":true}},"norms":{"type":"string"},"revision":{"type":"number"},"archived":{"type":"boolean","enum":[false,true]}},"required":["id","title","lead","slots","norms","revision"],"additionalProperties":true}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1399,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1409,"column":3},
     },
     'flowspace/openSessionTerminal': {
       service: 'flowspace',
@@ -13702,7 +13702,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_openSessionTerminal_result$schema,
         jsonSchema: {"type":"object","properties":{"id":{"type":"string"},"sessionId":{"type":"string"},"title":{"type":"string"},"cwd":{"type":"string"},"state":{"type":"string","enum":["running","exited","failed"]},"exitCode":{"oneOf":[{"type":"null","const":null},{"type":"number"}]},"origin":{"type":"string","enum":["agent","user"]}},"required":["id","sessionId","title","cwd","state","exitCode","origin"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2178,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2182,"column":9},
     },
     'flowspace/plan': {
       service: 'flowspace',
@@ -13731,7 +13731,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_plan_result$schema,
         jsonSchema: {"type":"object","properties":{"roots":{"type":"array","items":{"type":"string"}},"later":{"type":"array","items":{"type":"string"}},"confirmation":{"type":"array","items":{"type":"string"}},"skipped":{"type":"array","items":{"type":"object","properties":{"nodeId":{"type":"string"},"reason":{"type":"string"}},"required":["nodeId","reason"],"additionalProperties":true}}},"required":["roots","later","confirmation","skipped"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1644,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1652,"column":3},
     },
     'flowspace/previewData': {
       service: 'flowspace',
@@ -13761,7 +13761,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_previewData_result$schema,
         jsonSchema: {"type":"object","properties":{"state":{"type":"string","enum":["waiting","error","ready","trial"]},"lines":{"type":"array","items":{"type":"string"}},"count":{"type":"number"},"remaining":{"type":"number"},"originalCount":{"type":"number"},"message":{"type":"string"},"telemetry":{"type":"object","properties":{"stepCount":{"type":"number"},"inputTokens":{"type":"number"},"outputTokens":{"type":"number"},"durationMs":{"type":"number"}},"required":["stepCount","inputTokens","outputTokens"],"additionalProperties":true}},"required":["state","lines","count","remaining"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1681,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1689,"column":3},
     },
     'flowspace/projectStructures': {
       service: 'flowspace',
@@ -13774,7 +13774,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_projectStructures_result$schema,
         jsonSchema: {"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"path":{"type":"string"},"isGitRepo":{"type":"boolean"},"currentBranch":{"type":"string"},"branches":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"current":{"type":"boolean"},"upstream":{"type":"string"},"ahead":{"type":"number"},"behind":{"type":"number"},"commitOid":{"type":"string"},"worktreePath":{"type":"string"}},"required":["name","current","ahead","behind","commitOid"],"additionalProperties":true}},"worktrees":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"head":{"type":"string"},"branch":{"type":"string"},"bare":{"type":"boolean"},"detached":{"type":"boolean"},"locked":{"type":"boolean"},"isMain":{"type":"boolean"}},"required":["path","head","bare","detached","locked","isMain"],"additionalProperties":true}}},"required":["id","name","path","isGitRepo","branches","worktrees"],"additionalProperties":true}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2004,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2008,"column":9},
     },
     'flowspace/readTerminalScreen': {
       service: 'flowspace',
@@ -13803,7 +13803,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_readTerminalScreen_result$schema,
         jsonSchema: {"type":"object","properties":{"sessionId":{"type":"string"},"terminalId":{"type":"string"},"title":{"type":"string"},"state":{"type":"string","enum":["running","exited","failed"]},"text":{"type":"string"},"totalLines":{"type":"number"},"truncated":{"type":"boolean"}},"required":["sessionId","terminalId","title","state","text","totalLines","truncated"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2208,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2212,"column":9},
     },
     'flowspace/readWorkspaceFile': {
       service: 'flowspace',
@@ -13833,7 +13833,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_readWorkspaceFile_result$schema,
         jsonSchema: {"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"truncated":{"type":"boolean"}},"required":["path","content","truncated"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2308,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2312,"column":9},
     },
     'flowspace/release': {
       service: 'flowspace',
@@ -13862,7 +13862,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_release_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1686,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1694,"column":3},
     },
     'flowspace/remindEmission': {
       service: 'flowspace',
@@ -13891,7 +13891,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_remindEmission_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1676,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1684,"column":3},
     },
     'flowspace/rerunFailed': {
       service: 'flowspace',
@@ -13920,7 +13920,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_rerunFailed_result$schema,
         jsonSchemaError: 'typert tool schema: recursive selected type requires a supported JSON value declaration',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1656,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1664,"column":3},
     },
     'flowspace/restoreSnapshot': {
       service: 'flowspace',
@@ -13950,7 +13950,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_restoreSnapshot_result$schema,
         jsonSchemaError: 'typert tool schema: recursive selected type requires a supported JSON value declaration',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1696,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1704,"column":9},
     },
     'flowspace/revertContainerChange': {
       service: 'flowspace',
@@ -13979,7 +13979,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_revertContainerChange_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1518,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1524,"column":9},
     },
     'flowspace/save': {
       service: 'flowspace',
@@ -14008,7 +14008,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_save_result$schema,
         jsonSchemaError: 'typert tool schema: recursive selected type requires a supported JSON value declaration',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1436,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1446,"column":9},
     },
     'flowspace/saveRole': {
       service: 'flowspace',
@@ -14037,7 +14037,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_saveRole_result$schema,
         jsonSchema: {"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"persona":{"type":"string"},"model":{"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"reasoningEffort":{"type":"string"}},"required":["provider","model"],"additionalProperties":true},"revision":{"type":"number"},"archived":{"type":"boolean","enum":[false,true]}},"required":["id","title","description","persona","model","revision"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1381,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1391,"column":9},
     },
     'flowspace/saveTeam': {
       service: 'flowspace',
@@ -14066,7 +14066,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_saveTeam_result$schema,
         jsonSchema: {"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"lead":{"type":"object","properties":{"persona":{"type":"string"},"model":{"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"reasoningEffort":{"type":"string"}},"required":["provider","model"],"additionalProperties":true}},"required":["persona","model"],"additionalProperties":true},"slots":{"type":"array","items":{"type":"object","properties":{"slotId":{"type":"string"},"roleId":{"type":"string"},"label":{"type":"string"},"model":{"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"reasoningEffort":{"type":"string"}},"required":["provider","model"],"additionalProperties":true},"maxInstances":{"type":"number"},"nodeId":{"type":"string","description":"Role node on the canvas that staffs this slot."}},"required":["slotId","roleId","label"],"additionalProperties":true}},"norms":{"type":"string"},"revision":{"type":"number"},"archived":{"type":"boolean","enum":[false,true]}},"required":["id","title","lead","slots","norms","revision"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1404,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1414,"column":9},
     },
     'flowspace/sessionChangeDiff': {
       service: 'flowspace',
@@ -14095,7 +14095,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_sessionChangeDiff_result$schema,
         jsonSchema: {"type":"object","properties":{"path":{"type":"string"},"display":{"type":"string"},"kind":{"type":"string","enum":["text","binary","oversized"]},"hunks":{"type":"array","items":{"type":"object","properties":{"oldStart":{"type":"number"},"oldLines":{"type":"number"},"newStart":{"type":"number"},"newLines":{"type":"number"},"lines":{"type":"array","items":{"type":"string"}}},"required":["oldStart","oldLines","newStart","newLines","lines"],"additionalProperties":true}},"formatted":{"type":"string"}},"required":["path","display","kind","hunks","formatted"],"additionalProperties":true},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2079,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2083,"column":9},
     },
     'flowspace/sessionChanges': {
       service: 'flowspace',
@@ -14124,7 +14124,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_sessionChanges_result$schema,
         jsonSchema: {"type":"array","items":{"type":"object","properties":{"sessionId":{"type":"string"},"turn":{"type":"number"},"seq":{"type":"number"},"cwd":{"type":"string"},"total":{"type":"number"},"added":{"type":"number"},"deleted":{"type":"number"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"display":{"type":"string"},"added":{"type":"number"},"deleted":{"type":"number"},"binary":{"type":"boolean","enum":[false,true]},"oversized":{"type":"boolean","enum":[false,true]}},"required":["path","display","added","deleted"],"additionalProperties":true}}},"required":["sessionId","turn","seq","cwd","total","added","deleted","files"],"additionalProperties":true}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2066,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2070,"column":9},
     },
     'flowspace/sessions': {
       service: 'flowspace',
@@ -14137,7 +14137,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_sessions_result$schema,
         jsonSchema: {"type":"array","items":{"type":"object","properties":{"sessionId":{"type":"string"},"title":{"type":"string"},"cwd":{"type":"string"},"running":{"type":"boolean"},"updatedAt":{"type":"number"}},"required":["sessionId","title","running"],"additionalProperties":true}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1975,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1979,"column":9},
     },
     'flowspace/sessionTerminals': {
       service: 'flowspace',
@@ -14166,7 +14166,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_sessionTerminals_result$schema,
         jsonSchema: {"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"sessionId":{"type":"string"},"title":{"type":"string"},"cwd":{"type":"string"},"state":{"type":"string","enum":["running","exited","failed"]},"exitCode":{"oneOf":[{"type":"null","const":null},{"type":"number"}]},"origin":{"type":"string","enum":["agent","user"]}},"required":["id","sessionId","title","cwd","state","exitCode","origin"],"additionalProperties":true}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2159,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2163,"column":3},
     },
     'flowspace/snapshot': {
       service: 'flowspace',
@@ -14179,7 +14179,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_snapshot_result$schema,
         jsonSchemaError: 'typert tool schema: recursive selected type requires a supported JSON value declaration',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1350,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1360,"column":3},
     },
     'flowspace/start': {
       service: 'flowspace',
@@ -14208,7 +14208,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_start_result$schema,
         jsonSchemaError: 'typert tool schema: recursive selected type requires a supported JSON value declaration',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1650,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1658,"column":3},
     },
     'flowspace/stopNode': {
       service: 'flowspace',
@@ -14237,7 +14237,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_stopNode_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2379,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2383,"column":9},
     },
     'flowspace/workspaceFiles': {
       service: 'flowspace',
@@ -14266,7 +14266,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_workspaceFiles_result$schema,
         jsonSchema: {"type":"array","items":{"type":"string"}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2253,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2257,"column":9},
     },
     'flowspace/workspaces': {
       service: 'flowspace',
@@ -14279,7 +14279,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_workspaces_result$schema,
         jsonSchema: {"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"path":{"type":"string"}},"required":["id","name","path"],"additionalProperties":true}},
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1997,"column":3},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":2001,"column":3},
     },
     'flowspace/writeVariable': {
       service: 'flowspace',
@@ -14308,7 +14308,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo({
         create: dsh_flowspace_flowspace_writeVariable_result$schema,
         jsonSchemaError: 'typert tool schema: unsupported void value',
       },
-      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1526,"column":9},
+      sourceLocation: {"file":"packages/flowspace/src/index.ts","line":1532,"column":9},
     },
   },
 }, z)

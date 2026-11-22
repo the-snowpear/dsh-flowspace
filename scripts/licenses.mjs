@@ -3,10 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 const pkg = resolve(import.meta.dirname, "../packages/flowspace");
 const req = createRequire(join(pkg, "package.json"));
-const packages = [
-  ["@xyflow/react", req],
-  ["lucide-react", req],
-];
+const packages = [];
 const texts = [];
 const seen = new Set();
 for (const [name, anchor] of packages) {
@@ -47,5 +44,8 @@ for (const [name, anchor] of packages) {
 }
 await writeFile(
   join(pkg, "THIRD_PARTY_NOTICES.md"),
-  "# Bundled dependencies\n\n" + texts.join("\n\n"),
+  "# Bundled dependencies\n\n" +
+    (texts.length
+      ? texts.join("\n\n")
+      : "None — all client UI primitives and icons are first-party.\n"),
 );

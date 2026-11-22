@@ -5,6 +5,12 @@ import { boardContent } from "./board.ts";
 import { canConnect } from "./connect.ts";
 import { contentList, contentOf, DEFAULT_LIST_LIMIT, selectedFileContent } from "./content.ts";
 import { newEdge, newFlowNode, newNode, uid } from "./document.ts";
+import {
+  copyBoundNodeFields,
+  FANOUT_OVERRIDE_EDGE_FIELDS,
+  FANOUT_OVERRIDE_NODE_FIELDS,
+  stripForFreshInstance,
+} from "./nodeFields.ts";
 import { createStaticResolver, type PreviewOverrides } from "./nodes/data/preview.ts";
 
 type Graph = Pick<FlowspaceDocument, "nodes" | "edges">;
@@ -233,13 +239,9 @@ function masterGraph(graph: Graph, group: FlowNode, fan: FlowNode, merge: FlowNo
 
 function cloneMaster(master: FlowNode, fanId: string, key: string, title: string, index: number, dy: number,
   ids: Map<string, string>, prior?: FlowNode): FlowNode {
-  const copy = structuredClone(master);
+  const copy = stripForFreshInstance(structuredClone(master));
   delete copy.masterOf;
   delete copy.templateSlotId;
-  delete copy.sessionId;
-  delete copy.lastSubmittedTask;
-  delete copy.window;
-  delete copy.nudge;
   copy.id = ids.get(master.id)!;
   copy.generatedBy = fanId;
   copy.masterNodeId = master.id;
@@ -255,13 +257,9 @@ function cloneMaster(master: FlowNode, fanId: string, key: string, title: string
   }
   if (prior?.generatedRevision !== undefined) copy.generatedRevision = prior.generatedRevision;
   if (prior?.sessionId) {
-    copy.sessionId = prior.sessionId;
-    copy.lastSubmittedTask = prior.lastSubmittedTask;
+    copyBoundNodeFields(copy, prior);
     copy.draft = prior.draft;
     copy.tab = prior.tab;
-    copy.cwd = prior.cwd;
-    copy.workspaceId = prior.workspaceId;
-    copy.worktreePath = prior.worktreePath;
   }
   return copy;
 }
@@ -398,8 +396,7 @@ export function markFanoutOverrides(previous: Graph, next: Graph): void {
   const laneId = (item: { generatedBy?: string; itemKey?: string }) => JSON.stringify([item.generatedBy, item.itemKey]);
   const resumed = new Set(next.nodes.filter(node => node.generatedBy && node.overridden === false &&
     before.get(node.id)?.overridden === true).map(laneId));
-  const fields: (keyof FlowNode)[] = ["title", "task", "draft", "continuationPrompt", "text", "config",
-    "columns", "selectedItems", "items", "roleLabel", "planMode", "teamRef", "participation", "rerun"];
+  const fields = FANOUT_OVERRIDE_NODE_FIELDS;
   for (const node of previous.nodes) {
     if (!node.generatedBy || node.removed) continue;
     const updated = after.get(node.id);
@@ -415,8 +412,7 @@ export function markFanoutOverrides(previous: Graph, next: Graph): void {
   }
   const edges = new Map(next.edges.map(edge => [edge.id, edge]));
   const previousEdges = new Map(previous.edges.map(edge => [edge.id, edge]));
-  const edgeFields = (edge: FlowEdge) => [edge.kind, edge.source, edge.target, edge.sourcePort, edge.targetPort,
-    edge.mode, edge.trigger, edge.emitMode, edge.always, edge.maxRounds, edge.logic, edge.sourceItemKey];
+  const edgeFields = (edge: FlowEdge) => FANOUT_OVERRIDE_EDGE_FIELDS.map(field => edge[field]);
   for (const edge of previous.edges) {
     if (!edge.generatedBy) continue;
     const updated = edges.get(edge.id);

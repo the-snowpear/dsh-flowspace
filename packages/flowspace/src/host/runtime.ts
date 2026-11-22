@@ -715,9 +715,16 @@ export class DshRuntime implements RuntimeAdapter {
       }
       const resolved: string[] = [];
       const missingPaths: string[] = [];
+      const root = typeof this.ctx.fs.contains === "function"
+        ? await this.ctx.fs.resolve(baseCwd ?? process.cwd()).catch(() => undefined)
+        : undefined;
       for (const p of paths) {
         try {
           const target = await this.ctx.fs.resolve(p, { cwd: baseCwd });
+          if (root && typeof this.ctx.fs.contains === "function" && !this.ctx.fs.contains(root, target)) {
+            missingPaths.push(p);
+            continue;
+          }
           const info = await this.ctx.fs.stat(target);
           if (!info) {
             missingPaths.push(p);

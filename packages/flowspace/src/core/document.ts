@@ -67,7 +67,7 @@ export function emptyDocument(): FlowspaceDocument {
   };
 }
 
-const DEFAULT_DIMS: Record<FlowNode["kind"], [number, number]> = {
+export const DEFAULT_NODE_FULL_SIZE: Record<FlowNode["kind"], [number, number]> = {
   agent: [312, 392],
   note: [276, 200],
   file: [300, 286],
@@ -75,9 +75,9 @@ const DEFAULT_DIMS: Record<FlowNode["kind"], [number, number]> = {
   group: [1152, 474],
   board: [580, 380],
   detail: [340, 362],
-  git: [380, 376],
-  changes: [340, 318],
-  terminal: [360, 300],
+  git: [420, 410],
+  changes: [360, 340],
+  terminal: [380, 320],
   role: [260, 336],
   flow: DEFAULT_FLOW_SIZE.full,
 };
@@ -141,7 +141,7 @@ export function newNode(
   title?: string,
   locale: "zh" | "en" = "zh",
 ): FlowNode {
-  const [width, height] = DEFAULT_DIMS[kind] ?? [312, 260];
+  const [width, height] = DEFAULT_NODE_FULL_SIZE[kind] ?? [312, 260];
   const columns = kind === "board" ? defaultBoardWithExamples(locale) : undefined;
   const isCustomTitle =
     Boolean(title) &&

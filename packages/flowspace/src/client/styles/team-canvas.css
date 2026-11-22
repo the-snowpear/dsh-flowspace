@@ -92,7 +92,6 @@
 }
 .fs-root .fs-role-row { display: flex; align-items: end; gap: 8px; }
 .fs-root .fs-role-model { flex: 1; min-width: 0; }
-.fs-root .fs-role-model[data-missing] .fs-model-select-trigger,
 .fs-root .fs-role-model[data-missing] button[aria-haspopup] { box-shadow: 0 0 0 1px color-mix(in oklab, var(--amber) 55%, transparent); }
 .fs-root .fs-role-foot {
   display: flex; align-items: center; gap: 6px; margin-top: 2px; padding-top: 8px;

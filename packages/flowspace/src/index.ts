@@ -21,6 +21,7 @@ import {
   uid,
   workflowNodes,
 } from "./core/document.ts";
+import { copyBoundNodeFields } from "./core/nodeFields.ts";
 import { Scheduler } from "./core/scheduler.ts";
 import { mergePendingGeneration, stampGeneratedBatch } from "./core/generation.ts";
 import { laneTitle } from "./core/fanout.ts";
@@ -278,6 +279,7 @@ export class FlowspaceService extends TypertRemoteService {
   private git = new HostGitService();
   private inputContexts = new Map<string, Promise<PreparedReferenceEntry[]>>();
   private deferredPersistTimer?: ReturnType<typeof setTimeout>;
+  private disposed = false;
 
   constructor(ctx: Context) {
     super(ctx, "flowspace");
@@ -735,7 +737,11 @@ export class FlowspaceService extends TypertRemoteService {
     });
 
     this.ctx.effect(() => async () => {
+      this.disposed = true;
       clearTimeout(this.deferredPersistTimer);
+      this.inputContexts.clear();
+      this.reportRequests.clear();
+      this.operations.dispose();
       await this.scheduler.dispose();
       this.state.listeners.forEach((fn) => fn());
       await this.domain.close();
@@ -1046,9 +1052,11 @@ export class FlowspaceService extends TypertRemoteService {
 
     if (evAny.type === "step/start" && evAny.data) {
       const turn = Number(evAny.data.turn ?? 0);
-      if (this.scheduler.recordTelemetry(sessionId, turn, { addStep: true })) {
-        this.publish();
-      }
+      report(
+        this.scheduler.recordTelemetry(sessionId, turn, { addStep: true }).then((updated) => {
+          if (updated) this.publish();
+        }),
+      );
     }
 
     if (evAny.type === "deliverables/presented" && evAny.data) {
@@ -1135,10 +1143,12 @@ export class FlowspaceService extends TypertRemoteService {
       const text = plainText(event.data.message.content);
       const usage = event.data.usage;
       if (usage) {
-        this.scheduler.recordTelemetry(sessionId, event.data.turn, {
-          inputTokens: usage.inputTokens,
-          outputTokens: usage.outputTokens,
-        });
+        report(
+          this.scheduler.recordTelemetry(sessionId, event.data.turn, {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+          }),
+        );
         report(this.scheduler.nativeStatus(sessionId, "usage", JSON.stringify(usage), event.seq));
       }
       // Preserve earlier non-empty assistant conclusion in multi-step turns when a final tool/usage step emits empty text
@@ -1452,13 +1462,9 @@ export class FlowspaceService extends TypertRemoteService {
       const prior = previousNodes.get(node.id);
       const old = portable && prior?.teamRef?.teamId !== node.teamRef?.teamId ? undefined : prior;
       if (old?.sessionId) {
-        node.sessionId = old.sessionId;
+        copyBoundNodeFields(node, old);
         node.teamRef = old.teamRef;
         if (node.teamRef) delete node.teamConfig;
-        node.cwd = old.cwd;
-        node.workspaceId = old.workspaceId;
-        node.branch = old.branch;
-        node.worktreePath = old.worktreePath;
       }
       if (node.sessionId && this.teams.isLead(node.sessionId) && !this.teams.ownsNode(node.sessionId, node.id))
         throw new Error("团队主管会话必须由对应的画布团队节点创建");
@@ -1629,15 +1635,17 @@ export class FlowspaceService extends TypertRemoteService {
 
   @Remote
   async draft(request: DraftRequest): Promise<void> {
-    const node = this.node(request.nodeId);
-    node.draft = request.draft;
-    syncUntitledAgentNode(node);
-    const cleanDoc = sanitizeDocumentForWire(this.state.doc);
-    this.state.doc = cleanDoc;
-    await this.domain
-      .table("documents")
-      .put("main", structuredClone(cleanDoc));
-    this.publish();
+    await this.scheduler.transact(async () => {
+      const node = this.node(request.nodeId);
+      node.draft = request.draft;
+      syncUntitledAgentNode(node);
+      const cleanDoc = sanitizeDocumentForWire(this.state.doc);
+      this.state.doc = cleanDoc;
+      await this.domain
+        .table("documents")
+        .put("main", structuredClone(cleanDoc));
+      this.publish();
+    });
   }
 
   @Remote
@@ -1709,17 +1717,10 @@ export class FlowspaceService extends TypertRemoteService {
       const liveNodes = this.state.doc.nodes;
       const restoredNodes = structuredClone(snap.nodes).map((n) => {
         const cur = liveNodes.find((x) => x.id === n.id);
-        return cur?.sessionId && cur.teamRef?.teamId === n.teamRef?.teamId
-          ? {
-              ...n,
-              sessionId: cur.sessionId,
-              cwd: cur.cwd,
-              workspaceId: cur.workspaceId,
-              branch: cur.branch,
-              worktreePath: cur.worktreePath,
-              lastSubmittedTask: cur.lastSubmittedTask,
-            }
-          : n;
+        if (cur?.sessionId && cur.teamRef?.teamId === n.teamRef?.teamId) {
+          copyBoundNodeFields(n, cur);
+        }
+        return n;
       });
 
       const nextDoc: FlowspaceDocument = sanitizeDocumentForWire({
@@ -1729,6 +1730,7 @@ export class FlowspaceService extends TypertRemoteService {
         viewport: structuredClone(snap.viewport),
       });
       checkDocument(nextDoc);
+      validateTriggers(nextDoc);
       this.state.doc = nextDoc;
       await this.persist();
       await this.dataFileWatch.sync(nextDoc);
@@ -1946,29 +1948,31 @@ export class FlowspaceService extends TypertRemoteService {
 
   @Remote
   async display(request: SourceRequest): Promise<FlowNode> {
-    const source = this.state.doc.nodes.find((n) => n.id === request.nodeId);
-    if (!source) throw new Error("来源节点不存在");
-    const captured =
-      request.text === undefined
-        ? source.kind === "agent"
-          ? await this.runtime.capture(source, "conclusion", request.seq)
-          : await this.runtime.reference(source)
-        : undefined;
-    const node = {
-      ...newNode(
-        "display",
-        source.x + source.width + 60,
-        source.y + 40,
-        source.title + " · 结果",
-      ),
-      text: request.text ?? captured?.text ?? "",
-      sourceNodeId: source.id,
-      sourceSeq: request.seq ?? captured?.seq,
-      fixed: request.fixed,
-    };
-    this.state.doc.nodes.push(node);
-    await this.persist();
-    return structuredClone(node);
+    return this.scheduler.transact(async () => {
+      const source = this.state.doc.nodes.find((n) => n.id === request.nodeId);
+      if (!source) throw new Error("来源节点不存在");
+      const captured =
+        request.text === undefined
+          ? source.kind === "agent"
+            ? await this.runtime.capture(source, "conclusion", request.seq)
+            : await this.runtime.reference(source)
+          : undefined;
+      const node = {
+        ...newNode(
+          "display",
+          source.x + source.width + 60,
+          source.y + 40,
+          source.title + " · 结果",
+        ),
+        text: request.text ?? captured?.text ?? "",
+        sourceNodeId: source.id,
+        sourceSeq: request.seq ?? captured?.seq,
+        fixed: request.fixed,
+      };
+      this.state.doc.nodes.push(node);
+      await this.persist();
+      return structuredClone(node);
+    });
   }
 
   @Remote
@@ -2396,12 +2400,12 @@ export class FlowspaceService extends TypertRemoteService {
     this.state.listeners.add(notify);
     signal.addEventListener("abort", notify, { once: true });
     try {
-      while (!signal.aborted) {
+      while (!signal.aborted && !this.disposed) {
         if (!changed)
           await new Promise<void>((resolve) => {
             wake = resolve;
           });
-        if (signal.aborted) break;
+        if (signal.aborted || this.disposed) break;
         changed = false;
         wake = undefined;
         yield this.snapshot();

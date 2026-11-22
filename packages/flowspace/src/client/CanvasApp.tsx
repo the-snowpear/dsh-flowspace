@@ -516,9 +516,19 @@ function EmbeddedSession({
   );
 }
 
+type CardUiState = {
+  selected?: boolean;
+  snapPortId?: string;
+  fileDraft?: string;
+  hubKind?: FlowEdge["kind"];
+  staffSnapped?: boolean;
+  quoteText?: string;
+};
+
 type CardRenderer = (
   node: FlowNode, placement: "canvas" | "window" | "conversation", snapshot: FlowspaceSnapshot | null,
   box: Box, semantic?: boolean, prewarmFull?: boolean, contentVersion?: object, branchOffset?: number,
+  ui?: CardUiState,
 ) => ReactNode;
 type WireLayout = { edge: FlowEdge; from: WireEnd; geom: WireRoute; extent: Box; evState: string };
 
@@ -549,10 +559,12 @@ function CardBody({ compact, preserve, prewarmFull, contentVersion, full, summar
   </>;
 }
 
-const ViewportCard = memo(function ViewportCard({ node, visible, prepare, semantic, box, dx, dy, render, snapshot, branchOffset, onBranchScroll }: {
+const ViewportCard = memo(function ViewportCard({ node, visible, prepare, semantic, box, dx, dy, render, snapshot, branchOffset, onBranchScroll,
+  selected, snapPortId, fileDraft, hubKind, staffSnapped, quoteText }: {
   node: FlowNode; visible: boolean; prepare: boolean; semantic: boolean; box: Box; dx: number; dy: number;
   branchOffset?: number; onBranchScroll: (id: string, top: number) => void;
   render: CardRenderer; snapshot: FlowspaceSnapshot | null; incoming?: FlowEdge[];
+  selected?: boolean; snapPortId?: string; fileDraft?: string; hubKind?: FlowEdge["kind"]; staffSnapped?: boolean; quoteText?: string;
 }) {
   const slot = useRef<HTMLDivElement>(null);
   const scroll = useRef(new Map<string, number>());
@@ -560,10 +572,12 @@ const ViewportCard = memo(function ViewportCard({ node, visible, prepare, semant
   const keepMounted = node.expanded && (Boolean(node.sessionId) || ["git", "changes", "terminal"].includes(node.kind));
   const mounted = visible || (keepMounted ? visited.current : prepare);
   const prewarmFull = prepare && visible && !keepMounted && node.expanded;
-  const contentVersion = useMemo(() => ({}), [node, snapshot, render]);
+  const contentVersion = useMemo(() => ({}), [node, snapshot, render, fileDraft, quoteText]);
   const content = useMemo(() => mounted
-    ? render(node, "canvas", snapshot, box, semantic, prewarmFull, contentVersion, branchOffset)
-    : null, [mounted, render, node, snapshot, box, semantic, prewarmFull, contentVersion, branchOffset]);
+    ? render(node, "canvas", snapshot, box, semantic, prewarmFull, contentVersion, branchOffset,
+      { selected, snapPortId, fileDraft, hubKind, staffSnapped, quoteText })
+    : null, [mounted, render, node, snapshot, box, semantic, prewarmFull, contentVersion, branchOffset,
+    selected, snapPortId, fileDraft, hubKind, staffSnapped, quoteText]);
   useLayoutEffect(() => {
     const card = slot.current?.firstElementChild;
     if (!card) return;
@@ -587,7 +601,9 @@ const ViewportCard = memo(function ViewportCard({ node, visible, prepare, semant
 }, (before, after) => {
   if (before.branchOffset !== after.branchOffset || before.node !== after.node || before.visible !== after.visible || before.prepare !== after.prepare ||
     before.semantic !== after.semantic || before.box !== after.box || before.dx !== after.dx || before.dy !== after.dy ||
-    before.render !== after.render || before.incoming !== after.incoming) return false;
+    before.render !== after.render || before.incoming !== after.incoming ||
+    before.selected !== after.selected || before.snapPortId !== after.snapPortId || before.fileDraft !== after.fileDraft ||
+    before.hubKind !== after.hubKind || before.staffSnapped !== after.staffSnapped || before.quoteText !== after.quoteText) return false;
   if (before.snapshot === after.snapshot) return true;
   const node = after.node;
   if (node.flowType === "flowspace/variable") return before.snapshot?.variables === after.snapshot?.variables;
@@ -880,6 +896,17 @@ export function CanvasApp({
   const sidebarAutoAdjusted = useRef(false);
 
   const [vpSize, setVpSize] = useState({ width: 960, height: 640 });
+  const vpSizeRef = useRef(vpSize);
+  vpSizeRef.current = vpSize;
+  const isDraggingRef = useRef(isDragging);
+  isDraggingRef.current = isDragging;
+  const connectingRef = useRef(connecting);
+  connectingRef.current = connecting;
+  const selectionNodeSet = useMemo(() => new Set(selection.nodes), [selection.nodes]);
+  const connectSession = useMemo(
+    () => (connecting ? { kind: connecting.kind, anchor: connecting.anchor, fromIds: connecting.fromIds } : null),
+    [connecting?.kind, connecting?.anchor, connecting?.fromIds],
+  );
   const [hostDark, setHostDark] = useState(detectHostDark);
   const [sysReducedMotion, setSysReducedMotion] = useState(false);
 
@@ -5757,6 +5784,10 @@ export function CanvasApp({
   // change the moved card's own props and can reuse every unrelated card body.
   const movingStaff = gesture?.nodes && [...gesture.nodes.keys()].some(id => contentIndex.nodesById.get(id)?.staffOf);
   const crewNodes = movingStaff ? doc.nodes : baseDoc.nodes;
+  const staffDragSession = useMemo(
+    () => (staffDrag ? { roleId: staffDrag.roleId, teamId: staffDrag.teamId } : null),
+    [staffDrag?.roleId, staffDrag?.teamId],
+  );
   /* Render a Single Node Card (used on Canvas, Floating Window, and Focused Conversation Surface) */
   const renderNodeCard = useCallback((
     node: FlowNode,
@@ -5767,6 +5798,7 @@ export function CanvasApp({
     prewarmFull?: boolean,
     contentVersion?: object,
     branchOffset = 0,
+    ui?: CardUiState,
   ) => {
     const nodesById = contentIndex.nodesById;
     const runtime = runtimeIndex(snapshot);
@@ -5782,7 +5814,7 @@ export function CanvasApp({
     const waitingGates =
       node.kind === "agent" ? runtime.waiting.get(node.id) ?? [] : [];
     const live = runtime.live.get(node.id);
-    const isSelected = selection.nodes.includes(node.id);
+    const isSelected = Boolean(ui?.selected);
     const compact = placement === "canvas" && Boolean(box.compact);
     const masterHead = !!node.masterOf && !!edgeIndex.incoming.get(node.id)?.some(edge =>
       !edge.generatedBy && edge.kind === "continuation" && edge.source === node.masterOf);
@@ -5793,8 +5825,8 @@ export function CanvasApp({
 
     let style: React.CSSProperties | undefined;
     if (placement === "window" && node.window) {
-      const aw = areaRef.current?.clientWidth || vpSize.width;
-      const ah = areaRef.current?.clientHeight || vpSize.height;
+      const aw = areaRef.current?.clientWidth || vpSizeRef.current.width;
+      const ah = areaRef.current?.clientHeight || vpSizeRef.current.height;
       const win = node.window;
       const rect =
         win.snap === "left"
@@ -5823,17 +5855,17 @@ export function CanvasApp({
       style = { ...style, ...hueStyle(node.teamModel ?? snapshot?.roles?.find((role) => role.id === node.roleRef)?.model) };
     }
 
-    const dragDirection = connecting?.anchor.direction === "in" ? "out" : "in";
-    const available = (kind: FlowEdge["kind"], portId: string) => connecting?.kind === kind &&
-      !connecting.fromIds.includes(node.id) && connecting.fromIds.some(id => {
+    const dragDirection = connectSession?.anchor.direction === "in" ? "out" : "in";
+    const available = (kind: FlowEdge["kind"], portId: string) => connectSession?.kind === kind &&
+      !connectSession.fromIds.includes(node.id) && connectSession.fromIds.some(id => {
         const fixed = nodesById.get(id);
-        return fixed && checkDraggedWire(fixed, node, kind, connecting.anchor, portId, docRef.current.edges).ok;
+        return fixed && checkDraggedWire(fixed, node, kind, connectSession.anchor, portId, docRef.current.edges).ok;
       });
     const renderPort = (kind: FlowEdge["kind"], direction: "in" | "out", portId: string = direction, label?: string) => {
-      const input = direction === "in";
       const center = portY(node, kind, compact, portId, branchOffset, undefined, direction);
       const socketY = portY(node, kind, compact, portId, branchOffset, box.h, direction);
       if (socketY !== center) return null;
+      const input = direction === "in";
       const edges = (input ? edgeIndex.incoming : edgeIndex.outgoing).get(node.id) ?? [];
       const atPort = edges.filter(edge => edge.kind === kind && ((input ? edge.targetPort : edge.sourcePort) ?? direction) === portId);
       const incoming = input
@@ -5843,8 +5875,8 @@ export function CanvasApp({
       const multi = incoming.length > 1;
       const linked = atPort.length > 0 || (kind === "reference" &&
         (input ? node.kind === "display" && !!node.sourceNodeId : contentIndex.referenceSources.has(node.id)));
-      const fromHere = connecting?.fromIds.includes(node.id);
-      const target = connecting && direction === dragDirection &&
+      const fromHere = connectSession?.fromIds.includes(node.id);
+      const target = connectSession && direction === dragDirection &&
         (available(kind, portId) || input && kind === "continuation" && available("event", portId));
       const name = label ?? (kind === "reference"
         ? t(input ? "refInput" : "refOutput")
@@ -5863,20 +5895,19 @@ export function CanvasApp({
           className={[
             "port", `port-${kind}`, `port-${direction}`,
             linked && "is-linked",
-            lastEdge && !connecting && "is-draggable-in",
+            lastEdge && !connectSession && "is-draggable-in",
             multi && "is-multi",
-            multi && activeHubLayout?.nodeId === node.id && activeHubLayout.kind === kind && "is-hub-open",
-            fromHere && connecting?.kind === kind && direction === (connecting.anchor.direction ?? "out") &&
-              portId === ((input ? connecting.anchor.targetPort : connecting.anchor.sourcePort) ?? direction) && "is-dragging-origin",
+            multi && ui?.hubKind === kind && "is-hub-open",
+            fromHere && connectSession?.kind === kind && direction === (connectSession.anchor.direction ?? "out") &&
+              portId === ((input ? connectSession.anchor.targetPort : connectSession.anchor.sourcePort) ?? direction) && "is-dragging-origin",
             target && "port-target",
-            target && connecting.snappedTarget?.nodeIds.includes(node.id) &&
-              (connecting.snappedTarget.portId ?? direction) === portId && "is-snap-locked",
+            target && ui?.snapPortId === portId && "is-snap-locked",
           ].filter(Boolean).join(" ")}
           style={{ "--port-y": `${socketY}px` } as React.CSSProperties}
           title={title}
           aria-label={title}
           onPointerEnter={() => {
-            if (connecting || isDragging || !lastEdge) return;
+            if (connectingRef.current || isDraggingRef.current || !lastEdge) return;
             if (multi) openInputHub(node.id, kind);
             else setHoveredEdgeId(lastEdge.id);
           }}
@@ -6549,7 +6580,7 @@ export function CanvasApp({
                     if (sel) setQuoteState({ nodeId: node.id, text: sel });
                   }}
                 >
-                  {quoteState?.nodeId === node.id && (
+                  {ui?.quoteText && (
                     <div className="quote-selection-bar">
                       <span>{t("quoteSelection")}</span>
                       <div>
@@ -6559,7 +6590,7 @@ export function CanvasApp({
                           onClick={() => {
                             extractDisplayFrom(
                               node.id,
-                              quoteState.text,
+                              ui.quoteText!,
                               live?.seq,
                               true,
                             );
@@ -6900,7 +6931,7 @@ export function CanvasApp({
                 .map((p) => p.trim())
                 .filter(Boolean),
         );
-        const draftVal = fileInputDrafts[node.id] ?? "";
+        const draftVal = ui?.fileDraft ?? "";
         const togglePath = (filePath: string) => {
           const next = new Set(selectedSet);
           if (next.has(filePath)) next.delete(filePath);
@@ -7188,9 +7219,9 @@ export function CanvasApp({
         data-node-card={node.id}
         data-fs-semantic={semantic || undefined}
         data-staff-id={node.kind === "role" ? node.id : undefined}
-        data-staff-target={staffDrag && node.id !== (staffDrag.roleId ?? staffDrag.teamId) &&
-          node.kind === (staffDrag.roleId ? "agent" : "role") ? "" : undefined}
-        data-staff-snap={staffTarget === node.id ? "" : undefined}
+        data-staff-target={staffDragSession && node.id !== (staffDragSession.roleId ?? staffDragSession.teamId) &&
+          node.kind === (staffDragSession.roleId ? "agent" : "role") ? "" : undefined}
+        data-staff-snap={ui?.staffSnapped ? "" : undefined}
         data-children={rowChildren > 0 && node.subAgentsExpanded !== false ? "" : undefined}
         {...(node.kind === "role" ? staffHover(node.id) : {})}
         tabIndex={0}
@@ -7455,10 +7486,10 @@ export function CanvasApp({
         )}
       </section>
     );
-  }, [doc.settings, crewNodes, contentIndex, cardActions, edgeIndex, selection.nodes, vpSize, workspaces,
-    bridge, reportError, quoteState, renderConversation, onPresenceChange, projectStructures, activeWorkspaceId,
-    workspaceFilesList, fileInputDrafts, activeWorkspaceCwd, passesNodeFilter, activeHubLayout, connecting, isDragging, languageRevision, openTeam,
-    staffDrag, staffTarget, modelRoutes, staffed]);
+  }, [doc.settings, crewNodes, contentIndex, cardActions, edgeIndex, workspaces,
+    bridge, reportError, renderConversation, onPresenceChange, projectStructures, activeWorkspaceId,
+    workspaceFilesList, activeWorkspaceCwd, passesNodeFilter, connectSession, languageRevision, openTeam,
+    staffDragSession, modelRoutes, staffed]);
 
   /* Workspace groupings for Left Explorer Sidebar */
   const sidebarWorkspaceBuckets = useMemo(() => {
@@ -8878,9 +8909,18 @@ export function CanvasApp({
                           intersects(cardBoxes(n)[0], preparing.area));
                         const semantic = lod || preview;
                         const cardBox = layout[Number(semantic)];
+                        const snapPortId = connecting?.snappedTarget?.nodeIds.includes(n.id)
+                          ? (connecting.snappedTarget.portId ?? (connecting.anchor.direction === "in" ? "out" : "in"))
+                          : undefined;
                         return <ViewportCard key={n.id} node={node} visible={visible} box={cardBox} prepare={preview || warmFull}
                           dx={n.x - node.x} dy={n.y - node.y} semantic={semantic && (node.kind !== "detail" && node.kind !== "role" || !!cardBox.compact)}
                           branchOffset={branchScroll.get(node.id)} onBranchScroll={onBranchScroll}
+                          selected={selectionNodeSet.has(n.id)}
+                          snapPortId={snapPortId}
+                          fileDraft={n.kind === "file" ? (fileInputDrafts[n.id] ?? "") : undefined}
+                          hubKind={activeHubLayout?.nodeId === n.id ? activeHubLayout.kind : undefined}
+                          staffSnapped={staffTarget === n.id}
+                          quoteText={quoteState?.nodeId === n.id ? quoteState.text : undefined}
                           render={renderNodeCard} snapshot={snapshot} incoming={edgeIndex.incoming.get(n.id)} />;
                       })}
                   </div>
@@ -9636,7 +9676,11 @@ export function CanvasApp({
                 <div className="fs-floating-layer">
                   {doc.nodes
                     .filter((n) => !!n.window)
-                    .map((n) => renderNodeCard(n, "window", snapshot, cardBoxes(n)[Number(lod)]))}
+                    .map((n) => renderNodeCard(n, "window", snapshot, cardBoxes(n)[Number(lod)], undefined, undefined, undefined, 0, {
+                      selected: selectionNodeSet.has(n.id),
+                      fileDraft: n.kind === "file" ? (fileInputDrafts[n.id] ?? "") : undefined,
+                      quoteText: quoteState?.nodeId === n.id ? quoteState.text : undefined,
+                    }))}
                 </div>
               )}
 
@@ -9792,7 +9836,10 @@ export function CanvasApp({
                   </header>
                   <div className="conversation-node-host">
                     {conversationFocusAgent ? (
-                      renderNodeCard(conversationFocusAgent, "conversation", snapshot, cardBoxes(conversationFocusAgent)[Number(lod)])
+                      renderNodeCard(conversationFocusAgent, "conversation", snapshot, cardBoxes(conversationFocusAgent)[Number(lod)], undefined, undefined, undefined, 0, {
+                        selected: selectionNodeSet.has(conversationFocusAgent.id),
+                        quoteText: quoteState?.nodeId === conversationFocusAgent.id ? quoteState.text : undefined,
+                      })
                     ) : (
                       <div className="surface-empty" style={{ width: "100%" }}>
                         <Icon name="agent" />

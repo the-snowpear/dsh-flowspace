@@ -153,14 +153,8 @@
 .fs-root .fs-card-id { display: grid; gap: 2px; flex: 1; min-width: 0; }
 .fs-root .fs-card-name { display: flex; align-items: center; gap: 6px; min-width: 0; line-height: 18px; }
 .fs-root .fs-card-name strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 620 13px/1.35 var(--font-ui); }
-.fs-root .fs-lead-tag {
-  flex: none; height: 16px; padding: 0 6px; border-radius: var(--r-full); background: var(--text); color: var(--surface);
-  font: 650 10px/16px var(--font-ui);
-}
 .fs-root .fs-team-instance { flex: none; margin-inline-start: 0; padding: 1px 5px; border-radius: 5px; background: var(--surface-2); color: var(--text-3); font: 600 10px/1.3 var(--font-mono); }
 .fs-root .fs-card-model { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11.5px; }
-.fs-root .fs-card-role { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint); }
-.fs-root .fs-card-role::before { content: "·"; margin-inline-end: 6px; color: var(--border-strong); }
 .fs-root .fs-status { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 40%; flex: none; color: var(--text-3); font-size: 11.5px; white-space: nowrap; }
 .fs-root .fs-status > span { overflow: hidden; text-overflow: ellipsis; }
 .fs-root .fs-status > i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }

@@ -4,7 +4,7 @@ import type {
   FlowspaceDocument,
   GroupPort,
 } from "../types.ts";
-import { groupDescendants, members } from "../core/document.ts";
+import { DEFAULT_NODE_FULL_SIZE, groupDescendants, members } from "../core/document.ts";
 import { judges } from "../core/nodes/judge/index.ts";
 import { DEFAULT_FLOW_SIZE, descriptorOf, portsOf, sizeOf } from "../core/nodes/registry.ts";
 import { dataMode } from "../core/nodes/data/descriptors.ts";
@@ -44,20 +44,7 @@ export const COMPACT_SIZE: Record<FlowNode["kind"], [number, number]> = {
   flow: DEFAULT_FLOW_SIZE.compact,
 };
 
-export const FULL_SIZE: Record<FlowNode["kind"], [number, number]> = {
-  agent: [312, 392],
-  note: [276, 200],
-  file: [300, 286],
-  display: [300, 252],
-  board: [580, 380],
-  detail: [340, 362],
-  group: [1152, 474],
-  git: [420, 410],
-  changes: [360, 340],
-  terminal: [380, 320],
-  role: [260, 336],
-  flow: DEFAULT_FLOW_SIZE.full,
-};
+export const FULL_SIZE: Record<FlowNode["kind"], [number, number]> = DEFAULT_NODE_FULL_SIZE;
 
 export type CapsuleState = "pending" | "sent" | "updated" | "always";
 

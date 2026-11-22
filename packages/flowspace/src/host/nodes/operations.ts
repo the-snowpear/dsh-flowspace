@@ -84,6 +84,11 @@ export class OperationService {
     private readonly sessionDirectory: (id: string) => string | undefined,
   ) {}
 
+  dispose(): void {
+    this.terminals.clear();
+    this.terminalQueue.clear();
+  }
+
   private async agent(sessionId?: string) {
     if (!sessionId) return;
     const result = await this.ctx.sessionController.resolveAgent(sessionId as SessionId);

@@ -115,12 +115,29 @@ export const ICONS: Record<string, string> = {
 export function Icon({
   name,
   className = "ic",
+  size,
 }: {
   name: string;
   className?: string;
+  size?: number;
 }) {
   return (
-    <svg className={className} viewBox="0 0 16 16" aria-hidden="true">
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      {...(size !== undefined
+        ? {
+            width: size,
+            height: size,
+            fill: "none",
+            stroke: "currentColor",
+            strokeWidth: 1.6,
+            strokeLinecap: "round" as const,
+            strokeLinejoin: "round" as const,
+          }
+        : {})}
+    >
       <path d={ICONS[name] ?? ""} />
     </svg>
   );

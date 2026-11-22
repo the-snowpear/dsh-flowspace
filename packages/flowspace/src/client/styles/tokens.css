@@ -1270,8 +1270,6 @@
     box-shadow var(--dur-fast) var(--ease);
 }
 .fs-root .text-field:focus-visible,
-.fs-root .followup-editor:focus-visible,
-.fs-root .waiting-task-editor:focus-visible,
 .fs-root .rounds-field input:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);

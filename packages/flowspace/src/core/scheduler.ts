@@ -579,7 +579,7 @@ export class Scheduler {
     });
   }
 
-  /** Record native step/token telemetry from DSH session events without triggering full storage churn. */
+  /** Record native step/token telemetry from DSH session events inside the scheduler transaction queue. */
   recordTelemetry(
     sessionId: string,
     turn: number,
@@ -588,31 +588,31 @@ export class Scheduler {
       inputTokens?: number;
       outputTokens?: number;
     },
-  ): boolean {
-    const step = this.runs
-      .flatMap((r) => r.steps)
-      .find(
-        (s) =>
-          s.sessionId === sessionId &&
-          !s.endedAt &&
-          (s.turn === turn || s.turn === undefined || s.state === "settling"),
-      );
-    if (!step) return false;
-    step.telemetry ??= { stepCount: 0, inputTokens: 0, outputTokens: 0 };
-    if (delta.addStep) step.telemetry.stepCount += 1;
-    if (typeof delta.inputTokens === "number") {
-      step.telemetry.inputTokens += delta.inputTokens;
-    }
-    if (typeof delta.outputTokens === "number") {
-      step.telemetry.outputTokens += delta.outputTokens;
-    }
-    const owner = this.runs.find(run => run.steps.includes(step));
-    if (owner?.budget || owner?.graph.nodes.find(node => node.id === step.nodeId)?.budget) {
-      void this.transact(async () => {
-        if (owner && await this.enforceBudget(owner, step, false)) await this.store.changed();
-      }).catch(error => console.error("FlowSpace 预算", error));
-    }
-    return true;
+  ): Promise<boolean> {
+    return this.transact(async () => {
+      const step = this.runs
+        .flatMap((r) => r.steps)
+        .find(
+          (s) =>
+            s.sessionId === sessionId &&
+            !s.endedAt &&
+            (s.turn === turn || s.turn === undefined || s.state === "settling"),
+        );
+      if (!step) return false;
+      step.telemetry ??= { stepCount: 0, inputTokens: 0, outputTokens: 0 };
+      if (delta.addStep) step.telemetry.stepCount += 1;
+      if (typeof delta.inputTokens === "number") {
+        step.telemetry.inputTokens += delta.inputTokens;
+      }
+      if (typeof delta.outputTokens === "number") {
+        step.telemetry.outputTokens += delta.outputTokens;
+      }
+      const owner = this.runs.find(run => run.steps.includes(step));
+      if (owner && (owner.budget || owner.graph.nodes.find(node => node.id === step.nodeId)?.budget)) {
+        if (await this.enforceBudget(owner, step, false)) await this.store.changed();
+      }
+      return true;
+    });
   }
 
   private async enforceBudget(run: FlowspaceRun, step: RunStep, beforeDispatch: boolean) {

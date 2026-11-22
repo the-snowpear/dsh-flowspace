@@ -973,10 +973,7 @@
 /* ============================================================
    Tool Node Empty State CTAs (Git Init / Refresh, New Session Terminal)
    ============================================================ */
-.fs-root .fs-tool-empty,
-.fs-root .fs-tool-empty-cta,
-.fs-root .fs-git-empty,
-.fs-root .fs-terminal-empty {
+.fs-root .fs-tool-empty-cta {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -992,13 +989,6 @@
   max-width: 280px;
   line-height: 1.55;
 }
-.fs-root .fs-tool-empty-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 4px;
-}
 
 /* ============================================================
    ComfyUI Cursor-Anchored Fuzzy Quick-Create & Wire-Drop Menu
@@ -1012,191 +1002,6 @@
   overflow: hidden;
   border-radius: 14px;
 }
-.fs-root .fs-quick-menu,
-.fs-root [popover].fs-quick-menu:where(:popover-open, .\:popover-open) {
-  position: fixed;
-  z-index: 98;
-  width: min(340px, calc(100vw - 24px));
-  max-height: min(440px, calc(100svh - 24px));
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: 0;
-  margin: 0;
-  border: 1px solid var(--glass-border);
-  border-radius: 14px;
-  background: var(--glass);
-  color: var(--text);
-  backdrop-filter: blur(22px) saturate(1.65);
-  -webkit-backdrop-filter: blur(22px) saturate(1.65);
-  box-shadow: var(--float-shadow);
-  animation: var(--motion-pop);
-}
-.fs-root .fs-quick-header,
-.fs-root .fs-quick-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-  flex: none;
-}
-.fs-root .fs-quick-search .ic {
-  width: 15px;
-  height: 15px;
-  color: var(--accent);
-  flex: none;
-}
-.fs-root .fs-quick-search input,
-.fs-root .fs-quick-input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.4;
-  caret-color: var(--accent);
-}
-.fs-root .fs-quick-search input::placeholder,
-.fs-root .fs-quick-input::placeholder {
-  color: var(--text-faint);
-}
-.fs-root .fs-quick-tabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  flex: none;
-}
-.fs-root .fs-quick-tab,
-.fs-root .fs-quick-tabs > button {
-  height: 23px;
-  padding: 0 9px;
-  border-radius: var(--r-full);
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-3);
-  background: transparent;
-  white-space: nowrap;
-}
-.fs-root .fs-quick-tab:not(:disabled):hover,
-.fs-root .fs-quick-tabs > button:not(:disabled):hover {
-  color: var(--text);
-  background: var(--hover);
-}
-.fs-root .fs-quick-tab.active,
-.fs-root .fs-quick-tabs > button.active,
-.fs-root .fs-quick-tabs > button[aria-selected="true"] {
-  color: var(--accent);
-  background: var(--accent-soft);
-  font-weight: 600;
-}
-.fs-root .fs-quick-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 5px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.fs-root .fs-quick-group-label {
-  padding: 6px 8px 2px;
-  font: 600 10px/1.2 var(--font-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-}
-.fs-root .fs-quick-item {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 7px 9px;
-  border-radius: 9px;
-  text-align: left;
-  color: var(--text);
-  font-size: 12.5px;
-}
-.fs-root .fs-quick-item:not(:disabled):hover,
-.fs-root .fs-quick-item.active,
-.fs-root .fs-quick-item.selected,
-.fs-root .fs-quick-item[aria-selected="true"] {
-  background: var(--accent-soft);
-}
-.fs-root .fs-quick-item.active,
-.fs-root .fs-quick-item.selected,
-.fs-root .fs-quick-item[aria-selected="true"] {
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-.fs-root .fs-quick-icon {
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  background: var(--surface-2);
-  color: var(--accent);
-  flex: none;
-}
-.fs-root .fs-quick-item.active .fs-quick-icon,
-.fs-root .fs-quick-item[aria-selected="true"] .fs-quick-icon {
-  background: var(--accent);
-  color: var(--on-accent);
-}
-.fs-root .fs-quick-text,
-.fs-root .fs-quick-item > div {
-  flex: 1;
-  min-width: 0;
-}
-.fs-root .fs-quick-item b,
-.fs-root .fs-quick-item strong {
-  display: block;
-  font-size: 12.5px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.fs-root .fs-quick-item small {
-  display: block;
-  color: var(--text-faint);
-  font-size: 11px;
-  line-height: 1.4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-top: 1px;
-}
-.fs-root .fs-quick-badge {
-  font: 600 10px/1 var(--font-mono);
-  padding: 3px 6px;
-  border-radius: var(--r-full);
-  background: var(--surface-2);
-  color: var(--text-3);
-  flex: none;
-}
-.fs-root .fs-quick-empty {
-  padding: 28px 16px;
-  text-align: center;
-  color: var(--text-faint);
-  font-size: 12px;
-}
-.fs-root .fs-quick-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 11px;
-  border-top: 1px solid var(--border);
-  color: var(--text-faint);
-  font-size: 10.5px;
-  flex: none;
-}
 
 /* ============================================================
    Glass-Box Payload X-Ray Popover & Inspector Card
@@ -1206,26 +1011,6 @@
   max-width: min(420px, calc(100vw - 24px));
   max-height: min(440px, calc(100svh - 24px));
   border-radius: 14px;
-}
-.fs-root .fs-payload-popover,
-.fs-root [popover].fs-payload-popover:where(:popover-open, .\:popover-open) {
-  position: fixed;
-  z-index: 96;
-  width: min(420px, calc(100vw - 24px));
-  max-height: min(420px, calc(100svh - 24px));
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: 0;
-  margin: 0;
-  border: 1px solid var(--glass-border);
-  border-radius: 14px;
-  background: var(--glass);
-  color: var(--text);
-  backdrop-filter: blur(22px) saturate(1.6);
-  -webkit-backdrop-filter: blur(22px) saturate(1.6);
-  box-shadow: var(--float-shadow);
-  animation: var(--motion-pop);
 }
 .fs-root .fs-payload-card {
   display: flex;
@@ -1237,85 +1022,6 @@
   background: var(--surface-2);
   color: var(--text);
 }
-.fs-root .fs-payload-popover .fs-payload-card {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  padding: 12px;
-  flex: 1;
-  min-height: 0;
-}
-.fs-root .fs-payload-head,
-.fs-root .fs-payload-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-.fs-root .fs-payload-lineage {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
-}
-.fs-root .fs-payload-lineage span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.fs-root .fs-payload-badges,
-.fs-root .fs-payload-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  font-size: 10.5px;
-  color: var(--text-faint);
-}
-.fs-root .fs-payload-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 19px;
-  padding: 0 7px;
-  border-radius: var(--r-full);
-  font: 600 10px/1 var(--font-mono);
-  background: var(--surface-3);
-  color: var(--text-2);
-  border: 1px solid var(--border);
-}
-.fs-root .fs-payload-pill.state-pending {
-  color: var(--cap-pending);
-  background: var(--cap-pending-bg);
-  border-color: var(--cap-pending-border);
-}
-.fs-root .fs-payload-pill.state-sent {
-  color: var(--text-faint);
-  background: transparent;
-  border-color: var(--border-strong);
-}
-.fs-root .fs-payload-pill.state-updated {
-  color: var(--cap-updated);
-  background: var(--cap-updated-bg);
-  border-color: var(--cap-updated-border);
-}
-.fs-root .fs-payload-pill.state-always {
-  color: var(--cap-always);
-  background: var(--cap-always-bg);
-  border-color: var(--cap-always-border);
-}
-.fs-root .fs-payload-spill,
-.fs-root .fs-payload-pill.is-spill {
-  color: var(--amber);
-  background: var(--amber-soft);
-  border-color: var(--amber-border);
-}
-.fs-root .fs-payload-body,
-.fs-root .fs-payload-pre,
 .fs-root .fs-xray-pre {
   margin: 0;
   padding: 8px 10px;
@@ -1330,20 +1036,6 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: text;
-}
-.fs-root .fs-payload-empty {
-  padding: 16px 10px;
-  text-align: center;
-  color: var(--text-faint);
-  font-size: 11.5px;
-  border: 1px dashed var(--border-strong);
-  border-radius: 8px;
-}
-.fs-root .fs-payload-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
 }
 
 

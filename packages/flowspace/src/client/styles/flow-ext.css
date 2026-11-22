@@ -502,8 +502,6 @@
 .fs-root .fs-lane-session-hover { color: var(--text-2); font: 400 12px var(--font-ui); }
 .fs-root .fs-lane-session-hover > span, .fs-lane-session-list [aria-current="true"] { color: var(--text); font-weight: 500; }
 
-.fs-root .fs-exec-body { display: flex; flex-direction: column; gap: 4px; }
-.fs-root .fs-exec-body .file-preview { white-space: pre-wrap; overflow-wrap: anywhere; }
 .fs-root .fs-exec-value { font: 400 12px var(--font-mono); }
 .fs-root .fs-human-queue { padding: 8px 12px; }
 .fs-root .fs-exec-observed { fill: none; stroke: var(--text-3); stroke-width: 1px; stroke-linecap: round;

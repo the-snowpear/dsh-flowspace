@@ -631,14 +631,6 @@
   user-select: text;
   caret-color: var(--accent);
 }
-.fs-root .saved-task {
-  color: var(--text-2);
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.65;
-  padding-left: 10px;
-  border-left: 2px solid var(--border-strong);
-}
 .fs-root .agent-composer {
   flex: none;
   padding: 8px 10px;
@@ -647,25 +639,8 @@
   flex-direction: column;
   gap: 6px;
 }
-.fs-root .followup-editor {
-  width: 100%;
-  min-height: 44px;
-  max-height: 88px;
-  font-size: 12.5px;
-  line-height: 1.6;
-  padding: 7px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 9px;
-  background: var(--bg);
-  user-select: text;
-  caret-color: var(--accent);
-  transition:
-    border-color var(--dur-fast) var(--ease),
-    box-shadow var(--dur-fast) var(--ease);
-}
 .fs-root .task-editor::placeholder,
-.fs-root .note-editor::placeholder,
-.fs-root .followup-editor::placeholder {
+.fs-root .note-editor::placeholder {
   color: var(--text-faint);
 }
 .fs-root .latest-output-preview {

@@ -3042,7 +3042,7 @@ function emptyDocument() {
     settings: { nativeChatTriggers: true, reducedMotion: false }
   };
 }
-var DEFAULT_DIMS = {
+var DEFAULT_NODE_FULL_SIZE = {
   agent: [312, 392],
   note: [276, 200],
   file: [300, 286],
@@ -3050,9 +3050,9 @@ var DEFAULT_DIMS = {
   group: [1152, 474],
   board: [580, 380],
   detail: [340, 362],
-  git: [380, 376],
-  changes: [340, 318],
-  terminal: [360, 300],
+  git: [420, 410],
+  changes: [360, 340],
+  terminal: [380, 320],
   role: [260, 336],
   flow: DEFAULT_FLOW_SIZE.full
 };
@@ -3090,7 +3090,7 @@ function syncUntitledAgentTitles(doc) {
   return changed;
 }
 function newNode(kind, x, y, title, locale = "zh") {
-  const [width, height] = DEFAULT_DIMS[kind] ?? [312, 260];
+  const [width, height] = DEFAULT_NODE_FULL_SIZE[kind] ?? [312, 260];
   const columns = kind === "board" ? defaultBoardWithExamples(locale) : void 0;
   const isCustomTitle = Boolean(title) && !(kind === "agent" && DEFAULT_AGENT_TITLES.has((title ?? "").trim()));
   return {
@@ -3132,6 +3132,99 @@ function newNode(kind, x, y, title, locale = "zh") {
 }
 function members(doc, groupId) {
   return doc.nodes.filter((n) => n.parentId === groupId).flatMap((n) => n.kind === "group" ? members(doc, n.id) : [n.id]);
+}
+
+// packages/flowspace/src/core/nodeFields.ts
+var EPHEMERAL_UI_NODE_FIELDS = ["window", "nudge"];
+var SESSION_IDENTITY_NODE_FIELDS = [
+  "sessionId",
+  "lastSubmittedTask"
+];
+var PORTABLE_STRIP_NODE_FIELDS = [
+  ...SESSION_IDENTITY_NODE_FIELDS,
+  ...EPHEMERAL_UI_NODE_FIELDS,
+  "workspaceId",
+  "cwd",
+  "branch",
+  "worktreePath",
+  "changesSessionId",
+  "changesSeq",
+  "changesTurn",
+  "terminalSessionId",
+  "terminalId"
+];
+var PRESERVED_BOUND_NODE_FIELDS = [
+  "sessionId",
+  "cwd",
+  "workspaceId",
+  "branch",
+  "worktreePath",
+  "lastSubmittedTask"
+];
+var FANOUT_OVERRIDE_NODE_FIELDS = [
+  "title",
+  "task",
+  "draft",
+  "continuationPrompt",
+  "text",
+  "config",
+  "configVersion",
+  "breakpoint",
+  "budget",
+  "canvasToolsOnly",
+  "laneBindings",
+  "lanePersona",
+  "agentPreset",
+  "columns",
+  "boardSettings",
+  "selectedItems",
+  "items",
+  "roleLabel",
+  "planMode",
+  "teamRef",
+  "teamConfig",
+  "teamLayout",
+  "roleRef",
+  "teamModel",
+  "maxInstances",
+  "slotId",
+  "nativeTrigger",
+  "participation",
+  "rerun"
+];
+var FANOUT_OVERRIDE_EDGE_FIELDS = [
+  "kind",
+  "source",
+  "target",
+  "sourcePort",
+  "targetPort",
+  "mode",
+  "trigger",
+  "emitMode",
+  "always",
+  "maxRounds",
+  "logic",
+  "sourceItemKey",
+  "permission",
+  "ask",
+  "delivery",
+  "event"
+];
+function stripFields(target, fields) {
+  for (const field of fields) delete target[field];
+  return target;
+}
+function stripForFreshInstance(node2) {
+  stripFields(node2, SESSION_IDENTITY_NODE_FIELDS);
+  stripFields(node2, EPHEMERAL_UI_NODE_FIELDS);
+  return node2;
+}
+function copyBoundNodeFields(target, prior) {
+  for (const field of PRESERVED_BOUND_NODE_FIELDS) {
+    if (prior[field] !== void 0) {
+      target[field] = prior[field];
+    }
+  }
 }
 
 // packages/flowspace/src/core/team.ts
@@ -3509,20 +3602,7 @@ var COMPACT_SIZE = {
   role: [252, 96],
   flow: DEFAULT_FLOW_SIZE.compact
 };
-var FULL_SIZE = {
-  agent: [312, 392],
-  note: [276, 200],
-  file: [300, 286],
-  display: [300, 252],
-  board: [580, 380],
-  detail: [340, 362],
-  group: [1152, 474],
-  git: [420, 410],
-  changes: [360, 340],
-  terminal: [380, 320],
-  role: [260, 336],
-  flow: DEFAULT_FLOW_SIZE.full
-};
+var FULL_SIZE = DEFAULT_NODE_FULL_SIZE;
 function isCompactNode(node2, lod = false, keepExpanded = false) {
   if (node2.kind === "group") return node2.collapsed;
   if (!node2.expanded) return true;
@@ -4207,13 +4287,9 @@ function masterGraph(graph, group, fan, merge) {
   return { nodes, edges };
 }
 function cloneMaster(master, fanId, key, title, index, dy, ids, prior) {
-  const copy = structuredClone(master);
+  const copy = stripForFreshInstance(structuredClone(master));
   delete copy.masterOf;
   delete copy.templateSlotId;
-  delete copy.sessionId;
-  delete copy.lastSubmittedTask;
-  delete copy.window;
-  delete copy.nudge;
   copy.id = ids.get(master.id);
   copy.generatedBy = fanId;
   copy.masterNodeId = master.id;
@@ -4229,13 +4305,9 @@ function cloneMaster(master, fanId, key, title, index, dy, ids, prior) {
   }
   if (prior?.generatedRevision !== void 0) copy.generatedRevision = prior.generatedRevision;
   if (prior?.sessionId) {
-    copy.sessionId = prior.sessionId;
-    copy.lastSubmittedTask = prior.lastSubmittedTask;
+    copyBoundNodeFields(copy, prior);
     copy.draft = prior.draft;
     copy.tab = prior.tab;
-    copy.cwd = prior.cwd;
-    copy.workspaceId = prior.workspaceId;
-    copy.worktreePath = prior.worktreePath;
   }
   return copy;
 }
@@ -4366,22 +4438,7 @@ function markFanoutOverrides(previous, next) {
   const changed = /* @__PURE__ */ new Set();
   const laneId = (item) => JSON.stringify([item.generatedBy, item.itemKey]);
   const resumed = new Set(next.nodes.filter((node2) => node2.generatedBy && node2.overridden === false && before.get(node2.id)?.overridden === true).map(laneId));
-  const fields = [
-    "title",
-    "task",
-    "draft",
-    "continuationPrompt",
-    "text",
-    "config",
-    "columns",
-    "selectedItems",
-    "items",
-    "roleLabel",
-    "planMode",
-    "teamRef",
-    "participation",
-    "rerun"
-  ];
+  const fields = FANOUT_OVERRIDE_NODE_FIELDS;
   for (const node2 of previous.nodes) {
     if (!node2.generatedBy || node2.removed) continue;
     const updated = after.get(node2.id);
@@ -4393,20 +4450,7 @@ function markFanoutOverrides(previous, next) {
   }
   const edges = new Map(next.edges.map((edge2) => [edge2.id, edge2]));
   const previousEdges = new Map(previous.edges.map((edge2) => [edge2.id, edge2]));
-  const edgeFields = (edge2) => [
-    edge2.kind,
-    edge2.source,
-    edge2.target,
-    edge2.sourcePort,
-    edge2.targetPort,
-    edge2.mode,
-    edge2.trigger,
-    edge2.emitMode,
-    edge2.always,
-    edge2.maxRounds,
-    edge2.logic,
-    edge2.sourceItemKey
-  ];
+  const edgeFields = (edge2) => FANOUT_OVERRIDE_EDGE_FIELDS.map((field) => edge2[field]);
   for (const edge2 of previous.edges) {
     if (!edge2.generatedBy) continue;
     const updated = edges.get(edge2.id);
@@ -5209,27 +5253,27 @@ var Scheduler = class {
       await this.store.changed();
     });
   }
-  /** Record native step/token telemetry from DSH session events without triggering full storage churn. */
+  /** Record native step/token telemetry from DSH session events inside the scheduler transaction queue. */
   recordTelemetry(sessionId, turn, delta) {
-    const step = this.runs.flatMap((r) => r.steps).find(
-      (s) => s.sessionId === sessionId && !s.endedAt && (s.turn === turn || s.turn === void 0 || s.state === "settling")
-    );
-    if (!step) return false;
-    step.telemetry ??= { stepCount: 0, inputTokens: 0, outputTokens: 0 };
-    if (delta.addStep) step.telemetry.stepCount += 1;
-    if (typeof delta.inputTokens === "number") {
-      step.telemetry.inputTokens += delta.inputTokens;
-    }
-    if (typeof delta.outputTokens === "number") {
-      step.telemetry.outputTokens += delta.outputTokens;
-    }
-    const owner = this.runs.find((run) => run.steps.includes(step));
-    if (owner?.budget || owner?.graph.nodes.find((node2) => node2.id === step.nodeId)?.budget) {
-      void this.transact(async () => {
-        if (owner && await this.enforceBudget(owner, step, false)) await this.store.changed();
-      }).catch((error) => console.error("FlowSpace \u9884\u7B97", error));
-    }
-    return true;
+    return this.transact(async () => {
+      const step = this.runs.flatMap((r) => r.steps).find(
+        (s) => s.sessionId === sessionId && !s.endedAt && (s.turn === turn || s.turn === void 0 || s.state === "settling")
+      );
+      if (!step) return false;
+      step.telemetry ??= { stepCount: 0, inputTokens: 0, outputTokens: 0 };
+      if (delta.addStep) step.telemetry.stepCount += 1;
+      if (typeof delta.inputTokens === "number") {
+        step.telemetry.inputTokens += delta.inputTokens;
+      }
+      if (typeof delta.outputTokens === "number") {
+        step.telemetry.outputTokens += delta.outputTokens;
+      }
+      const owner = this.runs.find((run) => run.steps.includes(step));
+      if (owner && (owner.budget || owner.graph.nodes.find((node2) => node2.id === step.nodeId)?.budget)) {
+        if (await this.enforceBudget(owner, step, false)) await this.store.changed();
+      }
+      return true;
+    });
   }
   async enforceBudget(run, step, beforeDispatch) {
     if (["cancelled", "interrupted", "error", "completed"].includes(run.state)) return false;
@@ -8245,9 +8289,14 @@ ${body}
       }
       const resolved = [];
       const missingPaths = [];
+      const root = typeof this.ctx.fs.contains === "function" ? await this.ctx.fs.resolve(baseCwd ?? process.cwd()).catch(() => void 0) : void 0;
       for (const p of paths2) {
         try {
           const target2 = await this.ctx.fs.resolve(p, { cwd: baseCwd });
+          if (root && typeof this.ctx.fs.contains === "function" && !this.ctx.fs.contains(root, target2)) {
+            missingPaths.push(p);
+            continue;
+          }
           const info = await this.ctx.fs.stat(target2);
           if (!info) {
             missingPaths.push(p);
@@ -9073,6 +9122,10 @@ var OperationService = class {
   }
   terminals = /* @__PURE__ */ new Map();
   terminalQueue = /* @__PURE__ */ new Map();
+  dispose() {
+    this.terminals.clear();
+    this.terminalQueue.clear();
+  }
   async agent(sessionId) {
     if (!sessionId) return;
     const result = await this.ctx.sessionController.resolveAgent(sessionId);
@@ -11090,6 +11143,7 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
     __publicField(this, "git", new HostGitService());
     __publicField(this, "inputContexts", /* @__PURE__ */ new Map());
     __publicField(this, "deferredPersistTimer");
+    __publicField(this, "disposed", false);
   }
   registerNodeKind(descriptor, executor) {
     return this.ctx.effect(() => {
@@ -11516,7 +11570,11 @@ ${resolvedTask}` : resolvedTask;
       this.event(session.id, event, report, session.header);
     });
     this.ctx.effect(() => async () => {
+      this.disposed = true;
       clearTimeout(this.deferredPersistTimer);
+      this.inputContexts.clear();
+      this.reportRequests.clear();
+      this.operations.dispose();
       await this.scheduler.dispose();
       this.state.listeners.forEach((fn) => fn());
       await this.domain.close();
@@ -11777,9 +11835,11 @@ ${resolvedTask}` : resolvedTask;
     }
     if (evAny.type === "step/start" && evAny.data) {
       const turn = Number(evAny.data.turn ?? 0);
-      if (this.scheduler.recordTelemetry(sessionId, turn, { addStep: true })) {
-        this.publish();
-      }
+      report(
+        this.scheduler.recordTelemetry(sessionId, turn, { addStep: true }).then((updated) => {
+          if (updated) this.publish();
+        })
+      );
     }
     if (evAny.type === "deliverables/presented" && evAny.data) {
       const turn = Number(evAny.data.turn ?? 0);
@@ -11850,10 +11910,12 @@ ${resolvedTask}` : resolvedTask;
       const text = plainText(event.data.message.content);
       const usage = event.data.usage;
       if (usage) {
-        this.scheduler.recordTelemetry(sessionId, event.data.turn, {
-          inputTokens: usage.inputTokens,
-          outputTokens: usage.outputTokens
-        });
+        report(
+          this.scheduler.recordTelemetry(sessionId, event.data.turn, {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens
+          })
+        );
         report(this.scheduler.nativeStatus(sessionId, "usage", JSON.stringify(usage), event.seq));
       }
       if (!event.data.interrupted && text.trim().length > 0) {
@@ -12095,13 +12157,9 @@ ${resolvedTask}` : resolvedTask;
       const prior = previousNodes.get(node2.id);
       const old = portable && prior?.teamRef?.teamId !== node2.teamRef?.teamId ? void 0 : prior;
       if (old?.sessionId) {
-        node2.sessionId = old.sessionId;
+        copyBoundNodeFields(node2, old);
         node2.teamRef = old.teamRef;
         if (node2.teamRef) delete node2.teamConfig;
-        node2.cwd = old.cwd;
-        node2.workspaceId = old.workspaceId;
-        node2.branch = old.branch;
-        node2.worktreePath = old.worktreePath;
       }
       if (node2.sessionId && this.teams.isLead(node2.sessionId) && !this.teams.ownsNode(node2.sessionId, node2.id))
         throw new Error("\u56E2\u961F\u4E3B\u7BA1\u4F1A\u8BDD\u5FC5\u987B\u7531\u5BF9\u5E94\u7684\u753B\u5E03\u56E2\u961F\u8282\u70B9\u521B\u5EFA");
@@ -12264,13 +12322,15 @@ ${resolvedTask}` : resolvedTask;
     });
   }
   async draft(request) {
-    const node2 = this.node(request.nodeId);
-    node2.draft = request.draft;
-    syncUntitledAgentNode(node2);
-    const cleanDoc = sanitizeDocumentForWire(this.state.doc);
-    this.state.doc = cleanDoc;
-    await this.domain.table("documents").put("main", structuredClone(cleanDoc));
-    this.publish();
+    await this.scheduler.transact(async () => {
+      const node2 = this.node(request.nodeId);
+      node2.draft = request.draft;
+      syncUntitledAgentNode(node2);
+      const cleanDoc = sanitizeDocumentForWire(this.state.doc);
+      this.state.doc = cleanDoc;
+      await this.domain.table("documents").put("main", structuredClone(cleanDoc));
+      this.publish();
+    });
   }
   plan(request) {
     this.syncLiveReferenceVersions(this.state.doc);
@@ -12317,15 +12377,10 @@ ${resolvedTask}` : resolvedTask;
       const liveNodes = this.state.doc.nodes;
       const restoredNodes = structuredClone(snap.nodes).map((n) => {
         const cur = liveNodes.find((x) => x.id === n.id);
-        return cur?.sessionId && cur.teamRef?.teamId === n.teamRef?.teamId ? {
-          ...n,
-          sessionId: cur.sessionId,
-          cwd: cur.cwd,
-          workspaceId: cur.workspaceId,
-          branch: cur.branch,
-          worktreePath: cur.worktreePath,
-          lastSubmittedTask: cur.lastSubmittedTask
-        } : n;
+        if (cur?.sessionId && cur.teamRef?.teamId === n.teamRef?.teamId) {
+          copyBoundNodeFields(n, cur);
+        }
+        return n;
       });
       const nextDoc = sanitizeDocumentForWire({
         ...this.state.doc,
@@ -12334,6 +12389,7 @@ ${resolvedTask}` : resolvedTask;
         viewport: structuredClone(snap.viewport)
       });
       checkDocument(nextDoc);
+      validateTriggers(nextDoc);
       this.state.doc = nextDoc;
       await this.persist();
       await this.dataFileWatch.sync(nextDoc);
@@ -12518,24 +12574,26 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
     });
   }
   async display(request) {
-    const source = this.state.doc.nodes.find((n) => n.id === request.nodeId);
-    if (!source) throw new Error("\u6765\u6E90\u8282\u70B9\u4E0D\u5B58\u5728");
-    const captured = request.text === void 0 ? source.kind === "agent" ? await this.runtime.capture(source, "conclusion", request.seq) : await this.runtime.reference(source) : void 0;
-    const node2 = {
-      ...newNode(
-        "display",
-        source.x + source.width + 60,
-        source.y + 40,
-        source.title + " \xB7 \u7ED3\u679C"
-      ),
-      text: request.text ?? captured?.text ?? "",
-      sourceNodeId: source.id,
-      sourceSeq: request.seq ?? captured?.seq,
-      fixed: request.fixed
-    };
-    this.state.doc.nodes.push(node2);
-    await this.persist();
-    return structuredClone(node2);
+    return this.scheduler.transact(async () => {
+      const source = this.state.doc.nodes.find((n) => n.id === request.nodeId);
+      if (!source) throw new Error("\u6765\u6E90\u8282\u70B9\u4E0D\u5B58\u5728");
+      const captured = request.text === void 0 ? source.kind === "agent" ? await this.runtime.capture(source, "conclusion", request.seq) : await this.runtime.reference(source) : void 0;
+      const node2 = {
+        ...newNode(
+          "display",
+          source.x + source.width + 60,
+          source.y + 40,
+          source.title + " \xB7 \u7ED3\u679C"
+        ),
+        text: request.text ?? captured?.text ?? "",
+        sourceNodeId: source.id,
+        sourceSeq: request.seq ?? captured?.seq,
+        fixed: request.fixed
+      };
+      this.state.doc.nodes.push(node2);
+      await this.persist();
+      return structuredClone(node2);
+    });
   }
   async sessions() {
     const result = await this.ctx.sessionController.list(
@@ -12894,12 +12952,12 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
     this.state.listeners.add(notify);
     signal.addEventListener("abort", notify, { once: true });
     try {
-      while (!signal.aborted) {
+      while (!signal.aborted && !this.disposed) {
         if (!changed)
           await new Promise((resolve4) => {
             wake = resolve4;
           });
-        if (signal.aborted) break;
+        if (signal.aborted || this.disposed) break;
         changed = false;
         wake = void 0;
         yield this.snapshot();

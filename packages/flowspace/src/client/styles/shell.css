@@ -1471,32 +1471,13 @@
   rotate: -90deg;
 }
 
-/* Multi-Select Inspector Alignment Grid, Distribute Row & Batch Actions */
-.fs-root .fs-inspector-selection-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin: 2px 0 4px;
-}
-.fs-root .fs-inspector-selection-pills > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 21px;
-  padding: 0 8px;
-  border-radius: var(--r-full);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--text-2);
-}
+/* Multi-Select Inspector Alignment Grid */
 .fs-root .fs-align-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
 }
-.fs-root .fs-align-grid > button,
-.fs-root .fs-distribute-row > button {
+.fs-root .fs-align-grid > button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1510,26 +1491,10 @@
   font-size: 11.5px;
   font-weight: 500;
 }
-.fs-root .fs-align-grid > button:not(:disabled):hover,
-.fs-root .fs-distribute-row > button:not(:disabled):hover {
+.fs-root .fs-align-grid > button:not(:disabled):hover {
   color: var(--accent);
   border-color: var(--accent-border);
   background: var(--accent-softer);
-}
-.fs-root .fs-distribute-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-}
-.fs-root .fs-multi-actions,
-.fs-root .fs-inspector-actions-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-}
-.fs-root .fs-multi-actions > .button-full,
-.fs-root .fs-inspector-actions-grid > .button-full {
-  grid-column: 1 / -1;
 }
 .fs-root .fs-struct-inspector {
   display: flex;

@@ -16,7 +16,7 @@ import type {
 } from "@deepseek-ai/dsh-client-ui-slots";
 import type { SessionId } from "@deepseek-ai/dsh-session/types";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { Pin, Quote, Workflow } from "lucide-react";
+import { Icon } from "./icons.tsx";
 import { referenceTitle } from "../core/document.ts";
 import { TYPERT_REMOTE } from "../../lib/typert.remote-client.js";
 import { CanvasApp, detectHostDark } from "./CanvasApp.tsx";
@@ -153,7 +153,7 @@ function mountUi(ctx: Context): void {
         order: 100,
         label: "FlowSpace",
       },
-      ({ size }) => <Workflow size={size} />,
+      ({ size }) => <Icon name="canvas" size={size} />,
     ),
   );
   ctx.slots.inject("conversation.session.header.actions", () =>
@@ -336,7 +336,7 @@ function FlowspaceComposerDock({
           >
             <span className="fs-dock-dot" />
             <span className="fs-dock-label">{label}</span>
-            {refEdge.always && <Pin size={10} />}
+            {refEdge.always && <Icon name="pin" size={10} />}
           </button>
         );
       })}
@@ -399,7 +399,7 @@ function ChatBadge({
         onClick={() => bridge.openCanvas(node.id)}
         title={tr("在 FlowSpace 中查看和设置接续")}
       >
-        <Workflow size={13} />
+        <Icon name="canvas" size={13} />
         {tr("接续")}
         {enabled ? tr("开启") : tr("关闭")}
       </button>
@@ -421,7 +421,7 @@ function ChatBadge({
           }}
           title={t("quoteToCanvas")}
         >
-          <Quote size={12} />
+          <Icon name="quote" size={12} />
           {t("quoteToCanvas")}
         </button>
       )}

@@ -28,13 +28,6 @@ const useClientLayoutEffect =
 
 export type EdgePayloadPreviewData = EdgePayloadPreview;
 
-type InspectableBridge = CanvasBridge & {
-  inspectEdgePayload?: (req: {
-    edgeId: string;
-    runId?: string;
-  }) => Promise<EdgePayloadPreviewData>;
-};
-
 export function formatPayloadBytes(bytes: number): string {
   if (bytes <= 0) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
@@ -195,8 +188,7 @@ export function PayloadPeekCard({
   const boardLive = srcNode?.kind === "board" && !runId;
 
   useEffect(() => {
-    const inspect = (bridge as InspectableBridge | undefined)
-      ?.inspectEdgePayload;
+    const inspect = bridge?.inspectEdgePayload;
     if (!inspect || boardLive || capturedSource) {
       setRemoteData(null);
       setLoading(false);

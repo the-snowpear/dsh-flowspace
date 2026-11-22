@@ -13,6 +13,7 @@
     "src/core/connect.ts",
     "src/core/containers.ts",
     "src/core/document.ts",
+    "src/core/nodeFields.ts",
     "src/core/graph.ts",
     "src/core/nodes/**/*.ts",
     "src/core/team.ts"

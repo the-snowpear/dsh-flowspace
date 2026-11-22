@@ -5,6 +5,7 @@ import type {
   GroupPort,
 } from "../types.ts";
 import { groupDescendants, uid } from "../core/document.ts";
+import { stripForFreshInstance } from "../core/nodeFields.ts";
 import { bounds, expandedGroupBox, groupBox, nodeBox, type Box } from "./geometry.ts";
 import { authoredPairHeight, remapLaneNode } from "./laneIds.ts";
 
@@ -48,13 +49,9 @@ function sanitizeClonedNode(
   newId: string,
   clonedAgentSessionIds: Set<string>,
 ): FlowNode {
-  const clone = structuredClone(raw);
+  const clone = stripForFreshInstance(structuredClone(raw));
   clone.id = newId;
   // The team reference belongs to the canvas document. Session identity is per instance.
-  delete clone.sessionId;
-  delete clone.lastSubmittedTask;
-  delete clone.window;
-  delete clone.nudge;
 
   if (clone.kind === "agent") {
     clone.draft = clone.task || clone.draft || "";

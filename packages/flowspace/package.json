@@ -72,8 +72,6 @@
   "dependencies": {
     "@deepseek-ai/dsh-util-time": "0.2.2-rc.3",
     "@jitl/quickjs-singlefile-cjs-release-sync": "0.32.0",
-    "@xyflow/react": "^12.10.0",
-    "lucide-react": "^0.468.0",
     "quickjs-emscripten-core": "0.32.0",
     "zod": "4.6.6"
   },
