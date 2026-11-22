@@ -4,7 +4,12 @@ import type { Scheduler } from "../core/scheduler.ts";
 import type { SessionChangeTurn } from "../types.ts";
 import { formatTurnChangesSummary, getWorkspaceChanges } from "./dshServices.ts";
 import { DshRuntime, plainText } from "./runtime.ts";
-import type { FlowspaceHostState } from "./state.ts";
+import {
+  capMapSize,
+  MAX_NATIVE_MESSAGES,
+  MAX_NATIVE_OPERATIONS,
+  type FlowspaceHostState,
+} from "./state.ts";
 import type { TeamRuntime } from "./teamRuntime.ts";
 import type { WorkspaceFs } from "./workspaceFs.ts";
 
@@ -194,6 +199,7 @@ export class SessionIngestor {
         seq: event.seq,
         time: event.time,
       });
+      capMapSize(state.nativeMessages, MAX_NATIVE_MESSAGES);
       if (src.kind === "subagent-settled") {
         const existingSub = state.subagents.get(senderSessionId);
         state.subagents.set(senderSessionId, {
@@ -349,6 +355,7 @@ export class SessionIngestor {
                 at: event.time,
                 seq: event.seq,
               });
+              capMapSize(state.nativeOperations, MAX_NATIVE_OPERATIONS);
               publish();
             }
           }

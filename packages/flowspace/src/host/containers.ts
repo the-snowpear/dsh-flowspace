@@ -45,7 +45,7 @@ export class ContainerStore {
     private readonly ctx: Context,
     private readonly table: KvTable<string, ContainerChange>,
     private readonly document: () => FlowspaceDocument,
-    private readonly persist: () => Promise<void>,
+    private readonly persist: (options?: { silent?: boolean }) => Promise<void>,
     private readonly publish: () => void,
     private readonly workspacePath: (request: { path: string; cwd?: string }) => { base: string; full: string; rel: string },
   ) {}
@@ -115,6 +115,7 @@ export class ContainerStore {
     node: FlowNode, itemId: string | undefined, id: string,
     before: ContainerEntry | null, after: ContainerEntry | null,
     owner: ChangeOwner, file?: FileEntry, signal?: AbortSignal,
+    silent = false,
   ): Promise<ContainerChange> {
     const previous = this.latest(id);
     if (previous && !previous.pending) return previous;
@@ -148,10 +149,10 @@ export class ContainerStore {
       if (edited.kind === "board") document.edges = pruneBoardReferences(edited, document.edges);
     }
     document.containerRevision = revision;
-    await this.persist();
+    await this.persist({ silent: true });
     delete change.pending;
     await this.table.put(id, change);
-    this.publish();
+    if (!silent) this.publish();
     return change;
   }
 
@@ -297,8 +298,9 @@ export class ContainerStore {
     const file = change.after?.kind === "file" ? await this.file(change.after.path, change.after.cwd) : undefined;
     const current = file ? file.entry : canvasEntry(node, change.itemId);
     requireVersion(change.afterVersion, file?.version ?? versionOf(current));
-    const undone = await this.record(node, change.itemId, `undo:${id}`, current, change.before, { by: "用户" }, file);
+    const undone = await this.record(node, change.itemId, `undo:${id}`, current, change.before, { by: "用户" }, file, undefined, true);
     await this.table.put(id, { ...change, revertedBy: undone.id });
+    this.publish();
     return undone;
   }
 }

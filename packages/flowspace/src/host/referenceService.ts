@@ -8,7 +8,12 @@ import type { FlowNode, FlowspaceDocument } from "../types.ts";
 import { shortHash } from "./dshServices.ts";
 import type { OperationService } from "./nodes/operations.ts";
 import { computeFileNodeFingerprint, DshRuntime, plainText } from "./runtime.ts";
-import type { FlowspaceHostState, PreparedReferenceEntry } from "./state.ts";
+import {
+  capSetSize,
+  MAX_INJECTED_STEPS,
+  type FlowspaceHostState,
+  type PreparedReferenceEntry,
+} from "./state.ts";
 import type { TeamRuntime } from "./teamRuntime.ts";
 import type { VariableStore } from "./variables.ts";
 
@@ -45,6 +50,14 @@ export interface ReferenceServiceDeps {
   persist: () => Promise<void>;
 }
 
+const FILE_FINGERPRINT_TTL_MS = 500;
+
+interface CachedFileFingerprint {
+  key: string;
+  fingerprint: string;
+  at: number;
+}
+
 /**
  * Computes source version hashes, freezes reference capsules on user inbox insertion,
  * injects context/team briefs/operation prefetch hints on `agent/pre-step`, and manages
@@ -54,8 +67,29 @@ export class ReferenceService {
   private inputContexts = new Map<string, Promise<PreparedReferenceEntry[]>>();
   private teamBriefs = new Map<string, string>();
   private canvasToolRestrictions = new Map<string, () => void>();
+  private fileFingerprintCache = new Map<string, CachedFileFingerprint>();
 
   constructor(private readonly deps: ReferenceServiceDeps) {}
+
+  invalidateFileFingerprints(nodeIds?: string[]): void {
+    if (!nodeIds) {
+      this.fileFingerprintCache.clear();
+      return;
+    }
+    for (const id of nodeIds) this.fileFingerprintCache.delete(id);
+  }
+
+  private fileFingerprint(node: FlowNode, baseCwd: string): string {
+    const key = `${baseCwd}\0${node.text}\0${node.selectedItems?.join("\0") ?? ""}`;
+    const now = Date.now();
+    const cached = this.fileFingerprintCache.get(node.id);
+    if (cached && cached.key === key && now - cached.at < FILE_FINGERPRINT_TTL_MS) {
+      return cached.fingerprint;
+    }
+    const fingerprint = computeFileNodeFingerprint(node, baseCwd);
+    this.fileFingerprintCache.set(node.id, { key, fingerprint, at: now });
+    return fingerprint;
+  }
 
   computeSourceVersions(): Record<string, string> {
     const { state, variables, resolveWorkspaceRoot } = this.deps;
@@ -78,7 +112,7 @@ export class ReferenceService {
       }
       if (n.kind === "file") {
         const baseCwd = resolveWorkspaceRoot(n.worktreePath ?? n.cwd);
-        out[n.id] = `${n.id}:${computeFileNodeFingerprint(n, baseCwd)}`;
+        out[n.id] = `${n.id}:${this.fileFingerprint(n, baseCwd)}`;
         continue;
       }
       if (n.kind === "board") {
@@ -279,6 +313,7 @@ export class ReferenceService {
           !state.injectedSteps.has(step.id)
         ) {
           state.injectedSteps.add(step.id);
+          capSetSize(state.injectedSteps, MAX_INJECTED_STEPS);
           const text = await runtime.contextText(step.sources, agent.id);
           return text
             ? {
@@ -337,6 +372,7 @@ export class ReferenceService {
 
   dispose(): void {
     this.inputContexts.clear();
+    this.fileFingerprintCache.clear();
     this.canvasToolRestrictions.forEach((dispose) => dispose());
     this.canvasToolRestrictions.clear();
   }

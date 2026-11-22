@@ -427,7 +427,7 @@ export class FlowspaceService extends TypertRemoteService {
       this.ctx,
       this.domain.table("container_changes"),
       () => this.state.doc,
-      () => this.documents.persist(),
+      (options) => this.documents.persist(options),
       () => this.publish(),
       (request) => this.workspaceFs.workspacePath(request),
     );
@@ -706,10 +706,7 @@ export class FlowspaceService extends TypertRemoteService {
 
   @Remote
   async revertContainerChange(id: string): Promise<void> {
-    await this.scheduler.transact(async () => {
-      await this.containers.revert(id);
-      this.publish();
-    });
+    await this.scheduler.transact(() => this.containers.revert(id));
   }
 
   @Remote
@@ -944,14 +941,38 @@ export class FlowspaceService extends TypertRemoteService {
 
   @Remote({ mode: "stream" })
   async *follow(signal: AbortSignal): AsyncIterable<FlowspaceSnapshot> {
-    let wake: (() => void) | undefined,
-      changed = true;
-    const notify = (): void => {
-      changed = true;
+    const COALESCE_MS = 16;
+    let wake: (() => void) | undefined;
+    let coalesceTimer: ReturnType<typeof setTimeout> | undefined;
+    let changed = true;
+    let lastYieldAt = 0;
+
+    const flushNow = (): void => {
+      clearTimeout(coalesceTimer);
+      coalesceTimer = undefined;
       wake?.();
     };
+    const notify = (): void => {
+      changed = true;
+      if (signal.aborted || this.disposed) {
+        flushNow();
+        return;
+      }
+      if (!wake) return;
+      const elapsed = Date.now() - lastYieldAt;
+      if (elapsed >= COALESCE_MS) {
+        flushNow();
+      } else if (!coalesceTimer) {
+        coalesceTimer = setTimeout(flushNow, COALESCE_MS - elapsed);
+      }
+    };
+    const onAbort = (): void => {
+      changed = true;
+      flushNow();
+    };
+
     this.state.listeners.add(notify);
-    signal.addEventListener("abort", notify, { once: true });
+    signal.addEventListener("abort", onAbort, { once: true });
     try {
       while (!signal.aborted && !this.disposed) {
         if (!changed) {
@@ -962,11 +983,13 @@ export class FlowspaceService extends TypertRemoteService {
         if (signal.aborted || this.disposed) break;
         changed = false;
         wake = undefined;
+        lastYieldAt = Date.now();
         yield this.snapshot();
       }
     } finally {
+      clearTimeout(coalesceTimer);
       this.state.listeners.delete(notify);
-      signal.removeEventListener("abort", notify);
+      signal.removeEventListener("abort", onAbort);
     }
   }
 }

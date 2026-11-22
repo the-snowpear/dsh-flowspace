@@ -7281,7 +7281,7 @@ var ContainerStore = class {
     } : null;
     return { target, version: info?.version, entry };
   }
-  async record(node2, itemId, id, before, after, owner, file, signal) {
+  async record(node2, itemId, id, before, after, owner, file, signal, silent = false) {
     const previous = this.latest(id);
     if (previous && !previous.pending) return previous;
     if (after?.kind === "board" && owner.sessionId) after.card = { ...after.card, author: owner.sessionId };
@@ -7327,10 +7327,10 @@ var ContainerStore = class {
       if (edited.kind === "board") document.edges = pruneBoardReferences(edited, document.edges);
     }
     document.containerRevision = revision;
-    await this.persist();
+    await this.persist({ silent: true });
     delete change.pending;
     await this.table.put(id, change);
-    this.publish();
+    if (!silent) this.publish();
     return change;
   }
   async recover() {
@@ -7482,8 +7482,9 @@ var ContainerStore = class {
     const file = change.after?.kind === "file" ? await this.file(change.after.path, change.after.cwd) : void 0;
     const current = file ? file.entry : canvasEntry(node2, change.itemId);
     requireVersion(change.afterVersion, file?.version ?? versionOf(current));
-    const undone = await this.record(node2, change.itemId, `undo:${id}`, current, change.before, { by: "\u7528\u6237" }, file);
+    const undone = await this.record(node2, change.itemId, `undo:${id}`, current, change.before, { by: "\u7528\u6237" }, file, void 0, true);
     await this.table.put(id, { ...change, revertedBy: undone.id });
+    this.publish();
     return undone;
   }
 };
@@ -8393,6 +8394,65 @@ async function buildReport(ctx, run, model) {
   return { summary, ...usage, bestNode, artifacts: run.deliverables ?? [] };
 }
 
+// packages/flowspace/src/host/state.ts
+var MAX_NATIVE_MESSAGES = 2e3;
+var MAX_NATIVE_OPERATIONS = 1e3;
+var MAX_INJECTED_STEPS = 4e3;
+function createHostState() {
+  return {
+    doc: emptyDocument(),
+    runs: [],
+    live: /* @__PURE__ */ new Map(),
+    nativeMessages: /* @__PURE__ */ new Map(),
+    nativeOperations: /* @__PURE__ */ new Map(),
+    notices: [],
+    subagents: /* @__PURE__ */ new Map(),
+    listeners: /* @__PURE__ */ new Set(),
+    turnOutput: /* @__PURE__ */ new Map(),
+    canvasSessions: /* @__PURE__ */ new Set(),
+    injectedSteps: /* @__PURE__ */ new Set()
+  };
+}
+function capMapSize(map2, maxEntries) {
+  if (map2.size <= maxEntries) return;
+  const excess = map2.size - maxEntries;
+  let removed = 0;
+  for (const key of map2.keys()) {
+    map2.delete(key);
+    if (++removed >= excess) break;
+  }
+}
+function capSetSize(set, maxEntries) {
+  if (set.size <= maxEntries) return;
+  const excess = set.size - maxEntries;
+  let removed = 0;
+  for (const value of set) {
+    set.delete(value);
+    if (++removed >= excess) break;
+  }
+}
+function pruneHostState(state) {
+  const activeNodeIds = new Set(state.doc.nodes.map((node2) => node2.id));
+  for (const nodeId of state.live.keys()) {
+    if (!activeNodeIds.has(nodeId)) state.live.delete(nodeId);
+  }
+  for (const [key, op] of state.nativeOperations.entries()) {
+    if (!activeNodeIds.has(op.nodeId)) state.nativeOperations.delete(key);
+  }
+  if (state.injectedSteps.size > 0) {
+    const activeStepIds = /* @__PURE__ */ new Set();
+    for (const run of state.runs) {
+      for (const step of run.steps) activeStepIds.add(step.id);
+    }
+    for (const stepId of state.injectedSteps) {
+      if (!activeStepIds.has(stepId)) state.injectedSteps.delete(stepId);
+    }
+  }
+  capMapSize(state.nativeMessages, MAX_NATIVE_MESSAGES);
+  capMapSize(state.nativeOperations, MAX_NATIVE_OPERATIONS);
+  capSetSize(state.injectedSteps, MAX_INJECTED_STEPS);
+}
+
 // packages/flowspace/src/host/storage.ts
 import { z as z15 } from "zod";
 import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
@@ -9013,51 +9073,107 @@ async function loadInitialHostState(domain, workspaceFs, state) {
 var DocumentService = class {
   constructor(deps) {
     this.deps = deps;
+    this.seedPersistedState();
   }
   deferredPersistTimer;
   reportRequests = /* @__PURE__ */ new Map();
+  lastDocJson;
+  lastTemplateJson = /* @__PURE__ */ new Map();
+  lastSnapshotJson = /* @__PURE__ */ new Map();
+  lastRunJson = /* @__PURE__ */ new Map();
+  settledArenaRuns = /* @__PURE__ */ new Set();
+  /** Captures initial storage signatures so subsequent `persist()` only writes dirty rows. */
+  seedPersistedState() {
+    const { state } = this.deps;
+    const cleanDoc = sanitizeDocumentForWire(state.doc);
+    this.lastDocJson = JSON.stringify(cleanDoc);
+    this.lastTemplateJson.clear();
+    for (const tpl of cleanDoc.templates ?? []) {
+      this.lastTemplateJson.set(tpl.id, JSON.stringify(tpl));
+    }
+    this.lastSnapshotJson.clear();
+    for (const snap of cleanDoc.snapshots ?? []) {
+      this.lastSnapshotJson.set(snap.id, JSON.stringify(snap));
+    }
+    this.lastRunJson.clear();
+    for (const run of state.runs) {
+      this.lastRunJson.set(run.id, JSON.stringify(run));
+    }
+  }
   schedulePersist() {
     clearTimeout(this.deferredPersistTimer);
     this.deferredPersistTimer = setTimeout(() => {
-      void this.persist().catch(
+      void this.persist({ silent: true }).catch(
         (e) => this.deps.ctx.logger.warn("FlowSpace deferred persist: %s", e)
       );
     }, 350);
   }
-  async persist() {
+  async persist(options) {
     clearTimeout(this.deferredPersistTimer);
     const { domain, state, arena, getReferences, publish } = this.deps;
     getReferences().syncLiveReferenceVersions(state.doc);
     const cleanDoc = sanitizeDocumentForWire(state.doc);
     state.doc = cleanDoc;
-    await domain.table("documents").put("main", structuredClone(cleanDoc));
+    const docJson = JSON.stringify(cleanDoc);
+    if (docJson !== this.lastDocJson) {
+      await domain.table("documents").put("main", structuredClone(cleanDoc));
+      this.lastDocJson = docJson;
+    }
+    const templatesTable = domain.table("templates");
     const retainedTemplates = new Set(
       (cleanDoc.templates ?? []).map((t) => t.id)
     );
-    for (const id of domain.table("templates").keys()) {
-      if (!retainedTemplates.has(id)) await domain.table("templates").delete(id);
+    for (const id of templatesTable.keys()) {
+      if (!retainedTemplates.has(id)) {
+        await templatesTable.delete(id);
+        this.lastTemplateJson.delete(id);
+      }
     }
     for (const tpl of cleanDoc.templates ?? []) {
-      await domain.table("templates").put(tpl.id, structuredClone(tpl));
+      const json = JSON.stringify(tpl);
+      if (this.lastTemplateJson.get(tpl.id) !== json) {
+        await templatesTable.put(tpl.id, structuredClone(tpl));
+        this.lastTemplateJson.set(tpl.id, json);
+      }
     }
+    const snapshotsTable = domain.table("snapshots");
     const retainedSnapshots = new Set(
       (cleanDoc.snapshots ?? []).map((s) => s.id)
     );
-    for (const id of domain.table("snapshots").keys()) {
-      if (!retainedSnapshots.has(id)) await domain.table("snapshots").delete(id);
+    for (const id of snapshotsTable.keys()) {
+      if (!retainedSnapshots.has(id)) {
+        await snapshotsTable.delete(id);
+        this.lastSnapshotJson.delete(id);
+      }
     }
     for (const snap of cleanDoc.snapshots ?? []) {
-      await domain.table("snapshots").put(snap.id, structuredClone(snap));
+      const json = JSON.stringify(snap);
+      if (this.lastSnapshotJson.get(snap.id) !== json) {
+        await snapshotsTable.put(snap.id, structuredClone(snap));
+        this.lastSnapshotJson.set(snap.id, json);
+      }
     }
+    const runsTable = domain.table("runs");
     const retainedRuns = new Set(state.runs.map((r) => r.id));
-    for (const id of domain.table("runs").keys()) {
-      if (!retainedRuns.has(id)) await domain.table("runs").delete(id);
+    for (const id of runsTable.keys()) {
+      if (!retainedRuns.has(id)) {
+        await runsTable.delete(id);
+        this.lastRunJson.delete(id);
+        this.settledArenaRuns.delete(id);
+      }
     }
     for (const run of state.runs) {
-      await domain.table("runs").put(run.id, structuredClone(run));
-      await arena.settle(run);
+      const json = JSON.stringify(run);
+      if (this.lastRunJson.get(run.id) !== json) {
+        await runsTable.put(run.id, structuredClone(run));
+        this.lastRunJson.set(run.id, json);
+      }
+      if (run.state === "completed" && !this.settledArenaRuns.has(run.id)) {
+        await arena.settle(run);
+        this.settledArenaRuns.add(run.id);
+      }
     }
-    publish();
+    if (!options?.silent) publish();
   }
   async availableModel(index) {
     const models = await this.deps.teamAssets.listModelRoutes();
@@ -9154,6 +9270,8 @@ var DocumentService = class {
     );
     if (importedAssets) await teamAssets.addImported(importedAssets);
     state.doc = sanitizeDocumentForWire(next);
+    pruneHostState(state);
+    getReferences().invalidateFileFingerprints();
     getReferences().pruneToolRestrictions(next);
     await this.persist();
     await getDataFileWatch().sync(next);
@@ -9162,7 +9280,8 @@ var DocumentService = class {
     return structuredClone(state.doc);
   }
   refreshDataFiles(ids) {
-    const { ctx, state, runtime, getScheduler, publish } = this.deps;
+    const { ctx, state, runtime, getScheduler, getReferences, publish } = this.deps;
+    getReferences().invalidateFileFingerprints(ids);
     return getScheduler().transact(async () => {
       const previous = state.doc;
       const next = structuredClone(previous);
@@ -9279,7 +9398,11 @@ var DocumentService = class {
       syncUntitledAgentNode(node2);
       const cleanDoc = sanitizeDocumentForWire(state.doc);
       state.doc = cleanDoc;
-      await domain.table("documents").put("main", structuredClone(cleanDoc));
+      const docJson = JSON.stringify(cleanDoc);
+      if (docJson !== this.lastDocJson) {
+        await domain.table("documents").put("main", structuredClone(cleanDoc));
+        this.lastDocJson = docJson;
+      }
       publish();
     });
   }
@@ -9310,6 +9433,8 @@ var DocumentService = class {
       checkDocument(nextDoc);
       validateTriggers(nextDoc);
       state.doc = nextDoc;
+      pruneHostState(state);
+      this.deps.getReferences().invalidateFileFingerprints();
       await this.persist();
       await getDataFileWatch().sync(nextDoc);
       this.syncTeams();
@@ -11396,6 +11521,7 @@ function teamBriefMessage(text) {
     }
   });
 }
+var FILE_FINGERPRINT_TTL_MS = 500;
 var ReferenceService = class {
   constructor(deps) {
     this.deps = deps;
@@ -11403,6 +11529,25 @@ var ReferenceService = class {
   inputContexts = /* @__PURE__ */ new Map();
   teamBriefs = /* @__PURE__ */ new Map();
   canvasToolRestrictions = /* @__PURE__ */ new Map();
+  fileFingerprintCache = /* @__PURE__ */ new Map();
+  invalidateFileFingerprints(nodeIds) {
+    if (!nodeIds) {
+      this.fileFingerprintCache.clear();
+      return;
+    }
+    for (const id of nodeIds) this.fileFingerprintCache.delete(id);
+  }
+  fileFingerprint(node2, baseCwd) {
+    const key = `${baseCwd}\0${node2.text}\0${node2.selectedItems?.join("\0") ?? ""}`;
+    const now = Date.now();
+    const cached = this.fileFingerprintCache.get(node2.id);
+    if (cached && cached.key === key && now - cached.at < FILE_FINGERPRINT_TTL_MS) {
+      return cached.fingerprint;
+    }
+    const fingerprint = computeFileNodeFingerprint(node2, baseCwd);
+    this.fileFingerprintCache.set(node2.id, { key, fingerprint, at: now });
+    return fingerprint;
+  }
   computeSourceVersions() {
     const { state, variables, resolveWorkspaceRoot } = this.deps;
     const out = {};
@@ -11424,7 +11569,7 @@ var ReferenceService = class {
       }
       if (n.kind === "file") {
         const baseCwd = resolveWorkspaceRoot(n.worktreePath ?? n.cwd);
-        out[n.id] = `${n.id}:${computeFileNodeFingerprint(n, baseCwd)}`;
+        out[n.id] = `${n.id}:${this.fileFingerprint(n, baseCwd)}`;
         continue;
       }
       if (n.kind === "board") {
@@ -11544,6 +11689,7 @@ var ReferenceService = class {
         this.inputContexts.delete(message.id);
         if (step && step.sources.length > 0 && !state.injectedSteps.has(step.id)) {
           state.injectedSteps.add(step.id);
+          capSetSize(state.injectedSteps, MAX_INJECTED_STEPS);
           const text2 = await runtime.contextText(step.sources, agent.id);
           return text2 ? {
             ...message,
@@ -11593,6 +11739,7 @@ var ReferenceService = class {
   }
   dispose() {
     this.inputContexts.clear();
+    this.fileFingerprintCache.clear();
     this.canvasToolRestrictions.forEach((dispose) => dispose());
     this.canvasToolRestrictions.clear();
   }
@@ -11738,6 +11885,7 @@ var SessionIngestor = class {
         seq: event.seq,
         time: event.time
       });
+      capMapSize(state.nativeMessages, MAX_NATIVE_MESSAGES);
       if (src.kind === "subagent-settled") {
         const existingSub = state.subagents.get(senderSessionId);
         state.subagents.set(senderSessionId, {
@@ -11866,6 +12014,7 @@ var SessionIngestor = class {
                 at: event.time,
                 seq: event.seq
               });
+              capMapSize(state.nativeOperations, MAX_NATIVE_OPERATIONS);
               publish();
             }
           }
@@ -12021,23 +12170,6 @@ var SessionIngestor = class {
     }
   }
 };
-
-// packages/flowspace/src/host/state.ts
-function createHostState() {
-  return {
-    doc: emptyDocument(),
-    runs: [],
-    live: /* @__PURE__ */ new Map(),
-    nativeMessages: /* @__PURE__ */ new Map(),
-    nativeOperations: /* @__PURE__ */ new Map(),
-    notices: [],
-    subagents: /* @__PURE__ */ new Map(),
-    listeners: /* @__PURE__ */ new Set(),
-    turnOutput: /* @__PURE__ */ new Map(),
-    canvasSessions: /* @__PURE__ */ new Set(),
-    injectedSteps: /* @__PURE__ */ new Set()
-  };
-}
 
 // packages/flowspace/src/host/teamAssets.ts
 var modelKey = (model) => JSON.stringify([model.provider, model.model, model.reasoningEffort ?? ""]);
@@ -13677,7 +13809,7 @@ ${resolvedTask}` : resolvedTask;
       this.ctx,
       this.domain.table("container_changes"),
       () => this.state.doc,
-      () => this.documents.persist(),
+      (options) => this.documents.persist(options),
       () => this.publish(),
       (request) => this.workspaceFs.workspacePath(request)
     );
@@ -13896,10 +14028,7 @@ ${resolvedTask}` : resolvedTask;
     return this.documents.save(document);
   }
   async revertContainerChange(id) {
-    await this.scheduler.transact(async () => {
-      await this.containers.revert(id);
-      this.publish();
-    });
+    await this.scheduler.transact(() => this.containers.revert(id));
   }
   async writeVariable(request) {
     await this.scheduler.transact(() => this.variables.manualWrite(request));
@@ -14046,13 +14175,36 @@ ${resolvedTask}` : resolvedTask;
     if (lead) await this.teams.interruptMembers(node2.sessionId);
   }
   async *follow(signal) {
-    let wake, changed = true;
-    const notify = () => {
-      changed = true;
+    const COALESCE_MS = 16;
+    let wake;
+    let coalesceTimer;
+    let changed = true;
+    let lastYieldAt = 0;
+    const flushNow = () => {
+      clearTimeout(coalesceTimer);
+      coalesceTimer = void 0;
       wake?.();
     };
+    const notify = () => {
+      changed = true;
+      if (signal.aborted || this.disposed) {
+        flushNow();
+        return;
+      }
+      if (!wake) return;
+      const elapsed = Date.now() - lastYieldAt;
+      if (elapsed >= COALESCE_MS) {
+        flushNow();
+      } else if (!coalesceTimer) {
+        coalesceTimer = setTimeout(flushNow, COALESCE_MS - elapsed);
+      }
+    };
+    const onAbort = () => {
+      changed = true;
+      flushNow();
+    };
     this.state.listeners.add(notify);
-    signal.addEventListener("abort", notify, { once: true });
+    signal.addEventListener("abort", onAbort, { once: true });
     try {
       while (!signal.aborted && !this.disposed) {
         if (!changed) {
@@ -14063,11 +14215,13 @@ ${resolvedTask}` : resolvedTask;
         if (signal.aborted || this.disposed) break;
         changed = false;
         wake = void 0;
+        lastYieldAt = Date.now();
         yield this.snapshot();
       }
     } finally {
+      clearTimeout(coalesceTimer);
       this.state.listeners.delete(notify);
-      signal.removeEventListener("abort", notify);
+      signal.removeEventListener("abort", onAbort);
     }
   }
 };

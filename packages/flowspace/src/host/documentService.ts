@@ -41,7 +41,7 @@ import { ArenaStore, buildReport } from "./nodes/play.ts";
 import type { ReferenceService } from "./referenceService.ts";
 import type { DshRuntime } from "./runtime.ts";
 import type { SessionIngestor } from "./sessionIngestor.ts";
-import type { FlowspaceHostState } from "./state.ts";
+import { pruneHostState, type FlowspaceHostState } from "./state.ts";
 import {
   checkDocument,
   documentSchema,
@@ -113,61 +113,120 @@ export interface DocumentServiceDeps {
 }
 
 /**
- * Owns Host document mutations, storage persistence, workflow import, snapshot restore,
- * agent session binding, display extraction, and run report generation.
+ * Owns Host document mutations, dirty-tracked storage persistence, workflow import,
+ * snapshot restore, agent session binding, display extraction, and run report generation.
  */
 export class DocumentService {
   private deferredPersistTimer?: ReturnType<typeof setTimeout>;
   private reportRequests = new Map<string, Promise<RunReport>>();
+  private lastDocJson?: string;
+  private lastTemplateJson = new Map<string, string>();
+  private lastSnapshotJson = new Map<string, string>();
+  private lastRunJson = new Map<string, string>();
+  private settledArenaRuns = new Set<string>();
 
-  constructor(private readonly deps: DocumentServiceDeps) {}
+  constructor(private readonly deps: DocumentServiceDeps) {
+    this.seedPersistedState();
+  }
+
+  /** Captures initial storage signatures so subsequent `persist()` only writes dirty rows. */
+  seedPersistedState(): void {
+    const { state } = this.deps;
+    const cleanDoc = sanitizeDocumentForWire(state.doc);
+    this.lastDocJson = JSON.stringify(cleanDoc);
+    this.lastTemplateJson.clear();
+    for (const tpl of cleanDoc.templates ?? []) {
+      this.lastTemplateJson.set(tpl.id, JSON.stringify(tpl));
+    }
+    this.lastSnapshotJson.clear();
+    for (const snap of cleanDoc.snapshots ?? []) {
+      this.lastSnapshotJson.set(snap.id, JSON.stringify(snap));
+    }
+    this.lastRunJson.clear();
+    for (const run of state.runs) {
+      this.lastRunJson.set(run.id, JSON.stringify(run));
+    }
+  }
 
   schedulePersist(): void {
     clearTimeout(this.deferredPersistTimer);
     this.deferredPersistTimer = setTimeout(() => {
-      void this.persist().catch((e) =>
+      void this.persist({ silent: true }).catch((e) =>
         this.deps.ctx.logger.warn("FlowSpace deferred persist: %s", e),
       );
     }, 350);
   }
 
-  async persist(): Promise<void> {
+  async persist(options?: { silent?: boolean }): Promise<void> {
     clearTimeout(this.deferredPersistTimer);
     const { domain, state, arena, getReferences, publish } = this.deps;
     getReferences().syncLiveReferenceVersions(state.doc);
     const cleanDoc = sanitizeDocumentForWire(state.doc);
     state.doc = cleanDoc;
-    await domain.table("documents").put("main", structuredClone(cleanDoc));
 
+    const docJson = JSON.stringify(cleanDoc);
+    if (docJson !== this.lastDocJson) {
+      await domain.table("documents").put("main", structuredClone(cleanDoc));
+      this.lastDocJson = docJson;
+    }
+
+    const templatesTable = domain.table("templates");
     const retainedTemplates = new Set(
       (cleanDoc.templates ?? []).map((t) => t.id),
     );
-    for (const id of domain.table("templates").keys()) {
-      if (!retainedTemplates.has(id)) await domain.table("templates").delete(id);
+    for (const id of templatesTable.keys()) {
+      if (!retainedTemplates.has(id)) {
+        await templatesTable.delete(id);
+        this.lastTemplateJson.delete(id);
+      }
     }
     for (const tpl of cleanDoc.templates ?? []) {
-      await domain.table("templates").put(tpl.id, structuredClone(tpl));
+      const json = JSON.stringify(tpl);
+      if (this.lastTemplateJson.get(tpl.id) !== json) {
+        await templatesTable.put(tpl.id, structuredClone(tpl));
+        this.lastTemplateJson.set(tpl.id, json);
+      }
     }
 
+    const snapshotsTable = domain.table("snapshots");
     const retainedSnapshots = new Set(
       (cleanDoc.snapshots ?? []).map((s) => s.id),
     );
-    for (const id of domain.table("snapshots").keys()) {
-      if (!retainedSnapshots.has(id)) await domain.table("snapshots").delete(id);
+    for (const id of snapshotsTable.keys()) {
+      if (!retainedSnapshots.has(id)) {
+        await snapshotsTable.delete(id);
+        this.lastSnapshotJson.delete(id);
+      }
     }
     for (const snap of cleanDoc.snapshots ?? []) {
-      await domain.table("snapshots").put(snap.id, structuredClone(snap));
+      const json = JSON.stringify(snap);
+      if (this.lastSnapshotJson.get(snap.id) !== json) {
+        await snapshotsTable.put(snap.id, structuredClone(snap));
+        this.lastSnapshotJson.set(snap.id, json);
+      }
     }
 
+    const runsTable = domain.table("runs");
     const retainedRuns = new Set(state.runs.map((r) => r.id));
-    for (const id of domain.table("runs").keys()) {
-      if (!retainedRuns.has(id)) await domain.table("runs").delete(id);
+    for (const id of runsTable.keys()) {
+      if (!retainedRuns.has(id)) {
+        await runsTable.delete(id);
+        this.lastRunJson.delete(id);
+        this.settledArenaRuns.delete(id);
+      }
     }
     for (const run of state.runs) {
-      await domain.table("runs").put(run.id, structuredClone(run));
-      await arena.settle(run);
+      const json = JSON.stringify(run);
+      if (this.lastRunJson.get(run.id) !== json) {
+        await runsTable.put(run.id, structuredClone(run));
+        this.lastRunJson.set(run.id, json);
+      }
+      if (run.state === "completed" && !this.settledArenaRuns.has(run.id)) {
+        await arena.settle(run);
+        this.settledArenaRuns.add(run.id);
+      }
     }
-    publish();
+    if (!options?.silent) publish();
   }
 
   async availableModel(index: string): Promise<TeamModel> {
@@ -289,6 +348,8 @@ export class DocumentService {
     );
     if (importedAssets) await teamAssets.addImported(importedAssets);
     state.doc = sanitizeDocumentForWire(next);
+    pruneHostState(state);
+    getReferences().invalidateFileFingerprints();
     getReferences().pruneToolRestrictions(next);
     await this.persist();
     await getDataFileWatch().sync(next);
@@ -298,7 +359,9 @@ export class DocumentService {
   }
 
   refreshDataFiles(ids: string[]): Promise<void> {
-    const { ctx, state, runtime, getScheduler, publish } = this.deps;
+    const { ctx, state, runtime, getScheduler, getReferences, publish } =
+      this.deps;
+    getReferences().invalidateFileFingerprints(ids);
     return getScheduler().transact(async () => {
       const previous = state.doc;
       const next = structuredClone(previous);
@@ -436,7 +499,11 @@ export class DocumentService {
       syncUntitledAgentNode(node);
       const cleanDoc = sanitizeDocumentForWire(state.doc);
       state.doc = cleanDoc;
-      await domain.table("documents").put("main", structuredClone(cleanDoc));
+      const docJson = JSON.stringify(cleanDoc);
+      if (docJson !== this.lastDocJson) {
+        await domain.table("documents").put("main", structuredClone(cleanDoc));
+        this.lastDocJson = docJson;
+      }
       publish();
     });
   }
@@ -473,6 +540,8 @@ export class DocumentService {
       checkDocument(nextDoc);
       validateTriggers(nextDoc);
       state.doc = nextDoc;
+      pruneHostState(state);
+      this.deps.getReferences().invalidateFileFingerprints();
       await this.persist();
       await getDataFileWatch().sync(nextDoc);
       this.syncTeams();
