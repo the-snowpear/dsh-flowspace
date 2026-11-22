@@ -137,6 +137,8 @@ import { BoardNodeView } from "./BoardNodeView.tsx";
 import { BoardCompactSummary } from "./BoardControls.tsx";
 import { installHostStyleGuard } from "./hostStyleGuard.ts";
 import { CanvasDialog } from "./CanvasDialog.tsx";
+import { ContextMenu, type MenuItem, type MenuState } from "./ui/ContextMenu.tsx";
+import { PromptDialog } from "./ui/PromptDialog.tsx";
 import { TeamView } from "./TeamView.tsx";
 import { AvatarStack, ModelChip, TeamAvatar, hueStyle } from "./TeamControls.tsx";
 import { ChildCards, ChildLinks, CrewFrame, RoleNodeBody, RoleNodeSummary, StaffWires, staffHover, useModelRoutes,
@@ -170,26 +172,6 @@ import {
 } from "./ToolNodeViews.tsx";
 
 type RouteId = "canvas" | "conversation" | "workflows" | "activity" | "settings" | "team";
-
-interface MenuItem {
-  heading?: string;
-  divider?: boolean;
-  label?: string;
-  description?: string;
-  icon?: string;
-  checked?: boolean;
-  disabled?: boolean;
-  shortcut?: string;
-  danger?: boolean;
-  fn?: () => void;
-}
-
-interface MenuState {
-  x: number;
-  y: number;
-  items: MenuItem[];
-  returnFocus?: HTMLElement;
-}
 
 interface PaletteEntry {
   label: string;
@@ -866,7 +848,6 @@ export function CanvasApp({
   const areaRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
   const viewAnimToken = useRef(0);
   /* Live viewport engine: pan / zoom frames write straight to the DOM (compositor-only
      transforms) and React state is committed once the gesture settles. */
@@ -4943,38 +4924,7 @@ export function CanvasApp({
         exchangeModal ||
         helpModal
       ) {
-        if (ev.key === "Escape") {
-          ev.preventDefault();
-          setPaletteDialog(null);
-          setLaunchDialog(null);
-          setFormModal(null);
-          setSessionModal(null);
-          setFileModal(null);
-          setTemplatePreviewModal(null);
-          setSyncModal(null);
-          setMergePortsModal(null);
-          setExchangeModal(null);
-          setHelpModal(false);
-          return;
-        }
-        if (ev.key === "Tab" && dialogRef.current) {
-          const stops = Array.from(
-            dialogRef.current.querySelectorAll<HTMLElement>(
-              'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, [tabindex="0"]',
-            ),
-          ).filter((el) => el.offsetParent !== null);
-          if (stops.length) {
-            const first = stops[0],
-              last = stops[stops.length - 1];
-            if (ev.shiftKey && document.activeElement === first) {
-              ev.preventDefault();
-              last.focus();
-            } else if (!ev.shiftKey && document.activeElement === last) {
-              ev.preventDefault();
-              first.focus();
-            }
-          }
-        }
+        // Native `<dialog>` handles Esc cancellation, inert background, and focus containment.
         return;
       }
 
@@ -10085,152 +10035,90 @@ export function CanvasApp({
         })()}
 
       {/* ---------- Floating Menu ---------- */}
-      {menu && (
-        <div
-          className="fs-menu"
-          style={{ left: menu.x, top: menu.y }}
-          role="menu"
-          onKeyDown={menu.returnFocus ? (event) => {
-            if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-            event.preventDefault();
-            event.stopPropagation();
-            const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
-            const index = buttons.findIndex((button) => button === document.activeElement);
-            const offset = event.key === "ArrowDown" ? 1 : -1;
-            buttons[(index + offset + buttons.length) % buttons.length]?.focus();
-          } : undefined}
-        >
-          {menu.items.map((item, idx) =>
-            item.divider ? (
-              <hr key={idx} />
-            ) : item.heading ? (
-              <small key={idx}>{item.heading}</small>
-            ) : (
-              <button
-                key={idx}
-                type="button"
-                role="menuitem"
-                disabled={item.disabled}
-                className={item.danger ? "danger" : ""}
-                onClick={() => {
-                  menu.returnFocus?.focus({ preventScroll: true });
-                  setMenu(null);
-                  item.fn?.();
-                }}
-              >
-                <span className="menu-icon">
-                  {item.icon ? <Icon name={item.icon} /> : null}
-                </span>
-                <span>
-                  {item.label}
-                  {item.description && <small>{item.description}</small>}
-                </span>
-                {item.checked ? (
-                  <Icon name="check" />
-                ) : item.shortcut ? (
-                  <kbd>{item.shortcut}</kbd>
-                ) : null}
-              </button>
-            ),
-          )}
-        </div>
-      )}
+      {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
 
       {/* ---------- Dialogs Host ---------- */}
       {/* 1. Command & @ Mention Palette */}
       {paletteDialog && (
-        <div
-          className="fs-dialog-host"
-          onClick={() => setPaletteDialog(null)}
+        <CanvasDialog
+          onClose={() => setPaletteDialog(null)}
+          ariaLabel={t("commandSearch")}
+          variant="command"
         >
-          <section
-            ref={dialogRef}
-            className="dialog command-dialog"
-            role="dialog"
-            aria-modal="true"
-            onClick={(ev) => ev.stopPropagation()}
-          >
-            <div className="dialog-body">
-              <div className="command-input">
-                <Icon name={paletteDialog.targetNodeId ? "at" : "search"} />
-                <input
-                  autoFocus
-                  placeholder={t("commandSearch")}
-                  value={paletteDialog.query}
-                  onChange={(ev) =>
-                    setPaletteDialog((prev) =>
-                      prev
-                        ? { ...prev, query: ev.target.value, index: 0 }
-                        : null,
-                    )
+          <div className="command-input">
+            <Icon name={paletteDialog.targetNodeId ? "at" : "search"} />
+            <input
+              autoFocus
+              placeholder={t("commandSearch")}
+              value={paletteDialog.query}
+              onChange={(ev) =>
+                setPaletteDialog((prev) =>
+                  prev ? { ...prev, query: ev.target.value, index: 0 } : null,
+                )
+              }
+              onKeyDown={(ev) => {
+                if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+                  ev.preventDefault();
+                  setPaletteDialog((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          index: clamp(
+                            prev.index + (ev.key === "ArrowDown" ? 1 : -1),
+                            0,
+                            Math.max(0, paletteEntries.length - 1),
+                          ),
+                        }
+                      : null,
+                  );
+                } else if (ev.key === "Enter") {
+                  ev.preventDefault();
+                  const picked = paletteEntries[paletteDialog.index];
+                  if (picked) {
+                    setPaletteDialog(null);
+                    picked.fn();
                   }
-                  onKeyDown={(ev) => {
-                    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
-                      ev.preventDefault();
-                      setPaletteDialog((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              index: clamp(
-                                prev.index + (ev.key === "ArrowDown" ? 1 : -1),
-                                0,
-                                Math.max(0, paletteEntries.length - 1),
-                              ),
-                            }
-                          : null,
-                      );
-                    } else if (ev.key === "Enter") {
-                      ev.preventDefault();
-                      const picked = paletteEntries[paletteDialog.index];
-                      if (picked) {
-                        setPaletteDialog(null);
-                        picked.fn();
-                      }
-                    }
+                }
+              }}
+            />
+            <kbd>Esc</kbd>
+          </div>
+          <div className="command-results">
+            {paletteEntries.length ? (
+              paletteEntries.map((entry, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  className={`command-result ${paletteDialog.index === idx ? "active" : ""}`}
+                  onClick={() => {
+                    setPaletteDialog(null);
+                    entry.fn();
                   }}
-                />
-                <kbd>Esc</kbd>
-              </div>
-              <div className="command-results">
-                {paletteEntries.length ? (
-                  paletteEntries.map((entry, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      className={`command-result ${paletteDialog.index === idx ? "active" : ""}`}
-                      onClick={() => {
-                        setPaletteDialog(null);
-                        entry.fn();
-                      }}
-                    >
-                      <span className="command-icon">
-                        <Icon name={entry.icon} />
-                      </span>
-                      <div>
-                        <b className="user-content">{entry.label}</b>
-                        {entry.detail && (
-                          <small className="user-content">{entry.detail}</small>
-                        )}
-                      </div>
-                      <span>{entry.section}</span>
-                      {paletteDialog.index === idx && <kbd>↵</kbd>}
-                    </button>
-                  ))
-                ) : (
-                  <div className="command-empty">{t("noSearchResults")}</div>
-                )}
-              </div>
-              <footer className="command-hint">
-                <kbd>↑ ↓</kbd>
-                <span>{t("rangeSelection")}</span>
-                <kbd>Enter</kbd>
-                <span>
-                  {t(paletteDialog.targetNodeId ? "reference" : "run")}
-                </span>
-              </footer>
-            </div>
-          </section>
-        </div>
+                >
+                  <span className="command-icon">
+                    <Icon name={entry.icon} />
+                  </span>
+                  <div>
+                    <b className="user-content">{entry.label}</b>
+                    {entry.detail && (
+                      <small className="user-content">{entry.detail}</small>
+                    )}
+                  </div>
+                  <span>{entry.section}</span>
+                  {paletteDialog.index === idx && <kbd>↵</kbd>}
+                </button>
+              ))
+            ) : (
+              <div className="command-empty">{t("noSearchResults")}</div>
+            )}
+          </div>
+          <footer className="command-hint">
+            <kbd>↑ ↓</kbd>
+            <span>{t("rangeSelection")}</span>
+            <kbd>Enter</kbd>
+            <span>{t(paletteDialog.targetNodeId ? "reference" : "run")}</span>
+          </footer>
+        </CanvasDialog>
       )}
 
       {/* 2. 4-Bucket Global Launch Preview Dialog */}
@@ -10293,162 +10181,13 @@ export function CanvasApp({
             .join(" + ");
 
         return (
-          <div
-            className="fs-dialog-host"
-            onClick={() => setLaunchDialog(null)}
-          >
-            <section
-              ref={dialogRef}
-              className="dialog"
-              role="dialog"
-              aria-modal="true"
-              onClick={(ev) => ev.stopPropagation()}
-            >
-              <header className="dialog-header">
-                <div>
-                  <h2>{t("runAll")}</h2>
-                  <p>{t("launchDescription")}</p>
-                </div>
-                <button
-                  type="button"
-                  className="icon-button"
-                  onClick={() => setLaunchDialog(null)}
-                >
-                  <Icon name="x" />
-                </button>
-              </header>
-              <div className="dialog-body">
-                <div className="launch-summary">
-                  <div className="launch-stat now">
-                    <b>{chosenRoots.length}</b>
-                    <span>{t("launchNow")}</span>
-                  </div>
-                  <div className="launch-stat next">
-                    <b>{followIds.length}</b>
-                    <span>{t("launchNext")}</span>
-                  </div>
-                  <div className="launch-stat confirm">
-                    <b>{confirmIds.length}</b>
-                    <span>{t("launchConfirm")}</span>
-                  </div>
-                  <div className="launch-stat">
-                    <b>{skippedRows.length}</b>
-                    <span>{t("launchNone")}</span>
-                  </div>
-                </div>
-
-                <section className="launch-section">
-                  <h4>{t("launchNow")}</h4>
-                  {launchDialog.plan.roots.length ? (
-                    launchDialog.plan.roots.map((id) => {
-                      const checked = !launchDialog.excluded.has(id);
-                      const hidden = !isNodeVisible(
-                        doc.nodes.find((n) => n.id === id),
-                        true,
-                      );
-                      return (
-                        <label key={id} className="launch-row">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(ev) =>
-                              setLaunchDialog((prev) => {
-                                if (!prev) return null;
-                                const next = new Set(prev.excluded);
-                                if (ev.target.checked) next.delete(id);
-                                else next.add(id);
-                                return { ...prev, excluded: next };
-                              })
-                            }
-                          />
-                          <span className="node-avatar agent-avatar">
-                            <Icon name="agent" />
-                          </span>
-                          <div>
-                            <b className="user-content">{titleOf(id)}</b>
-                            {hidden && <small>{t("hidden")}</small>}
-                          </div>
-                          <span>{t(nodeStatusOf(snapshot, id))}</span>
-                        </label>
-                      );
-                    })
-                  ) : (
-                    <div className="surface-empty">
-                      <h3>{t("noStarters")}</h3>
-                      <p>{t("noStartersDescription")}</p>
-                    </div>
-                  )}
-                </section>
-
-                {followIds.length > 0 && (
-                  <section className="launch-section">
-                    <h4>{t("launchNext")}</h4>
-                    {followIds.map((id) => (
-                      <div key={id} className="launch-row is-follow">
-                        <i>
-                          <Icon name="chev" />
-                        </i>
-                        <span className="node-avatar agent-avatar">
-                          <Icon name="agent" />
-                        </span>
-                        <div>
-                          <b className="user-content">{titleOf(id)}</b>
-                          <small>
-                            {t("afterStep", { name: upstreamNames(id) })}
-                          </small>
-                        </div>
-                      </div>
-                    ))}
-                  </section>
-                )}
-
-                {confirmIds.length > 0 && (
-                  <section className="launch-section">
-                    <h4>{t("launchConfirm")}</h4>
-                    {confirmIds.map((id) => (
-                      <div key={id} className="launch-row is-follow is-confirm">
-                        <i>
-                          <Icon name="chev" />
-                        </i>
-                        <span className="node-avatar agent-avatar">
-                          <Icon name="pause" />
-                        </span>
-                        <div>
-                          <b className="user-content">{titleOf(id)}</b>
-                          <small>
-                            {t("afterStep", { name: upstreamNames(id) })}
-                          </small>
-                        </div>
-                      </div>
-                    ))}
-                  </section>
-                )}
-
-                {skippedRows.length > 0 && (
-                  <details className="launch-skipped">
-                    <summary>
-                      <Icon name="chev" />
-                      {t("launchNone")} · {skippedRows.length}
-                    </summary>
-                    {skippedRows.map((row) => (
-                      <div
-                        key={row.nodeId}
-                        className="launch-row is-follow is-none"
-                      >
-                        <i />
-                        <span className="node-avatar agent-avatar">
-                          <Icon name="agent" />
-                        </span>
-                        <div>
-                          <b className="user-content">{titleOf(row.nodeId)}</b>
-                          <small>{row.reason}</small>
-                        </div>
-                      </div>
-                    ))}
-                  </details>
-                )}
-              </div>
-              <footer className="dialog-footer">
+          <CanvasDialog
+            onClose={() => setLaunchDialog(null)}
+            title={t("runAll")}
+            description={t("launchDescription")}
+            closeLabel={t("close")}
+            footer={
+              <>
                 <button
                   type="button"
                   className="button"
@@ -10476,135 +10215,213 @@ export function CanvasApp({
                   <Icon name="play" />
                   <span>{t("runCount", { count: chosenRoots.length })}</span>
                 </button>
-              </footer>
+              </>
+            }
+          >
+            <div className="launch-summary">
+              <div className="launch-stat now">
+                <b>{chosenRoots.length}</b>
+                <span>{t("launchNow")}</span>
+              </div>
+              <div className="launch-stat next">
+                <b>{followIds.length}</b>
+                <span>{t("launchNext")}</span>
+              </div>
+              <div className="launch-stat confirm">
+                <b>{confirmIds.length}</b>
+                <span>{t("launchConfirm")}</span>
+              </div>
+              <div className="launch-stat">
+                <b>{skippedRows.length}</b>
+                <span>{t("launchNone")}</span>
+              </div>
+            </div>
+
+            <section className="launch-section">
+              <h4>{t("launchNow")}</h4>
+              {launchDialog.plan.roots.length ? (
+                launchDialog.plan.roots.map((id) => {
+                  const checked = !launchDialog.excluded.has(id);
+                  const hidden = !isNodeVisible(
+                    doc.nodes.find((n) => n.id === id),
+                    true,
+                  );
+                  return (
+                    <label key={id} className="launch-row">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(ev) =>
+                          setLaunchDialog((prev) => {
+                            if (!prev) return null;
+                            const next = new Set(prev.excluded);
+                            if (ev.target.checked) next.delete(id);
+                            else next.add(id);
+                            return { ...prev, excluded: next };
+                          })
+                        }
+                      />
+                      <span className="node-avatar agent-avatar">
+                        <Icon name="agent" />
+                      </span>
+                      <div>
+                        <b className="user-content">{titleOf(id)}</b>
+                        {hidden && <small>{t("hidden")}</small>}
+                      </div>
+                      <span>{t(nodeStatusOf(snapshot, id))}</span>
+                    </label>
+                  );
+                })
+              ) : (
+                <div className="surface-empty">
+                  <h3>{t("noStarters")}</h3>
+                  <p>{t("noStartersDescription")}</p>
+                </div>
+              )}
             </section>
-          </div>
+
+            {followIds.length > 0 && (
+              <section className="launch-section">
+                <h4>{t("launchNext")}</h4>
+                {followIds.map((id) => (
+                  <div key={id} className="launch-row is-follow">
+                    <i>
+                      <Icon name="chev" />
+                    </i>
+                    <span className="node-avatar agent-avatar">
+                      <Icon name="agent" />
+                    </span>
+                    <div>
+                      <b className="user-content">{titleOf(id)}</b>
+                      <small>
+                        {t("afterStep", { name: upstreamNames(id) })}
+                      </small>
+                    </div>
+                  </div>
+                ))}
+              </section>
+            )}
+
+            {confirmIds.length > 0 && (
+              <section className="launch-section">
+                <h4>{t("launchConfirm")}</h4>
+                {confirmIds.map((id) => (
+                  <div key={id} className="launch-row is-follow is-confirm">
+                    <i>
+                      <Icon name="chev" />
+                    </i>
+                    <span className="node-avatar agent-avatar">
+                      <Icon name="pause" />
+                    </span>
+                    <div>
+                      <b className="user-content">{titleOf(id)}</b>
+                      <small>
+                        {t("afterStep", { name: upstreamNames(id) })}
+                      </small>
+                    </div>
+                  </div>
+                ))}
+              </section>
+            )}
+
+            {skippedRows.length > 0 && (
+              <details className="launch-skipped">
+                <summary>
+                  <Icon name="chev" />
+                  {t("launchNone")} · {skippedRows.length}
+                </summary>
+                {skippedRows.map((row) => (
+                  <div
+                    key={row.nodeId}
+                    className="launch-row is-follow is-none"
+                  >
+                    <i />
+                    <span className="node-avatar agent-avatar">
+                      <Icon name="agent" />
+                    </span>
+                    <div>
+                      <b className="user-content">{titleOf(row.nodeId)}</b>
+                      <small>{row.reason}</small>
+                    </div>
+                  </div>
+                ))}
+              </details>
+            )}
+          </CanvasDialog>
         );
       })()}
 
       {/* 3. Rename / Form Modal */}
       {formModal && (
-        <FormDialog
-          dialogRef={dialogRef}
-          modal={formModal}
-          onClose={() => setFormModal(null)}
-        />
+        <PromptDialog modal={formModal} onClose={() => setFormModal(null)} />
       )}
 
       {/* 4. Add Existing DSH Session Modal */}
       {sessionModal && (
-        <div
-          className="fs-dialog-host"
-          onClick={() => setSessionModal(null)}
+        <CanvasDialog
+          onClose={() => setSessionModal(null)}
+          title={t("existingSession")}
+          closeLabel={t("close")}
         >
-          <section
-            ref={dialogRef}
-            className="dialog"
-            role="dialog"
-            aria-modal="true"
-            onClick={(ev) => ev.stopPropagation()}
-          >
-            <header className="dialog-header">
-              <div>
-                <h2>{t("existingSession")}</h2>
-              </div>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => setSessionModal(null)}
-              >
-                <Icon name="x" />
-              </button>
-            </header>
-            <div className="dialog-body">
-              <div className="fs-session-list">
-                {sessionModal.filter(
+          <div className="fs-session-list">
+            {sessionModal.filter(
+              (s) => !doc.nodes.some((n) => n.sessionId === s.sessionId),
+            ).length ? (
+              sessionModal
+                .filter(
                   (s) => !doc.nodes.some((n) => n.sessionId === s.sessionId),
-                ).length ? (
-                  sessionModal
-                    .filter(
-                      (s) =>
-                        !doc.nodes.some((n) => n.sessionId === s.sessionId),
-                    )
-                    .map((s) => (
-                      <button
-                        key={s.sessionId}
-                        type="button"
-                        className="fs-session-pick"
-                        onClick={() => {
-                          const drop = sessionWireDrop.current;
-                          const created: FlowNode = {
-                            ...newNode("agent", drop?.world.x ?? 120, drop?.world.y ?? 160, s.title),
-                            sessionId: s.sessionId,
-                            cwd: s.cwd,
-                            expanded: true,
-                            tab: "conversation",
-                          };
-                          edit(d => {
-                            d.nodes.push(created);
-                            if (drop?.wire) linkWireDrop(d, drop.wire, created);
-                          });
-                          setSessionModal(null);
-                          revealNode(created.id);
-                        }}
-                      >
-                        <Icon name="chat" />
-                        <div>
-                          <b className="user-content">{s.title}</b>
-                          {s.cwd && <small>{s.cwd}</small>}
-                        </div>
-                      </button>
-                    ))
-                ) : (
-                  <p className="muted">{t("noExistingSessions")}</p>
-                )}
-              </div>
-            </div>
-          </section>
-        </div>
+                )
+                .map((s) => (
+                  <button
+                    key={s.sessionId}
+                    type="button"
+                    className="fs-session-pick"
+                    onClick={() => {
+                      const drop = sessionWireDrop.current;
+                      const created: FlowNode = {
+                        ...newNode(
+                          "agent",
+                          drop?.world.x ?? 120,
+                          drop?.world.y ?? 160,
+                          s.title,
+                        ),
+                        sessionId: s.sessionId,
+                        cwd: s.cwd,
+                        expanded: true,
+                        tab: "conversation",
+                      };
+                      edit((d) => {
+                        d.nodes.push(created);
+                        if (drop?.wire) linkWireDrop(d, drop.wire, created);
+                      });
+                      setSessionModal(null);
+                      revealNode(created.id);
+                    }}
+                  >
+                    <Icon name="chat" />
+                    <div>
+                      <b className="user-content">{s.title}</b>
+                      {s.cwd && <small>{s.cwd}</small>}
+                    </div>
+                  </button>
+                ))
+            ) : (
+              <p className="muted">{t("noExistingSessions")}</p>
+            )}
+          </div>
+        </CanvasDialog>
       )}
 
       {/* 5. Workspace File Preview Modal */}
       {fileModal && (
-        <div className="fs-dialog-host" onClick={() => setFileModal(null)}>
-          <section
-            ref={dialogRef}
-            className="dialog file-dialog"
-            role="dialog"
-            aria-modal="true"
-            onClick={(ev) => ev.stopPropagation()}
-          >
-            <header className="dialog-header">
-              <div>
-                <h2>{fileModal.path.split("/").pop()}</h2>
-                <p>{fileModal.path}</p>
-              </div>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => setFileModal(null)}
-              >
-                <Icon name="x" />
-              </button>
-            </header>
-            <div className="dialog-body">
-              <div className="code-toolbar">
-                <span>
-                  {t("lineCount", {
-                    count: fileModal.content.split("\n").length,
-                  })}
-                </span>
-              </div>
-              <div className="code-view">
-                {fileModal.content.split("\n").map((line, i) => (
-                  <div key={i} className="code-line">
-                    <span className="line-number">{i + 1}</span>
-                    <code>{line || " "}</code>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <footer className="dialog-footer">
+        <CanvasDialog
+          onClose={() => setFileModal(null)}
+          title={fileModal.path.split("/").pop()}
+          description={fileModal.path}
+          closeLabel={t("close")}
+          variant="file"
+          footer={
+            <>
               <button
                 type="button"
                 className="button"
@@ -10623,71 +10440,44 @@ export function CanvasApp({
               >
                 <span>{t("close")}</span>
               </button>
-            </footer>
-          </section>
-        </div>
+            </>
+          }
+        >
+          <div className="code-toolbar">
+            <span>
+              {t("lineCount", {
+                count: fileModal.content.split("\n").length,
+              })}
+            </span>
+          </div>
+          <div className="code-view">
+            {fileModal.content.split("\n").map((line, i) => (
+              <div key={i} className="code-line">
+                <span className="line-number">{i + 1}</span>
+                <code>{line || " "}</code>
+              </div>
+            ))}
+          </div>
+        </CanvasDialog>
       )}
 
       {/* 6. Template Preview Modal */}
       {templatePreviewModal && (
-        <div
-          className="fs-dialog-host"
-          onClick={() => setTemplatePreviewModal(null)}
-        >
-          <section
-            ref={dialogRef}
-            className="dialog"
-            role="dialog"
-            aria-modal="true"
-            onClick={(ev) => ev.stopPropagation()}
-          >
-            <header className="dialog-header">
-              <div>
-                <h2>
-                  {templatePreviewModal.builtin
-                    ? t(templatePreviewModal.title)
-                    : templatePreviewModal.title}
-                </h2>
-                <p>
-                  {templatePreviewModal.builtin
-                    ? t(templatePreviewModal.description)
-                    : templatePreviewModal.description}
-                </p>
-              </div>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => setTemplatePreviewModal(null)}
-              >
-                <Icon name="x" />
-              </button>
-            </header>
-            <div className="dialog-body">
-              <div className="template-graph template-preview-graph">
-                <MiniGraph
-                  nodes={templatePreviewModal.nodes}
-                  edges={templatePreviewModal.edges}
-                  wireRouting={prefs.wireRouting}
-                />
-              </div>
-              {teamRevisionDifferences(templatePreviewModal, snapshot?.teamBlueprints).map((change) => (
-                <p key={change.id} className="fs-team-muted">{t("teamRevisionDifference", change)}</p>
-              ))}
-              <div className="template-preview-list">
-                {templatePreviewModal.nodes
-                  .filter((n) => n.kind === "agent")
-                  .map((n) => (
-                    <div key={n.id}>
-                      <Icon name="agent" />
-                      <div>
-                        <b className="user-content">{n.title}</b>
-                        <p className="user-content">{n.task || n.draft}</p>
-                      </div>
-                    </div>
-                  ))}
-              </div>
-            </div>
-            <footer className="dialog-footer">
+        <CanvasDialog
+          onClose={() => setTemplatePreviewModal(null)}
+          title={
+            templatePreviewModal.builtin
+              ? t(templatePreviewModal.title)
+              : templatePreviewModal.title
+          }
+          description={
+            templatePreviewModal.builtin
+              ? t(templatePreviewModal.description)
+              : templatePreviewModal.description
+          }
+          closeLabel={t("close")}
+          footer={
+            <>
               <button
                 type="button"
                 className="button"
@@ -10707,87 +10497,49 @@ export function CanvasApp({
                 <Icon name="plus" />
                 <span>{t("useTemplate")}</span>
               </button>
-            </footer>
-          </section>
-        </div>
+            </>
+          }
+        >
+          <div className="template-graph template-preview-graph">
+            <MiniGraph
+              nodes={templatePreviewModal.nodes}
+              edges={templatePreviewModal.edges}
+              wireRouting={prefs.wireRouting}
+            />
+          </div>
+          {teamRevisionDifferences(
+            templatePreviewModal,
+            snapshot?.teamBlueprints,
+          ).map((change) => (
+            <p key={change.id} className="fs-team-muted">
+              {t("teamRevisionDifference", change)}
+            </p>
+          ))}
+          <div className="template-preview-list">
+            {templatePreviewModal.nodes
+              .filter((n) => n.kind === "agent")
+              .map((n) => (
+                <div key={n.id}>
+                  <Icon name="agent" />
+                  <div>
+                    <b className="user-content">{n.title}</b>
+                    <p className="user-content">{n.task || n.draft}</p>
+                  </div>
+                </div>
+              ))}
+          </div>
+        </CanvasDialog>
       )}
 
       {/* 7. Template Sync Diff Modal */}
       {syncModal && (
-        <div className="fs-dialog-host" onClick={() => setSyncModal(null)}>
-          <section
-            ref={dialogRef}
-            className="dialog"
-            role="dialog"
-            aria-modal="true"
-            onClick={(ev) => ev.stopPropagation()}
-          >
-            <header className="dialog-header">
-              <div>
-                <h2>{t("syncTemplate")}</h2>
-                <p>{t("syncDialogDescription")}</p>
-              </div>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => setSyncModal(null)}
-              >
-                <Icon name="x" />
-              </button>
-            </header>
-            <div className="dialog-body">
-              <div className="sync-diff">
-                <div>
-                  <Icon name="canvas" />
-                  <b>{t("syncStructure")}</b>
-                  <small>v{syncModal.plan.template.revision}</small>
-                </div>
-                {syncModal.plan.outside > 0 && (
-                  <div>
-                    <Icon name="at" />
-                    <b>
-                      {t("syncOutsideKept", { count: syncModal.plan.outside })}
-                    </b>
-                  </div>
-                )}
-                {syncModal.plan.locked.length > 0 && (
-                  <div>
-                    <Icon name="pin" />
-                    <b>
-                      {t("syncRunKept", {
-                        count: syncModal.plan.locked.length,
-                      })}
-                    </b>
-                  </div>
-                )}
-                {syncModal.plan.added.length > 0 && (
-                  <div>
-                    <Icon name="plus" />
-                    <b>
-                      {t("syncAdded", { count: syncModal.plan.added.length })}
-                    </b>
-                  </div>
-                )}
-                {syncModal.plan.removed.length > 0 && (
-                  <div>
-                    <Icon name="x" />
-                    <b>
-                      {t("syncRemoved", {
-                        count: syncModal.plan.removed.length,
-                      })}
-                    </b>
-                  </div>
-                )}
-                {syncModal.plan.edited.map((n) => (
-                  <div key={n.id}>
-                    <Icon name="quote" />
-                    <b className="user-content">{n.title}</b>
-                    <small>{t("syncEdited")}</small>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <footer className="dialog-footer">
+        <CanvasDialog
+          onClose={() => setSyncModal(null)}
+          title={t("syncTemplate")}
+          description={t("syncDialogDescription")}
+          closeLabel={t("close")}
+          footer={
+            <>
               <button
                 type="button"
                 className="button"
@@ -10838,9 +10590,58 @@ export function CanvasApp({
                   )}
                 </span>
               </button>
-            </footer>
-          </section>
-        </div>
+            </>
+          }
+        >
+          <div className="sync-diff">
+            <div>
+              <Icon name="canvas" />
+              <b>{t("syncStructure")}</b>
+              <small>v{syncModal.plan.template.revision}</small>
+            </div>
+            {syncModal.plan.outside > 0 && (
+              <div>
+                <Icon name="at" />
+                <b>{t("syncOutsideKept", { count: syncModal.plan.outside })}</b>
+              </div>
+            )}
+            {syncModal.plan.locked.length > 0 && (
+              <div>
+                <Icon name="pin" />
+                <b>
+                  {t("syncRunKept", {
+                    count: syncModal.plan.locked.length,
+                  })}
+                </b>
+              </div>
+            )}
+            {syncModal.plan.added.length > 0 && (
+              <div>
+                <Icon name="plus" />
+                <b>
+                  {t("syncAdded", { count: syncModal.plan.added.length })}
+                </b>
+              </div>
+            )}
+            {syncModal.plan.removed.length > 0 && (
+              <div>
+                <Icon name="x" />
+                <b>
+                  {t("syncRemoved", {
+                    count: syncModal.plan.removed.length,
+                  })}
+                </b>
+              </div>
+            )}
+            {syncModal.plan.edited.map((n) => (
+              <div key={n.id}>
+                <Icon name="quote" />
+                <b className="user-content">{n.title}</b>
+                <small>{t("syncEdited")}</small>
+              </div>
+            ))}
+          </div>
+        </CanvasDialog>
       )}
 
       {/* 8. Merge Composite Input Ports Modal */}
@@ -10850,64 +10651,12 @@ export function CanvasApp({
           ? inferGroupPorts(doc, grp).filter((p) => p.direction === "in")
           : [];
         return (
-          <div
-            className="fs-dialog-host"
-            onClick={() => setMergePortsModal(null)}
-          >
-            <section
-              ref={dialogRef}
-              className="dialog"
-              role="dialog"
-              aria-modal="true"
-              onClick={(ev) => ev.stopPropagation()}
-            >
-              <header className="dialog-header">
-                <div>
-                  <h2>{t("mergePorts")}</h2>
-                </div>
-                <button
-                  type="button"
-                  className="icon-button"
-                  onClick={() => setMergePortsModal(null)}
-                >
-                  <Icon name="x" />
-                </button>
-              </header>
-              <div className="dialog-body">
-                <label className="field-label">{t("portName")}</label>
-                <input
-                  className="text-field"
-                  value={mergePortsModal.name}
-                  onChange={(ev) =>
-                    setMergePortsModal((prev) =>
-                      prev ? { ...prev, name: ev.target.value } : null,
-                    )
-                  }
-                />
-                <div className="merge-port-list">
-                  {inPorts.map((p) => (
-                    <label key={p.id}>
-                      <input
-                        type="checkbox"
-                        checked={mergePortsModal.selectedPortIds.has(p.id)}
-                        onChange={(ev) =>
-                          setMergePortsModal((prev) => {
-                            if (!prev) return null;
-                            const next = new Set(prev.selectedPortIds);
-                            if (ev.target.checked) next.add(p.id);
-                            else next.delete(p.id);
-                            return { ...prev, selectedPortIds: next };
-                          })
-                        }
-                      />
-                      <span>
-                        {t(p.kind)} · {p.name}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <footer className="dialog-footer">
+          <CanvasDialog
+            onClose={() => setMergePortsModal(null)}
+            title={t("mergePorts")}
+            closeLabel={t("close")}
+            footer={
+              <>
                 <button
                   type="button"
                   className="button"
@@ -10926,11 +10675,16 @@ export function CanvasApp({
                     );
                     if (
                       chosen.length >= 2 &&
-                      chosen.every((p) => p.kind === chosen[0].kind && (p.portId ?? "in") === (chosen[0].portId ?? "in"))
+                      chosen.every(
+                        (p) =>
+                          p.kind === chosen[0].kind &&
+                          (p.portId ?? "in") === (chosen[0].portId ?? "in"),
+                      )
                     ) {
                       const merged: GroupPort = {
                         id: uid(),
-                        kind: chosen[0].kind, portId: chosen[0].portId,
+                        kind: chosen[0].kind,
+                        portId: chosen[0].portId,
                         direction: "in",
                         name: mergePortsModal.name || t("inputPort"),
                         nodes: [
@@ -10952,79 +10706,90 @@ export function CanvasApp({
                 >
                   <span>{t("save")}</span>
                 </button>
-              </footer>
-            </section>
-          </div>
+              </>
+            }
+          >
+            <label className="field-label">{t("portName")}</label>
+            <input
+              className="text-field"
+              value={mergePortsModal.name}
+              onChange={(ev) =>
+                setMergePortsModal((prev) =>
+                  prev ? { ...prev, name: ev.target.value } : null,
+                )
+              }
+            />
+            <div className="merge-port-list">
+              {inPorts.map((p) => (
+                <label key={p.id}>
+                  <input
+                    type="checkbox"
+                    checked={mergePortsModal.selectedPortIds.has(p.id)}
+                    onChange={(ev) =>
+                      setMergePortsModal((prev) => {
+                        if (!prev) return null;
+                        const next = new Set(prev.selectedPortIds);
+                        if (ev.target.checked) next.add(p.id);
+                        else next.delete(p.id);
+                        return { ...prev, selectedPortIds: next };
+                      })
+                    }
+                  />
+                  <span>
+                    {t(p.kind)} · {p.name}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </CanvasDialog>
         );
       })()}
 
       {/* 9. Exchange History Viewer Modal */}
       {exchangeModal && (
-        <div
-          className="fs-dialog-host"
-          onClick={() => setExchangeModal(null)}
+        <CanvasDialog
+          onClose={() => setExchangeModal(null)}
+          title={t("nativeExchange")}
+          description={t("nativeExchangeReadOnly")}
+          closeLabel={t("close")}
         >
-          <section
-            ref={dialogRef}
-            className="dialog"
-            role="dialog"
-            aria-modal="true"
-            onClick={(ev) => ev.stopPropagation()}
-          >
-            <header className="dialog-header">
-              <div>
-                <h2>{t("nativeExchange")}</h2>
-                <p>{t("nativeExchangeReadOnly")}</p>
-              </div>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => setExchangeModal(null)}
-              >
-                <Icon name="x" />
-              </button>
-            </header>
-            <div className="dialog-body">
-              <div className="exchange-messages">
-                {exchangeModal.items.map((item) => {
-                  const fromTitle =
-                    doc.nodes.find((n) => n.id === item.fromId)?.title ??
-                    item.fromId;
-                  const toTitle =
-                    doc.nodes.find((n) => n.id === item.toId)?.title ??
-                    item.toId;
-                  return (
-                    <article key={item.id} className="exchange-message">
-                      <header>
-                        <b className="user-content">
-                          {fromTitle} → {toTitle}
-                        </b>
-                        <time>{formatTime(item.at)}</time>
-                      </header>
-                      <p className="user-content">{item.text}</p>
-                      <button
-                        type="button"
-                        className="text-button"
-                        onClick={() => {
-                          setExchangeModal(null);
-                          extractDisplayFrom(
-                            item.fromId,
-                            item.text,
-                            item.seq,
-                            true,
-                          );
-                        }}
-                      >
-                        <Icon name="quote" />
-                        <span>{t("quoteMessage")}</span>
-                      </button>
-                    </article>
-                  );
-                })}
-              </div>
-            </div>
-          </section>
-        </div>
+          <div className="exchange-messages">
+            {exchangeModal.items.map((item) => {
+              const fromTitle =
+                doc.nodes.find((n) => n.id === item.fromId)?.title ??
+                item.fromId;
+              const toTitle =
+                doc.nodes.find((n) => n.id === item.toId)?.title ?? item.toId;
+              return (
+                <article key={item.id} className="exchange-message">
+                  <header>
+                    <b className="user-content">
+                      {fromTitle} → {toTitle}
+                    </b>
+                    <time>{formatTime(item.at)}</time>
+                  </header>
+                  <p className="user-content">{item.text}</p>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => {
+                      setExchangeModal(null);
+                      extractDisplayFrom(
+                        item.fromId,
+                        item.text,
+                        item.seq,
+                        true,
+                      );
+                    }}
+                  >
+                    <Icon name="quote" />
+                    <span>{t("quoteMessage")}</span>
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        </CanvasDialog>
       )}
 
       {/* 10. Help & Wire Legend Modal */}
@@ -11176,87 +10941,4 @@ function dictRoleLabel(role: string): string {
   const key = `role_${role}`;
   const val = t(key);
   return val === key ? role : val;
-}
-
-function FormDialog({
-  dialogRef,
-  modal,
-  onClose,
-}: {
-  dialogRef: React.RefObject<HTMLDivElement>;
-  modal: {
-    title: string;
-    description?: string;
-    initialValue: string;
-    secondaryLabel?: string;
-    secondaryInitial?: string;
-    onSubmit: (val: string, secondary?: string) => void;
-  };
-  onClose: () => void;
-}) {
-  const [val, setVal] = useState(modal.initialValue);
-  const [sec, setSec] = useState(modal.secondaryInitial ?? "");
-  return (
-    <div className="fs-dialog-host" onClick={onClose}>
-      <section
-        ref={dialogRef}
-        className="dialog"
-        role="dialog"
-        aria-modal="true"
-        onClick={(ev) => ev.stopPropagation()}
-      >
-        <header className="dialog-header">
-          <div>
-            <h2>{modal.title}</h2>
-            {modal.description && <p>{modal.description}</p>}
-          </div>
-          <button type="button" className="icon-button" onClick={onClose}>
-            <Icon name="x" />
-          </button>
-        </header>
-        <form
-          onSubmit={(ev) => {
-            ev.preventDefault();
-            if (!val.trim()) return;
-            modal.onSubmit(val.trim(), sec.trim());
-            onClose();
-          }}
-        >
-          <div className="dialog-body">
-            <label className="field-label">{t("name")}</label>
-            <input
-              autoFocus
-              required
-              className="text-field"
-              value={val}
-              onChange={(ev) => setVal(ev.target.value)}
-            />
-            {modal.secondaryLabel && (
-              <>
-                <label className="field-label">{modal.secondaryLabel}</label>
-                <textarea
-                  className="text-field"
-                  rows={3}
-                  value={sec}
-                  onChange={(ev) => setSec(ev.target.value)}
-                />
-              </>
-            )}
-          </div>
-          <footer className="dialog-footer">
-            <button type="button" className="button" onClick={onClose}>
-              <span>{t("cancel")}</span>
-            </button>
-            <button
-              type="submit"
-              className="button button-primary"
-              disabled={!val.trim()}
-            >
-              <span>{t("save")}</span>
-            </button>
-          </footer>
-        </form>
-      </section>
-    </div>
-  );
 }

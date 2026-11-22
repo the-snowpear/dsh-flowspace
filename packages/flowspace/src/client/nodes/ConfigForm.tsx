@@ -4,6 +4,7 @@ import type { FlowEdge, JsonObject, JsonValue, TeamModelRoute } from "../../type
 import type { NodeDescriptor } from "../../core/nodes/types.ts";
 import { mergeResultPort } from "../../core/connect.ts";
 import type { CanvasBridge } from "../bridge.ts";
+import { useModelRoutesState } from "../hooks/useModelRoutes.ts";
 import { t } from "../i18n.ts";
 import { ModelSelect } from "../TeamControls.tsx";
 import { visibleDataFields } from "./dataForm.ts";
@@ -152,8 +153,6 @@ export function ConfigForm({ descriptor, value, bridge, connectedPorts, apply }:
   const [draft, setDraft] = useState(value);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
-  const [routeError, setRouteError] = useState("");
-  const [routes, setRoutes] = useState<TeamModelRoute[]>([]);
   const merge = descriptor.flowType === "flowspace/merge-sort";
   const fields = descriptor.family === "data" ? visibleDataFields(descriptor.flowType, draft) : undefined;
   const data = !!fields;
@@ -162,12 +161,7 @@ export function ConfigForm({ descriptor, value, bridge, connectedPorts, apply }:
   const detailConfig = detailKey ? (draft[detailKey] ?? descriptor.defaultConfig[detailKey]) as JsonObject : undefined;
   const ai = descriptor.flowType === "flowspace/ai-judge" || detailKey === "ai";
   const modelFields = detailConfig ?? draft;
-  useEffect(() => {
-    if (!ai || !bridge) return;
-    let active = true;
-    void bridge.listModelRoutes().then(list => { if (active) setRoutes(list); }, e => { if (active) setRouteError(String(e)); });
-    return () => { active = false; };
-  }, [ai, bridge]);
+  const { routes, error: routeError } = useModelRoutesState(bridge, ai);
   async function submit() {
     setError("");
     setPending(true);

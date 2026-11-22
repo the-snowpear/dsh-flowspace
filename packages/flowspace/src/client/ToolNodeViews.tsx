@@ -14,36 +14,9 @@ import type {
 import type { CanvasBridge } from "./bridge.ts";
 import { Icon } from "./icons.tsx";
 import { t } from "./i18n.ts";
+import { DiffHunks } from "./ui/DiffView.tsx";
 
-export function DiffHunks({ hunks }: { hunks: DiffHunkView[] }) {
-  if (!hunks.length) {
-    return <p className="muted fs-tool-empty-hint">{t("noOutput")}</p>;
-  }
-  return (
-    <div className="fs-diff-view">
-      {hunks.map((hunk, idx) => (
-        <div key={idx} className="fs-diff-hunk">
-          <div className="fs-diff-hunk-head">
-            @@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines}{" "}
-            @@
-          </div>
-          {hunk.lines.map((line, lIdx) => {
-            const cls = line.startsWith("+")
-              ? "add"
-              : line.startsWith("-")
-                ? "del"
-                : "ctx";
-            return (
-              <div key={lIdx} className={`fs-diff-line ${cls}`}>
-                {line}
-              </div>
-            );
-          })}
-        </div>
-      ))}
-    </div>
-  );
-}
+export { DiffHunks };
 
 /** OMP-migrated GitQuickCard + GitWorkbench inside FlowSpace (M08, D55). */
 export function GitNodeBody({

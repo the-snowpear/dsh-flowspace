@@ -6,6 +6,7 @@ import { ModelChip, TeamAvatar, TeamMark, hueStyle, useFlip, useSlidingIndicator
 import { TeamComms } from "./TeamComms.tsx";
 import { TeamOrbit } from "./TeamOrbit.tsx";
 import { buildCrew, relativeTime, type CrewGroup, type CrewMessage, type CrewRow } from "./teamCrew.ts";
+import { ProgressRing } from "./ui/ProgressRing.tsx";
 import { Icon } from "./icons.tsx";
 import { t } from "./i18n.ts";
 
@@ -626,17 +627,6 @@ export function TaskBoard({ tasks, rows, leadId, columns = false, onSelect }: {
         </div>
       </> : <div className="fs-team-empty"><TeamMark icon="board" /><h3>{t("teamNoTasks")}</h3><p>{t("teamNoTasksHint")}</p></div>}
     </section>
-  );
-}
-
-function ProgressRing({ done, total }: { done: number; total: number }) {
-  const ratio = total ? done / total : 0;
-  return (
-    <svg className="fs-progress-ring" viewBox="0 0 36 36" aria-hidden="true">
-      <circle cx="18" cy="18" r="15" pathLength={100} />
-      <circle cx="18" cy="18" r="15" pathLength={100} style={{ strokeDashoffset: 100 - ratio * 100 }} />
-      <text x="18" y="18">{Math.round(ratio * 100)}<tspan dx="0.5" fontSize="6">%</tspan></text>
-    </svg>
   );
 }
 

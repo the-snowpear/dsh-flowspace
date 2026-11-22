@@ -3,6 +3,7 @@ import type { FlowspaceDocument, TeamModel, TeamModelReplacement, TeamModelRoute
 import type { CanvasBridge } from "./bridge.ts";
 import { CanvasDialog } from "./CanvasDialog.tsx";
 import { TeamModelPicker } from "./TeamAssetEditor.tsx";
+import { useModelRoutesState } from "./hooks/useModelRoutes.ts";
 import { Icon } from "./icons.tsx";
 import { t } from "./i18n.ts";
 import { workflowNodes } from "../core/document.ts";
@@ -26,7 +27,8 @@ export function WorkflowImportDialog({ request, bridge, onClose, onImported, ini
   const [enableTriggers, setEnableTriggers] = useState(false);
   const hasTriggers = (request.template?.nodes ?? request.document?.nodes ?? []).some(node => node.flowType === "flowspace/trigger");
   const [missing, setMissing] = useState(initialMissing);
-  const [routes, setRoutes] = useState<TeamModelRoute[]>();
+  const { routes: cachedRoutes, loaded: routesLoaded, error: routeError } = useModelRoutesState(bridge, missing.length > 0);
+  const routes = routesLoaded ? cachedRoutes : undefined;
   const [replacements, setReplacements] = useState<TeamModelReplacement[]>([]);
   const [pending, setPending] = useState(false);
   const [codeConfirmed, setCodeConfirmed] = useState(false);
@@ -36,9 +38,8 @@ export function WorkflowImportDialog({ request, bridge, onClose, onImported, ini
   const hasCode = containsCodeNode(request);
 
   useEffect(() => {
-    if (!missing.length || routes) return;
-    void bridge.listModelRoutes().then(setRoutes, (error) => setError(String(error)));
-  }, [bridge, missing.length, routes]);
+    if (routeError) setError(routeError);
+  }, [routeError]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();

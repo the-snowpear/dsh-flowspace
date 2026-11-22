@@ -4,6 +4,7 @@ import type { RoleDefinition, TeamBlueprint, TeamModel, TeamModelRoute, TeamSlot
 import type { CanvasBridge } from "./bridge.ts";
 import { CanvasDialog } from "./CanvasDialog.tsx";
 import { ModelChip, ModelSelect, Stepper, TeamAvatar } from "./TeamControls.tsx";
+import { useModelRoutesState } from "./hooks/useModelRoutes.ts";
 import { Icon } from "./icons.tsx";
 import { t } from "./i18n.ts";
 
@@ -59,7 +60,7 @@ export function TeamAssetEditor({ asset, roles, bridge, onClose, onSaved }: {
   onSaved: (asset: TeamAsset) => void;
 }) {
   const [editor, setEditor] = useState(asset);
-  const [routes, setRoutes] = useState<TeamModelRoute[]>([]);
+  const { routes, error: routeError } = useModelRoutesState(bridge, true);
   const [pending, setPending] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [error, setError] = useState("");
@@ -70,13 +71,8 @@ export function TeamAssetEditor({ asset, roles, bridge, onClose, onSaved }: {
     : t(existing ? "teamEditBlueprint" : "teamNewBlueprint");
 
   useEffect(() => {
-    let mounted = true;
-    void bridge.listModelRoutes().then(
-      (models) => { if (mounted) setRoutes(models); },
-      (failure) => { if (mounted) setError(String(failure)); },
-    );
-    return () => { mounted = false; };
-  }, [bridge]);
+    if (routeError) setError(routeError);
+  }, [routeError]);
 
   useEffect(() => {
     if (!confirmArchive) return;

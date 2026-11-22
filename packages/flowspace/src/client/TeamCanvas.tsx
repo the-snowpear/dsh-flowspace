@@ -3,30 +3,15 @@ import type { CanvasTeamConfig, FlowNode, FlowspaceSnapshot, TeamLayout, TeamMem
 import type { CanvasBridge } from "./bridge.ts";
 import { buildCrew, type CrewMessage, type CrewRow } from "./teamCrew.ts";
 import { staffPath, type ChildCard, type ChildLink } from "./childTree.ts";
+import { useModelRoutes } from "./hooks/useModelRoutes.ts";
 import { ModelChip, ModelSelect, Stepper, TeamAvatar, TeamSwitch, hueStyle } from "./TeamControls.tsx";
+import { ProgressRing } from "./ui/ProgressRing.tsx";
 import { Icon } from "./icons.tsx";
 import { t } from "./i18n.ts";
 
+export { useModelRoutes };
+
 type Pt = { x: number; y: number };
-
-/* ---------- Model routes, fetched once per canvas ---------- */
-
-let routesRequest: Promise<TeamModelRoute[]> | undefined;
-
-export function useModelRoutes(bridge: CanvasBridge, active: boolean): TeamModelRoute[] {
-  const [routes, setRoutes] = useState<TeamModelRoute[]>([]);
-  useEffect(() => {
-    if (!active) return;
-    let live = true;
-    routesRequest ??= bridge.listModelRoutes().catch((error: unknown) => {
-      routesRequest = undefined;
-      throw error;
-    });
-    routesRequest.then((value) => { if (live) setRoutes(value); }, () => {});
-    return () => { live = false; };
-  }, [bridge, active]);
-  return routes;
-}
 
 /* ---------- Cross-highlight: one role lights its card, wire and seat ---------- */
 
@@ -433,7 +418,7 @@ export function CrewFrame({ node, nodes, snapshot, status, routes, onEditTeam, o
             <strong>{t("teamLead")}</strong>
             <small>{lead.task?.subject ?? lead.status}</small>
           </span>
-          {tasks.length > 0 && <TaskRing done={done} total={tasks.length} />}
+          {tasks.length > 0 && <ProgressRing variant="compact" done={done} total={tasks.length} />}
         </button>
 
         {seats.map((seat, index) => {
@@ -484,16 +469,6 @@ export function CrewFrame({ node, nodes, snapshot, status, routes, onEditTeam, o
         </button>
       </footer>
     </div>
-  );
-}
-
-function TaskRing({ done, total }: { done: number; total: number }) {
-  const r = 9, c = 2 * Math.PI * r;
-  return (
-    <svg className="fs-crew-ring" width={24} height={24} viewBox="0 0 24 24" aria-label={t("teamTaskProgress", { done, total })}>
-      <circle cx={12} cy={12} r={r} />
-      <circle cx={12} cy={12} r={r} className="fs-crew-ring-done" strokeDasharray={`${(done / total) * c} ${c}`} />
-    </svg>
   );
 }
 
