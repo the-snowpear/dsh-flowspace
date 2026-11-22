@@ -1,20 +1,9 @@
 import type { FlowEdge, FlowNode, FlowspaceDocument, FlowspaceRun, FlowspaceSnapshot, FlowToken, RunStep } from "../types.ts";
-import type { Box } from "./geometry.ts";
-
-export function padded(box: Box, pad: number): Box {
-  return { x: box.x - pad, y: box.y - pad, w: box.w + pad * 2, h: box.h + pad * 2 };
-}
-
-export function intersects(a: Box, b: Box): boolean {
-  return a.x <= b.x + b.w && b.x <= a.x + a.w && a.y <= b.y + b.h && b.y <= a.y + a.h;
-}
+import type { Box } from "./boxes.ts";
+export { encloses, intersects, padded } from "./boxes.ts";
 
 export function viewportBox(view: FlowspaceDocument["viewport"], size: { width: number; height: number }): Box {
   return { x: -view.x / view.zoom, y: -view.y / view.zoom, w: size.width / view.zoom, h: size.height / view.zoom };
-}
-
-export function encloses(outer: Box, inner: Box): boolean {
-  return outer.x <= inner.x && outer.y <= inner.y && outer.x + outer.w >= inner.x + inner.w && outer.y + outer.h >= inner.y + inner.h;
 }
 
 export function shareSnapshotValue<T>(previous: T, next: T): T {
@@ -112,9 +101,11 @@ export function indexNodes(nodes: FlowNode[]) {
   return { nodesById, collapsed, membersOf, referenceSources };
 }
 
-function indexSnapshot(snapshot: FlowspaceSnapshot | null) {
-  const live = new Map(snapshot?.live.map(item => [item.nodeId, item]));
+function indexRuns(runs: FlowspaceRun[]) {
   const steps = new Map<string, RunStep[]>();
+  const latestRun = new Map<string, FlowspaceRun>();
+  const awaiting = new Map<string, { run: FlowspaceRun; step: RunStep }>();
+  const breakpoints = new Map<string, { run: FlowspaceRun; step: RunStep }>();
   const missingEmissions = new Map<string, { runId: string; step: RunStep }>();
   const waiting = new Map<string, { run: FlowspaceRun; token: FlowToken }[]>();
   const waitingByEdge = new Map<string, { run: FlowspaceRun; token: FlowToken }>();
@@ -122,11 +113,17 @@ function indexSnapshot(snapshot: FlowspaceSnapshot | null) {
   const latestToken = new Map<string, FlowToken>();
   const consumed = new Set<string>();
   const runningConsumed = new Set<string>();
-  for (const run of snapshot?.runs ?? []) {
+  for (const run of runs) {
     const active = ["running", "waiting", "paused"].includes(run.state);
     const edges = active ? byId(run.graph.edges) : undefined;
     for (const step of run.steps) {
       append(steps, step.nodeId, step);
+      latestRun.set(step.nodeId, run);
+      if (step.state === "awaiting") {
+        // Cards show the first pending step of the newest applicable run.
+        if (awaiting.get(step.nodeId)?.run !== run) awaiting.set(step.nodeId, { run, step });
+        if (step.debug && breakpoints.get(step.nodeId)?.run !== run) breakpoints.set(step.nodeId, { run, step });
+      }
       if (step.emission?.missing && !step.emission.reminderStepId && !["cancelled", "interrupted", "paused"].includes(run.state))
         missingEmissions.set(step.nodeId, { runId: run.id, step });
     }
@@ -144,16 +141,35 @@ function indexSnapshot(snapshot: FlowspaceSnapshot | null) {
       }
     }
   }
+  return { steps, latestRun, awaiting, breakpoints, missingEmissions, waiting, waitingByEdge, tokens, latestToken, consumed, runningConsumed };
+}
+
+const histories = new WeakMap<FlowspaceSnapshot, ReturnType<typeof indexRuns>>();
+
+/** Only the bridge can vouch that two published snapshots share reconciled, immutable runs. */
+export function reuseRunHistory(previous: FlowspaceSnapshot | null, next: FlowspaceSnapshot) {
+  if (!previous || previous.runs !== next.runs) return;
+  const history = histories.get(previous);
+  if (history) histories.set(next, history);
+}
+
+function indexSnapshot(snapshot: FlowspaceSnapshot | null) {
+  let history = snapshot && histories.get(snapshot);
+  if (!history) {
+    history = indexRuns(snapshot?.runs ?? []);
+    if (snapshot) histories.set(snapshot, history);
+  }
+  const live = new Map(snapshot?.live.map(item => [item.nodeId, item]));
   const statuses = new Map<string, string>();
   for (const node of snapshot?.document.nodes ?? []) {
     const item = live.get(node.id);
     const hasHistory = (item?.seq ?? -1) >= 0 || Boolean(item?.output?.trim());
-    const status = waiting.has(node.id) ? "waiting" : item?.pendingInput.length ? "input"
+    const status = history.waiting.has(node.id) ? "waiting" : item?.pendingInput.length ? "input"
       : item?.running ? "running" : node.participation === "bypassed" ? "bypassed"
-      : steps.get(node.id)?.at(-1)?.state ?? (node.sessionId && hasHistory ? "completed" : "draft");
+      : history.steps.get(node.id)?.at(-1)?.state ?? (node.sessionId && hasHistory ? "completed" : "draft");
     statuses.set(node.id, status);
   }
-  return { live, steps, missingEmissions, waiting, waitingByEdge, tokens, latestToken, consumed, runningConsumed, statuses };
+  return { ...history, live, statuses };
 }
 
 const indexes = new WeakMap<FlowspaceSnapshot, ReturnType<typeof indexSnapshot>>();

@@ -3011,21 +3011,25 @@ function stripNullFields(value, structuredContent = false) {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.filter((item) => item !== null && item !== void 0).map((item) => stripNullFields(item, structuredContent));
+    const items = [];
+    for (const item of value) {
+      if (item != null) items.push(stripNullFields(item, structuredContent));
+    }
+    return items;
   }
   const out = {};
   for (const [k, v] of Object.entries(value)) {
     if (structuredContent && k === "value") {
-      out[k] = v;
+      out[k] = structuredClone(v);
       continue;
     }
     if (v === null || v === void 0) continue;
-    out[k] = k === "config" && "kind" in value && value.kind === "flow" ? v : stripNullFields(v, structuredContent || k === "snapshotContent");
+    out[k] = k === "config" && "kind" in value && value.kind === "flow" ? structuredClone(v) : stripNullFields(v, structuredContent || k === "snapshotContent");
   }
   return out;
 }
 function sanitizeDocumentForWire(doc) {
-  return stripNullFields(structuredClone(doc));
+  return stripNullFields(doc);
 }
 function emptyDocument() {
   return {

@@ -146,6 +146,7 @@ test("missing descriptors preserve versioned JSON through the wire and storage",
   assert.equal(restored.nodes[0].flowType, "vendor/future-node");
   assert.equal(restored.nodes[0].configVersion, 42);
   assert.deepEqual(restored.nodes[0].config, config);
+  assert.notEqual(wire.nodes[0].config?.nested, config.nested);
   assert.equal(restored.nodes[0].window, undefined);
   assert.equal(unknown.window, null);
 });
@@ -160,7 +161,9 @@ test("frozen structured input preserves list order and JSON nulls through strict
   const methods = (TYPERT as { invocations: readonly InvocationDescriptor[] }).invocations;
   const save = methods.find(method => method.namespace === "flowspace" && method.method === "save")!;
   assert.ok(isTypertRemoteMethod(save));
-  const input = JSON.parse(JSON.stringify({ document: sanitizeDocumentForWire(doc) }));
+  const wire = sanitizeDocumentForWire(doc);
+  assert.notEqual(wire.edges[0].snapshotContent?.items?.[1]?.value, content.items?.[1]?.value);
+  const input = JSON.parse(JSON.stringify({ document: wire }));
   const parsed = save.input({ strict: true }).create().parse(input) as { document: typeof doc };
   const restored = documentSchema.parse(save.result.create().parse(parsed.document));
   checkDocument(restored);

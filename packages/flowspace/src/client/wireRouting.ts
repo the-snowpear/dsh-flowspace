@@ -1,5 +1,5 @@
 import type { FlowEdge, Waypoint as Point, WireRoutingMode } from "../types.ts";
-import type { Box } from "./geometry.ts";
+import type { Box } from "./boxes.ts";
 
 type WireEnd = Point & { box?: Box };
 type Rect = { left: number; top: number; right: number; bottom: number };

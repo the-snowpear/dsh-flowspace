@@ -74,7 +74,7 @@
 .fs-root .fs-ribbon-seg::before { content: ""; position: absolute; inset: -6px 0; }
 .fs-root .fs-ribbon-seg:hover { scale: 1 1.8; }
 .fs-root .fs-ribbon-seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.fs-root .fs-ribbon:has([aria-pressed="true"]) .fs-ribbon-seg:not([aria-pressed="true"]) { opacity: .3; }
+.fs-root .fs-ribbon[data-filtered] .fs-ribbon-seg:not([aria-pressed="true"]) { opacity: .3; }
 .fs-root .fs-ribbon-empty { flex: 1; border-radius: var(--r-full); background: var(--surface-3); }
 .fs-root :is(.fs-ribbon-seg, .fs-chip)[data-group="running"] { --seg: var(--green); }
 .fs-root :is(.fs-ribbon-seg, .fs-chip)[data-group="idle"] { --seg: color-mix(in oklab, var(--text-3) 50%, transparent); }

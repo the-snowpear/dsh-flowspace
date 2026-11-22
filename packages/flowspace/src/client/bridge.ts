@@ -45,7 +45,7 @@ import type {} from "../../lib/typert.remote-client.js";
 import type {} from "@deepseek-ai/dsh-client-locale/client";
 import type {} from "@deepseek-ai/dsh-subagent/remote";
 import { setLanguage } from "./i18n.ts";
-import { shareSnapshotValue } from "./sceneModel.ts";
+import { reuseRunHistory, shareSnapshotValue } from "./sceneModel.ts";
 
 export { sanitizeDocumentForWire };
 
@@ -184,6 +184,7 @@ export class FlowClient implements CanvasBridge {
     });
     const next = { ...snapshot, live: this.snapshot ? shareSnapshotValue(this.snapshot.live, live) : live };
     if (this.snapshot && (Object.keys(next) as (keyof FlowspaceSnapshot)[]).every(key => this.snapshot![key] === next[key])) return;
+    reuseRunHistory(this.snapshot, next);
     this.snapshot = next;
     this.listeners.forEach((fn) => fn());
   }

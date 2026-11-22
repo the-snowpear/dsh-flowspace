@@ -25,20 +25,22 @@ function stripNullFields<T>(value: T, structuredContent = false): T {
     return value;
   }
   if (Array.isArray(value)) {
-    return value
-      .filter((item) => item !== null && item !== undefined)
-      .map((item) => stripNullFields(item, structuredContent)) as unknown as T;
+    const items = [];
+    for (const item of value) {
+      if (item != null) items.push(stripNullFields(item, structuredContent));
+    }
+    return items as T;
   }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     if (structuredContent && k === "value") {
-      out[k] = v;
+      out[k] = structuredClone(v);
       continue;
     }
     if (v === null || v === undefined) continue;
     // Plugin JSON may use null as a value, including in arrays.
     out[k] = k === "config" && "kind" in value && value.kind === "flow"
-      ? v : stripNullFields(v, structuredContent || k === "snapshotContent");
+      ? structuredClone(v) : stripNullFields(v, structuredContent || k === "snapshotContent");
   }
   return out as T;
 }
@@ -50,7 +52,7 @@ function stripNullFields<T>(value: T, structuredContent = false): T {
 export function sanitizeDocumentForWire(
   doc: FlowspaceDocument,
 ): FlowspaceDocument {
-  return stripNullFields(structuredClone(doc));
+  return stripNullFields(doc);
 }
 
 export function emptyDocument(): FlowspaceDocument {

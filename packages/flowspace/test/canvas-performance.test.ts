@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyDocument, newEdge, newNode } from "../src/core/document.ts";
-import { applyGeometry, byId, indexNodes, intersects, runtimeIndex, shareSnapshotValue } from "../src/client/sceneModel.ts";
+import { applyGeometry, byId, indexNodes, intersects, reuseRunHistory, runtimeIndex, shareSnapshotValue } from "../src/client/sceneModel.ts";
 import { buildGuideRoute, obstacleDelta, pathExtent, RouteObstacles, SceneWires } from "../src/client/sceneWires.ts";
 import { route, routePath } from "../src/client/wireRouting.ts";
-import type { FlowspaceRun } from "../src/types.ts";
+import type { FlowspaceRun, RunStep } from "../src/types.ts";
 
 test("snapshot reconciliation follows IDs across reordering and retains unchanged branches", () => {
   const doc = emptyDocument();
@@ -78,6 +78,33 @@ test("waiting status is indexed against the captured run graph", () => {
   assert.equal(index.waiting.get(node.id)?.[0].token.id, "gate");
   assert.equal(index.waitingByEdge.get(edge.id), index.waiting.get(node.id)?.[0]);
   assert.equal(byId(document.edges).get(edge.id), undefined);
+});
+
+test("live-only snapshots reuse history and cards prefer the first awaiting step of the newest waiting run", () => {
+  const document = emptyDocument();
+  const node = newNode("agent", 0, 0, "A");
+  document.nodes = [node];
+  const step: RunStep = { id: "step", nodeId: node.id, requestId: "request", state: "awaiting",
+    createdAt: 0, iteration: 1, task: "", sources: [] };
+  const debug: RunStep = { ...step, id: "debug", debug: {
+    reason: "breakpoint", tools: [], originalTask: "", continuation: false, references: [],
+  } };
+  const run: FlowspaceRun = { id: "run", title: "", origin: "canvas", createdAt: 0, state: "waiting",
+    scope: null, roots: [], participants: [], notes: [], graph: { nodes: [node], edges: [] }, tokens: [], steps: [debug] };
+  const waiting = { ...run, id: "later", steps: [step, debug, { ...debug, id: "second-debug" }] };
+  const latest: FlowspaceRun = { ...run, id: "latest", steps: [{ ...step, state: "completed" }] };
+  const snapshot = { document, runs: [run, waiting, latest], live: [] };
+  const index = runtimeIndex(snapshot);
+  assert.equal(index.latestRun.get(node.id), latest);
+  assert.deepEqual(index.awaiting.get(node.id), { run: waiting, step });
+  assert.deepEqual(index.breakpoints.get(node.id), { run: waiting, step: debug });
+  const live = [{ nodeId: node.id, sessionId: "session", running: true, output: "new", seq: 1, pendingInput: [] }];
+  const next = { ...snapshot, live };
+  reuseRunHistory(snapshot, next);
+  const refreshed = runtimeIndex(next);
+  assert.equal(refreshed.steps, index.steps);
+  assert.equal(refreshed.statuses.get(node.id), "running");
+  assert.equal(runtimeIndex({ ...snapshot, runs: [latest] }).awaiting.has(node.id), false);
 });
 
 test("moving an obstacle preserves overlap guides but updates affected wire labels", () => {

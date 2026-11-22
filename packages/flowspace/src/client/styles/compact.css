@@ -140,7 +140,7 @@
   background: var(--sc);
   box-shadow: none;
 }
-.fs-root .node.compact[data-fs-semantic] .compact-status:has(.fs-team-node-summary) .compact-kind {
+.fs-root .node.compact[data-fs-semantic] .compact-status .compact-kind:has(~ .fs-team-node-summary) {
   display: none;
 }
 .fs-root .node.compact[data-fs-semantic] .compact-status .fs-team-node-summary {

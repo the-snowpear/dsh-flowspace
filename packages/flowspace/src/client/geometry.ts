@@ -9,6 +9,8 @@ import { judges } from "../core/nodes/judge/index.ts";
 import { DEFAULT_FLOW_SIZE, descriptorOf, portsOf, sizeOf } from "../core/nodes/registry.ts";
 import { dataMode } from "../core/nodes/data/descriptors.ts";
 import { t } from "./i18n.ts";
+import { bounds, type Box } from "./boxes.ts";
+export { bounds, type Box } from "./boxes.ts";
 
 export const clamp = (value: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, value));
@@ -68,14 +70,6 @@ export function capsuleStateOf(
   const current = edge.currentVersion ?? sourceVersions?.[edge.source];
   if (current && current !== edge.sentVersion) return "updated";
   return "sent";
-}
-
-export interface Box {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  compact?: boolean;
 }
 
 const round = (value: number): number => Math.round(value * 10) / 10;
@@ -230,18 +224,6 @@ export function expandedGroupBox(
     ),
     compact: false,
   };
-}
-
-export function bounds(boxes: Box[]): Box {
-  if (!boxes.length) return { x: 0, y: 0, w: 1000, h: 600 };
-  let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity;
-  for (const box of boxes) {
-    x = Math.min(x, box.x);
-    y = Math.min(y, box.y);
-    right = Math.max(right, box.x + box.w);
-    bottom = Math.max(bottom, box.y + box.h);
-  }
-  return { x, y, w: right - x, h: bottom - y };
 }
 
 export function toWorld(

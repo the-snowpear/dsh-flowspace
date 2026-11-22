@@ -8,3 +8,4 @@
 - Input validation belongs at the executing Host boundary; avoid redundant wrappers.
 - Run `pnpm check` and the integration smoke test for runtime changes.
 - Windows shell: Git Bash at `D:\Program Files\Git\bin\bash.exe`, invoked through PowerShell if the tool's shell selector resolves to WSL.
+- Use the [AI project index](docs/ai-index.md) to find the source files, design decisions, and tests for your task.

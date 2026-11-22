@@ -221,9 +221,12 @@
     radial-gradient(rgb(var(--grid-rgb) / calc(0.1 * var(--ga, 1))) 0.9px, transparent 1.3px);
   background-size: 120px 120px, 24px 24px;
 }
-.fs-root .fs-world[data-moving] {
-  /* Content sliding under a still cursor must not churn :hover styles mid-gesture. */
-  pointer-events: none;
+.fs-root .fs-world[data-moving] > .fs-scene-clip::after {
+  /* Catch hover over the moving scene without changing every card's inherited pointer-events. */
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 100;
 }
 
 /* ============================================================

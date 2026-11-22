@@ -1,5 +1,4 @@
-import type { Box } from "./geometry.ts";
-import { intersects } from "./sceneModel.ts";
+import { intersects, type Box } from "./boxes.ts";
 
 const CELL_SIZE = 512;
 const MAX_CELLS = 64;

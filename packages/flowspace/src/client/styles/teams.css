@@ -715,7 +715,7 @@
 .fs-root .fs-team-import-option .ic { width: 15px; height: 15px; color: var(--text-3); }
 .fs-root .fs-team-import-option input { margin-inline-start: auto; accent-color: var(--accent); }
 .fs-root .fs-team-import-option:has(:checked) { box-shadow: inset 0 0 0 1.5px var(--accent); background: var(--team-tint); }
-.fs-root .fs-team-import-option:has(:checked) .ic { color: var(--team-ink); }
+.fs-root .fs-team-import-option > .ic:has(~ input:checked) { color: var(--team-ink); }
 .fs-root .fs-workflow-import .fs-team-actions { justify-content: flex-end; margin-top: 8px; }
 .fs-root .fs-team-editor .fs-team-muted, .fs-root .fs-workflow-import .fs-team-muted { font-size: 12px; }
 

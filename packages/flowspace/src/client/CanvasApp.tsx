@@ -1489,7 +1489,9 @@ export function CanvasApp({
           const zoom = v.zoom / base.zoom;
           paintLayer(camera, { transform: worldTransform({ x: v.x - base.x * zoom, y: v.y - base.y * zoom, zoom }) });
         }
-        const ts = typeScaleFor(v.zoom);
+        // On large scenes the camera composites the settled raster during a glide.
+        // Resize its text and port glyphs only when the world is rasterised again.
+        const ts = typeScaleFor(rasterView.current?.zoom ?? v.zoom);
         if (ts !== typeScaleRef.current) {
           typeScaleRef.current = ts;
           for (const element of typeElements.current) element.style.setProperty("--fs-type-scale", String(ts));
@@ -1605,7 +1607,7 @@ export function CanvasApp({
       ".fs-card-slot:not([hidden]) :is(.port,.compact .node-heading strong,.compact-status .status,.compact-status .fs-team-node-summary,.compact-kind,.compact-overview-detail,.compact .node-actions,.compact .fs-lane-badges,.compact-release),.group-header > :is(strong,.fs-lane-metrics)",
     );
     const elements = new Set(matches ? Array.from(matches) : []);
-    const scale = String(typeScaleFor(docRef.current.viewport.zoom));
+    const scale = String(typeScaleRef.current);
     for (const element of elements) {
       if (!typeElements.current.has(element)) element.style.setProperty("--fs-type-scale", scale);
     }
@@ -5772,12 +5774,11 @@ export function CanvasApp({
       startPortDrag, startInputEdgeDrag, revealNode, openDetailCard, bindAgentSession, refreshProjectStructures,
       openAnchoredMenu, extractDisplayFrom, launchScope, toggleNodeForm, stopNode, returnWindow, openWindow,
       openInputHub, scheduleCloseInputHub, startStaffDrag, editBoard, createBoardCompanion, openBoardAgentMenu, openBoardMenu } = cardActions;
-    const flowRun = node.kind === "flow" ? snapshot?.runs.findLast(run => run.steps.some(step => step.nodeId === node.id && step.state === "awaiting"))
-      ?? snapshot?.runs.findLast(run => run.steps.some(step => step.nodeId === node.id)) : undefined;
-    const debugRun = snapshot?.runs.findLast(run => run.steps.some(step => step.nodeId === node.id && step.debug && step.state === "awaiting"));
-    const debugStep = debugRun?.steps.find(step => step.nodeId === node.id && step.debug && step.state === "awaiting");
-    const waitingHuman = flowRun?.steps.find(step => step.nodeId === node.id && step.state === "awaiting")?.human;
-    const state = waitingHuman || debugStep ? "waiting" : node.kind === "agent" || node.kind === "flow" ? nodeStatusOf(snapshot, node.id) : "";
+    const awaiting = node.kind === "flow" ? runtime.awaiting.get(node.id) : undefined;
+    const flowRun = node.kind === "flow" ? awaiting?.run ?? runtime.latestRun.get(node.id) : undefined;
+    const breakpoint = runtime.breakpoints.get(node.id);
+    const waitingHuman = awaiting?.step.human;
+    const state = waitingHuman || breakpoint ? "waiting" : node.kind === "agent" || node.kind === "flow" ? nodeStatusOf(snapshot, node.id) : "";
     const waitingGates =
       node.kind === "agent" ? runtime.waiting.get(node.id) ?? [] : [];
     const live = runtime.live.get(node.id);
@@ -7408,7 +7409,7 @@ export function CanvasApp({
         </header>
 
         {node.breakpoint && <span title={t("flow_bp_title")} className="fs-bp-marker" />}
-        {debugRun && debugStep && !compact && <Breakpoint run={debugRun} step={debugStep} bridge={bridge} />}
+        {breakpoint && !compact && <Breakpoint run={breakpoint.run} step={breakpoint.step} bridge={bridge} />}
         <CardBody compact={compact}
           preserve={placement === "canvas" && node.expanded && !node.pinned}
           prewarmFull={prewarmFull}
@@ -8520,22 +8521,25 @@ export function CanvasApp({
                           .join(" ");
 
                         const write = edge.kind === "reference" ? writeByEdge.get(edge.id) : undefined;
+                        const glow = edge.kind === "continuation" && ["active", "waiting", "boundary"].includes(evState);
+                        const flow = (edge.kind === "continuation" && (evState === "active" || evState === "queued")) ||
+                          (edge.kind === "reference" && (evState === "pending" || evState === "updated"));
                         return (
                           <g key={edge.id} className={retired ? "fs-lane-removed" : undefined}
                             data-flow-wire={!retired && edge.kind === "continuation" && evState === "active" ? edge.id : undefined}>
                             {/* Soft halo under live wires (shown only for active states) */}
-                            <path
+                            {glow && <path
                               className={`edge-path edge-glow ${cls}`}
                               d={geom.path}
-                            />
+                            />}
                             <path
                               className={`edge-path ${cls}`}
                               d={geom.path}
                             />
-                            <path
+                            {flow && <path
                               className={`edge-path edge-flow ${cls}`}
                               d={geom.path}
-                            />
+                            />}
                             {write && Date.now() - write.at < 1800 && !lod &&
                               <path key={write.id} className="fs-var-return fsx-motion" d={geom.path} pathLength={200} />}
                             {edge.kind === "event" && runtime.latestToken.get(edge.id)?.createdAt &&

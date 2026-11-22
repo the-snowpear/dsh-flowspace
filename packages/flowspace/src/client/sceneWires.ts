@@ -1,7 +1,6 @@
 import type { FlowEdge, NativeAgentMessage, WireRoutingMode } from "../types.ts";
 import { BoxIndex } from "./boxIndex.ts";
-import { bounds, type Box } from "./geometry.ts";
-import { encloses, intersects, padded } from "./sceneModel.ts";
+import { bounds, encloses, intersects, padded, type Box } from "./boxes.ts";
 import { route, routePath, type WireRoute } from "./wireRouting.ts";
 
 export interface ExchangePair {

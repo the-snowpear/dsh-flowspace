@@ -1064,7 +1064,7 @@
   rotate: -45deg;
   translate: 0 -1px;
 }
-.fs-root .launch-row:has(input:not(:checked)) b {
+.fs-root .launch-row > input:not(:checked) ~ div b {
   color: var(--text-faint);
   text-decoration: line-through;
 }

@@ -147,6 +147,7 @@ export function clientEsbuildOptions({ dev = false } = {}) {
     write: false,
     target: "es2022",
     jsx: "automatic",
+    minify: !dev,
     sourcemap: dev ? "inline" : false,
     external: CLIENT_EXTERNALS,
     plugins: [{

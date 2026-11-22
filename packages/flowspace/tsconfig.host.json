@@ -5,6 +5,7 @@
     "src/index.ts",
     "src/types.ts",
     "src/client/i18n.ts",
+    "src/client/boxes.ts",
     "src/client/geometry.ts",
     "src/host/**/*.ts",
     "src/core/**/*.ts"

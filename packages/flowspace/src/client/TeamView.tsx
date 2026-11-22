@@ -317,7 +317,7 @@ function Pulse({ rows, messages, tasks, capacity, now, groups, onGroup }: {
         <span className="fs-pulse-count">{t("teamMemberCountLine", { count: filled, running: counts.running })}</span>
         {last && <span className="fs-pulse-clock" title={new Date(last.at).toLocaleString()}>{t("teamLastActivity", { time: relativeTime(last.at, now) })}</span>}
       </div>
-      <div className="fs-ribbon" role="group" aria-label={t("teamCrew")}>
+      <div className="fs-ribbon" role="group" aria-label={t("teamCrew")} data-filtered={groups.size > 0 || undefined}>
         {GROUPS.map((group) => <button key={group} type="button" className="fs-ribbon-seg" data-group={group}
           aria-pressed={groups.has(group)} hidden={!counts[group]} style={{ flexGrow: counts[group] }}
           title={`${t(`teamGroup_${group}`)} · ${counts[group]}`} aria-label={`${t(`teamGroup_${group}`)} · ${counts[group]}`}
