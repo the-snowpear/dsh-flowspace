@@ -9690,6 +9690,7 @@ async function inspectEdgePayload(deps, request) {
   const source = state.doc.nodes.find((n) => n.id === edge2.source) ?? run?.graph.nodes.find((n) => n.id === edge2.source);
   const target = state.doc.nodes.find((n) => n.id === edge2.target) ?? run?.graph.nodes.find((n) => n.id === edge2.target);
   if (!source || !target) throw new Error("\u8FDE\u7EBF\u7AEF\u70B9\u4E0D\u5B58\u5728");
+  references.invalidateFileFingerprints();
   const sourceVersions = references.computeSourceVersions();
   let freshness = "live";
   if (edge2.kind === "reference") {

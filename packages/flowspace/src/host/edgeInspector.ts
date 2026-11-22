@@ -44,6 +44,9 @@ export async function inspectEdgePayload(
     run?.graph.nodes.find((n) => n.id === edge.target);
   if (!source || !target) throw new Error("连线端点不存在");
 
+  // X-Ray is an explicit freshness check. Bypass the short-lived render cache
+  // so a file created or edited immediately before inspection is visible.
+  references.invalidateFileFingerprints();
   const sourceVersions = references.computeSourceVersions();
   let freshness: EdgePayloadPreview["freshness"] = "live";
   if (edge.kind === "reference") {
