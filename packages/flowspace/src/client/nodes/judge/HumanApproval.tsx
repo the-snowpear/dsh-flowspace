@@ -1,22 +1,14 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { FlowspaceRun, JsonObject, RunStep } from "../../../types.ts";
 import { portsOf } from "../../../core/nodes/registry.ts";
 import { PayloadPeekCard } from "../../PayloadPeekPopover.tsx";
 import { Icon } from "../../icons.tsx";
 import { t } from "../../i18n.ts";
-import type { NodeViewProps } from "../index.ts";
-import { AnswerFields } from "../InteractionViews.tsx";
+import { AnswerFields } from "../AnswerFields.tsx";
+import { FlowCountdown } from "../FlowCountdown.tsx";
+import type { NodeViewProps } from "../types.ts";
 
-export function FlowCountdown({ deadline }: { deadline: number }) {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [deadline]);
-  const seconds = Math.max(0, Math.ceil((deadline - now) / 1000));
-  const time = Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
-  return <small className="fs-human-countdown">{t("flow_view_remaining", { time })}</small>;
-}
+export { FlowCountdown };
 
 const quote = (part: string) => /^[\w@%+=:,./\\-]+$/.test(part) ? part : `"${part.replace(/"/g, '\\"')}"`;
 

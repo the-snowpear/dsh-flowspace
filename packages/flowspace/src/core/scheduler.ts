@@ -46,50 +46,9 @@ import { FanoutExecution, laneSessionTitle } from "./runFanout.ts";
 import { isContainer } from "./containers.ts";
 import { triggerNode, checkAnswers } from "./nodes/interactions.ts";
 import { budgetHit } from "./budget.ts";
+import { isActiveStep as activeStep, type RuntimeAdapter, type SchedulerStore } from "./schedulerTypes.ts";
 
-export interface RuntimeAdapter {
-  execute?: NodeExecutor;
-  freezeContent?(source: ContextSnapshot, limit?: number, ownerSessionId?: string): Promise<ContextSnapshot>;
-  hydrateContent?(source: ContextSnapshot): Promise<ContextSnapshot>;
-  contextText?(sources: ContextSnapshot[], sessionId?: string): Promise<string>;
-  ensure(node: FlowNode, fork?: ContextSnapshot, sessionTitle?: string): Promise<string>;
-  send(step: RunStep): Promise<void>;
-  cancel(step: RunStep): Promise<void>;
-  capture(
-    node: FlowNode,
-    mode: ContextMode,
-    seq?: number,
-    output?: string,
-  ): Promise<ContextSnapshot>;
-  reference(node: FlowNode, edge?: FlowEdge, target?: FlowNode, limit?: number): Promise<ContextSnapshot>;
-  reconcile?(step: RunStep): Promise<Partial<RunStep>>;
-  running?(): string[];
-  isPlanModeActive?(sessionId: string): boolean | Promise<boolean>;
-  teamReference?(sessionId: string): TeamReference | undefined;
-  waitForTeam?(sessionId: string): Promise<void>;
-}
-export interface SchedulerStore {
-  document(): FlowspaceDocument;
-  changed(): Promise<void>;
-  deliver?(run: FlowspaceRun, edge: FlowEdge, token: FlowToken): Promise<void>;
-  variableReference?(run: FlowspaceRun, step: RunStep, node: FlowNode): ContextSnapshot;
-  prepareStep?(run: FlowspaceRun, step: RunStep, node: FlowNode): Promise<void> | void;
-  recordAccumulator?(run: FlowspaceRun, step: RunStep, node: FlowNode, source: ContextSnapshot): Promise<void>;
-  toolsFor?(run: FlowspaceRun, step: RunStep): string[];
-  bound(
-    nodeId: string,
-    sessionId: string,
-    fork?: ContextSnapshot,
-  ): Promise<void>;
-  submitted(
-    nodeId: string,
-    task: string,
-    isContinuation?: boolean,
-  ): Promise<void>;
-}
-
-const activeStep = (step: RunStep) =>
-  step.state === "queued" || step.state === "running" || step.state === "settling";
+export type { RuntimeAdapter, SchedulerStore };
 
 function consumeToken(token: FlowToken): void {
   if (token.consumed) return;

@@ -6,6 +6,7 @@ import type {} from "@deepseek-ai/dsh-spill";
 import type {} from "@deepseek-ai/dsh-fs";
 import { textOfContent } from "../core/content.ts";
 import type { ContextSnapshot, FlowItem, FlowSpill, JsonValue } from "../types.ts";
+import { getSpillStore } from "./dshServices.ts";
 
 export const MAX_INLINE_CONTEXT_BYTES = 64 * 1024;
 
@@ -30,7 +31,7 @@ export class ContentSpills {
     const key = createHash("sha256").update(JSON.stringify([owner, encoding])).update(raw).digest("hex");
     let record = this.records.get(key);
     if (!record) {
-      const backend = this.ctx.get("spillStore");
+      const backend = getSpillStore(this.ctx);
       if (!backend) throw new Error("长条目需要 DSH spill 存储");
       const saved = await backend.saveText({
         owner: { sessionId: owner as SessionId },
@@ -116,5 +117,36 @@ export class ContentSpills {
     if (!textSpill && content && out.content && source.text === textOfContent(content))
       out.text = textOfContent(out.content);
     return out;
+  }
+
+  /** Persist an oversized inline context block through the Host spill registry (deduplicated). */
+  async saveInlineContext(
+    body: string,
+    source: ContextSnapshot,
+    sessionId: string,
+  ): Promise<string> {
+    const backend = getSpillStore(this.ctx);
+    if (!backend) throw new Error("长引用需要 DSH spill 存储");
+    const key = createHash("sha256")
+      .update(JSON.stringify([sessionId, "context-md"]))
+      .update(body)
+      .digest("hex");
+    let record = this.records.get(key);
+    if (!record) {
+      const saved = await backend.saveText({
+        owner: { sessionId: sessionId as SessionId },
+        source: {
+          kind: "session-reference",
+          sessionId: (source.sourceSessionId ?? sessionId) as SessionId,
+          label: source.title,
+        },
+        suggestedName: `flowspace-${source.id}.md`,
+        content: body,
+      });
+      record = { ...saved, encoding: "text", preview: body.slice(0, 2000) };
+      await this.records.put(key, record);
+    }
+    this.byLocator.set(record.locator, record);
+    return `${record.preview}\n\n完整内容：${record.locator}\n${record.retrievalHint}`;
   }
 }

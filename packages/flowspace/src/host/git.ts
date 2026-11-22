@@ -21,6 +21,7 @@ import type {
   GitRepoStatus,
   GitWorktreeInfo,
 } from "../types.ts";
+import { KeyedSerialQueue } from "./serialQueue.ts";
 
 const execFile = promisify(execFileCb);
 
@@ -107,7 +108,7 @@ interface GitExecOptions {
  * - Supplies both 4-tier Project -> Branch -> Worktree structure & Git node workbench
  */
 export class HostGitService {
-  private queues = new Map<string, Promise<unknown>>();
+  private readonly queues = new KeyedSerialQueue();
 
   private async runGit(
     args: string[],
@@ -146,16 +147,7 @@ export class HostGitService {
     repoKey: string,
     fn: () => Promise<T>,
   ): Promise<T> {
-    const prev = this.queues.get(repoKey) ?? Promise.resolve();
-    const next = prev.then(fn);
-    this.queues.set(
-      repoKey,
-      next.then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    return next;
+    return this.queues.run(repoKey, fn);
   }
 
   async inspect(cwd: string): Promise<GitRepoStatus> {

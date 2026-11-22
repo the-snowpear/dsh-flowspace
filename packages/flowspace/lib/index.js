@@ -89,26 +89,91 @@ var __callDispose = (stack, error, hasError) => {
 };
 
 // packages/flowspace/src/index.ts
-import { createHash as createHash5, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { statSync as statSync2 } from "node:fs";
-import { open, readdir, readFile as readFile2, realpath, stat } from "node:fs/promises";
-import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, relative as relative2, resolve as resolve3 } from "node:path";
+import { isAbsolute as isAbsolute3, relative as relative3, resolve as resolve4 } from "node:path";
 import { Service } from "@deepseek-ai/cordis";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 
-// packages/flowspace/src/core/content.ts
-var DEFAULT_LIST_LIMIT = 1e3;
-function selectedFileContent(node2, limit = DEFAULT_LIST_LIMIT) {
-  const selected = node2.selectedItems?.length ? node2.selectedItems : node2.text.split(/\r?\n/);
-  const paths2 = [...new Set(selected.map((path) => path.trim()).filter(Boolean))];
-  return contentList(paths2, limit, paths2);
-}
+// packages/flowspace/src/core/utils.ts
 function canonicalJson(value, normalizeText2) {
   return JSON.stringify(value, (_key, member) => {
     if (normalizeText2 && typeof member === "string") return normalizeText2(member);
     if (!member || typeof member !== "object" || Array.isArray(member)) return member;
-    return Object.fromEntries(Object.keys(member).sort().map((key) => [key, member[key]]));
+    const record = member;
+    return Object.fromEntries(
+      Object.keys(record).sort().map((key) => [key, record[key]])
+    );
   });
+}
+function extractFileNodePaths(node2, dedupe2 = false) {
+  const raw = (node2.selectedItems?.length ? node2.selectedItems : node2.text.split(/\r?\n/)).map((p) => p.trim()).filter(Boolean);
+  return dedupe2 ? [...new Set(raw)] : raw;
+}
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a)) {
+    return Array.isArray(b) && a.length === b.length && a.every((value, i) => deepEqual(value, b[i]));
+  }
+  if (Array.isArray(b)) return false;
+  const left = a;
+  const right = b;
+  return Object.keys(left).every((key) => deepEqual(left[key], right[key])) && Object.keys(right).every(
+    (key) => right[key] === void 0 || Object.hasOwn(left, key)
+  );
+}
+function parseMarkdownFences(text) {
+  const lines2 = text.split(/\r\n?|\n/);
+  const headings = [];
+  const blocks = [];
+  const outsideLines = [];
+  let fence;
+  for (let line = 0; line < lines2.length; line++) {
+    const value = lines2[line];
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(value);
+    if (fence) {
+      if (marker && marker[1][0] === fence.marker[0] && marker[1].length >= fence.marker.length && !marker[2].trim()) {
+        blocks.push({
+          language: fence.language,
+          code: lines2.slice(fence.start, line).join("\n"),
+          closed: true
+        });
+        fence = void 0;
+      }
+    } else if (marker) {
+      fence = {
+        marker: marker[1],
+        language: marker[2].trim().split(/\s+/)[0] ?? "",
+        start: line + 1
+      };
+    } else {
+      outsideLines.push(value);
+      const heading = /^ {0,3}(#{1,6})(?:\s+(.+)|\s*)$/.exec(value);
+      if (heading) {
+        headings.push({
+          line,
+          level: heading[1].length,
+          title: (heading[2] ?? "").trim().replace(/\s+#+$/, "")
+        });
+      }
+    }
+  }
+  if (fence) {
+    blocks.push({
+      language: fence.language,
+      code: lines2.slice(fence.start).join("\n"),
+      closed: false
+    });
+  }
+  return { lines: lines2, headings, blocks, outsideLines };
+}
+
+// packages/flowspace/src/core/content.ts
+var DEFAULT_LIST_LIMIT = 1e3;
+function selectedFileContent(node2, limit = DEFAULT_LIST_LIMIT) {
+  const paths2 = extractFileNodePaths(node2, true);
+  return contentList(paths2, limit, paths2);
 }
 function itemHash(value) {
   return hashContentText(canonicalJson(value));
@@ -428,17 +493,16 @@ function writeCanvasEntry(node2, itemId, entry) {
   });
   return true;
 }
-var equal = (a, b) => a === b || JSON.stringify(a) === JSON.stringify(b);
 function mergeEntry(current, change, history) {
   const { before, after } = change;
-  if (equal(current, before)) return after;
+  if (deepEqual(current, before)) return after;
   if (current?.kind === "note" && after?.kind === "note") return history ? after : current;
   if (current?.kind !== "board" || before?.kind !== "board") return current;
-  if (after === null) return history || equal(current.card, before.card) ? null : current;
+  if (after === null) return history || deepEqual(current.card, before.card) ? null : current;
   if (after.kind !== "board") return current;
   const fields = { ...current.card };
   for (const key of /* @__PURE__ */ new Set([...Object.keys(before.card), ...Object.keys(after.card)])) {
-    if (equal(before.card[key], after.card[key]) || !history && !equal(current.card[key], before.card[key])) continue;
+    if (deepEqual(before.card[key], after.card[key]) || !history && !deepEqual(current.card[key], before.card[key])) continue;
     Object.assign(fields, { [key]: after.card[key] });
   }
   const moved = before.columnId !== after.columnId;
@@ -457,7 +521,7 @@ function rebaseContainerChanges(document, changes, history = false) {
     const node2 = next.nodes[index];
     const current = canvasEntry(node2, change.itemId);
     const entry = mergeEntry(current, change, history);
-    if (equal(current, entry)) continue;
+    if (deepEqual(current, entry)) continue;
     const updated = { ...node2 };
     if (writeCanvasEntry(updated, change.itemId, entry)) {
       next.nodes[index] = updated;
@@ -467,9 +531,7 @@ function rebaseContainerChanges(document, changes, history = false) {
   return next;
 }
 
-// packages/flowspace/src/client/i18n.ts
-var language = "zh";
-var getLanguage = () => language.startsWith("en") ? "en" : "zh";
+// packages/flowspace/src/core/i18n.ts
 var dict = {
   flow_missing_endpoint: ["\u8FDE\u7EBF\u7AEF\u70B9\u4E0D\u5B58\u5728", "An endpoint no longer exists"],
   flow_staff_only: ["\u5C97\u4F4D\u8282\u70B9\u53EA\u80FD\u901A\u8FC7\u7F16\u5236\u7EBF\u63A5\u5165\u56E2\u961F", "Use a staffing wire to connect a role to a team"],
@@ -2031,9 +2093,6 @@ function tFor(locale, key, values) {
   }
   return text;
 }
-function t(key, values) {
-  return tFor(getLanguage(), key, values);
-}
 
 // packages/flowspace/src/core/nodes/judge/ai.ts
 import { z as z2 } from "zod";
@@ -2313,29 +2372,6 @@ var mergeSort = {
 import { z as z8 } from "zod";
 
 // packages/flowspace/src/core/nodes/data/text.ts
-function markdown(text) {
-  const lines2 = text.split(/\r\n?|\n/);
-  const headings = [];
-  const blocks = [];
-  let fence;
-  for (let line = 0; line < lines2.length; line++) {
-    const value = lines2[line];
-    const marker = /^ {0,3}(\x60{3,}|~{3,})(.*)$/.exec(value);
-    if (fence) {
-      if (marker && marker[1][0] === fence.marker[0] && marker[1].length >= fence.marker.length && !marker[2].trim()) {
-        blocks.push({ language: fence.language, code: lines2.slice(fence.start, line).join("\n") });
-        fence = void 0;
-      }
-    } else if (marker) {
-      fence = { marker: marker[1], language: marker[2].trim().split(/\s+/)[0], start: line + 1 };
-    } else {
-      const heading = /^ {0,3}(#{1,6})(?:\s+(.+)|\s*)$/.exec(value);
-      if (heading) headings.push({ line, level: heading[1].length, title: (heading[2] ?? "").trim().replace(/\s+#+$/, "") });
-    }
-  }
-  if (fence) blocks.push({ language: fence.language, code: lines2.slice(fence.start).join("\n") });
-  return { lines: lines2, headings, blocks };
-}
 function pieces(values) {
   return values.map((value) => value.trim()).filter(Boolean);
 }
@@ -2361,12 +2397,12 @@ function splitValues(config, text) {
       return pieces([...parts, text.slice(start)]);
     }
     case "headings": {
-      const { lines: lines2, headings } = markdown(text);
+      const { lines: lines2, headings } = parseMarkdownFences(text);
       const cuts = [0, ...headings.map((h) => h.line), lines2.length];
       return pieces(cuts.slice(1).map((end, i) => lines2.slice(cuts[i], end).join("\n")));
     }
     case "code-blocks":
-      return markdown(text).blocks.map((block) => block.code);
+      return parseMarkdownFences(text).blocks.map((block) => block.code);
     default:
       throw new Error("\u672A\u77E5\u7684\u6587\u672C\u62C6\u5206\u65B9\u5F0F");
   }
@@ -2418,13 +2454,13 @@ function extractValues(config, text) {
       });
     }
     case "json-path": {
-      const first = markdown(text).blocks.find((block) => block.language.toLowerCase() === "json");
+      const first = parseMarkdownFences(text).blocks.find((block) => block.language.toLowerCase() === "json");
       return pathValues(JSON.parse(first?.code ?? text), String(config.path ?? "$"));
     }
     case "code-blocks":
-      return markdown(text).blocks.map((block) => block.code);
+      return parseMarkdownFences(text).blocks.map((block) => block.code);
     case "heading": {
-      const { lines: lines2, headings } = markdown(text);
+      const { lines: lines2, headings } = parseMarkdownFences(text);
       const wanted = String(config.heading ?? "").trim().replace(/^#{1,6}\s+/, "").toLowerCase();
       return headings.flatMap((heading, index) => {
         if (heading.title.toLowerCase() !== wanted) return [];
@@ -2464,7 +2500,7 @@ function errorBlocks(text) {
   return errors;
 }
 function jsonSections(text) {
-  const fenced = markdown(text).blocks.filter((block) => block.language.toLowerCase() === "json");
+  const fenced = parseMarkdownFences(text).blocks.filter((block) => block.language.toLowerCase() === "json");
   if (fenced.length) return fenced.map((block) => JSON.parse(block.code));
   try {
     return [JSON.parse(text)];
@@ -2510,7 +2546,7 @@ function parseValues(config, text) {
     case "json":
       return jsonSections(text);
     case "code-blocks":
-      return markdown(text).blocks.map((block) => ({ language: block.language, code: block.code }));
+      return parseMarkdownFences(text).blocks.map((block) => ({ language: block.language, code: block.code }));
     default:
       throw new Error("\u672A\u77E5\u7684\u4E0A\u4E0B\u6587\u89E3\u6790\u65B9\u5F0F");
   }
@@ -3558,34 +3594,26 @@ function checkEmissionValues(targets, values) {
   }
 }
 function parseEmission(text) {
-  const items = [];
-  let fence;
-  for (const line of text.split(/\r?\n/)) {
-    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (fence) {
-      if (marker && marker[1].startsWith(fence.marker) && !marker[2].trim()) {
-        if (fence.json) {
-          try {
-            const value = JSON.parse(fence.lines.join("\n"));
-            if (Array.isArray(value)) return value;
-            if (value && typeof value === "object") return [value];
-          } catch {
-          }
-        }
-        fence = void 0;
-      } else if (fence.json) fence.lines.push(line);
-    } else if (marker) {
-      fence = { marker: marker[1], json: /^(?:json)?$/i.test(marker[2].trim()), lines: [] };
-    } else {
-      const item = /^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$/.exec(line)?.[1].trim();
-      if (item) items.push(item);
+  const { blocks, outsideLines } = parseMarkdownFences(text);
+  for (const block of blocks) {
+    if (!block.closed || !/^(?:json)?$/i.test(block.language)) continue;
+    try {
+      const value = JSON.parse(block.code);
+      if (Array.isArray(value)) return value;
+      if (value && typeof value === "object") return [value];
+    } catch {
     }
+  }
+  const items = [];
+  for (const line of outsideLines) {
+    const item = /^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$/.exec(line)?.[1].trim();
+    if (item) items.push(item);
   }
   if (items.length) return items;
   throw new Error("\u672A\u6536\u5230 flow_emit \u8F93\u51FA\uFF0C\u7ED3\u8BBA\u4E2D\u4E5F\u6CA1\u6709\u53EF\u7528\u7684 Markdown \u5217\u8868\u6216 JSON \u4EE3\u7801\u5757");
 }
 
-// packages/flowspace/src/client/geometry.ts
+// packages/flowspace/src/core/geometry.ts
 var clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 var BOARD_MIN_SIZE = [320, 280];
 var COMPACT_SIZE = {
@@ -3708,7 +3736,7 @@ function expandedGroupBox(doc, group, lod = false, keepExpandedIds) {
     compact: false
   };
 }
-function inferGroupPorts(doc, group) {
+function inferGroupPorts(doc, group, locale = "zh") {
   const inside = new Set(members(doc, group.id));
   const inferred = [];
   for (const kind of ["reference", "continuation"]) {
@@ -3730,7 +3758,7 @@ function inferGroupPorts(doc, group) {
             ...portId ? { portId } : {},
             kind,
             direction,
-            name: port ? `${targetNode.title} \xB7 ${port.label ?? t(port.labelKey ?? port.id)}` : targetNode.title,
+            name: port ? `${targetNode.title} \xB7 ${port.label ?? tFor(locale, port.labelKey ?? port.id)}` : targetNode.title,
             nodes: [nodeId],
             hidden: false
           });
@@ -3746,7 +3774,7 @@ function inferGroupPorts(doc, group) {
       kind: port.role,
       direction: port.direction,
       portId: port.id,
-      name: port.label ?? (port.labelKey ? t(port.labelKey) : node2.title),
+      name: port.label ?? (port.labelKey ? tFor(locale, port.labelKey) : node2.title),
       nodes: [node2.id],
       hidden: false
     })));
@@ -3811,15 +3839,15 @@ function inferGroupPorts(doc, group) {
 }
 function bezier(x1, y1, x2, y2) {
   return (x) => {
-    let lo = 0, hi = 1, t2 = x;
+    let lo = 0, hi = 1, t = x;
     const val = (a, b, u) => 3 * (1 - u) ** 2 * u * a + 3 * (1 - u) * u * u * b + u ** 3;
     for (let i = 0; i < 16; i++) {
-      const v = val(x1, x2, t2);
-      if (v < x) lo = t2;
-      else hi = t2;
-      t2 = (lo + hi) / 2;
+      const v = val(x1, x2, t);
+      if (v < x) lo = t;
+      else hi = t;
+      t = (lo + hi) / 2;
     }
-    return val(y1, y2, t2);
+    return val(y1, y2, t);
   };
 }
 var easeView = bezier(0.32, 0.72, 0, 1);
@@ -4338,14 +4366,6 @@ function laneMap(objects, fanId) {
   }
   return result;
 }
-function sameValue(a, b) {
-  if (a === b) return true;
-  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
-  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((value, i) => sameValue(value, b[i]));
-  if (Array.isArray(b)) return false;
-  const left = a, right = b;
-  return Object.keys(left).every((key) => sameValue(left[key], right[key])) && Object.keys(right).every((key) => right[key] === void 0 || Object.hasOwn(left, key));
-}
 function reconcileFanout(graph, fanId, items, usedNodeIds = /* @__PURE__ */ new Set()) {
   const pair = fanoutPair(graph, fanId);
   if (!pair) return false;
@@ -4401,7 +4421,7 @@ function reconcileFanout(graph, fanId, items, usedNodeIds = /* @__PURE__ */ new 
   }
   const same = (previous, next) => {
     const flat = [...previous.values()].flat();
-    return flat.length === next.length && flat.every((entry, i) => entry === next[i] || entry.id === next[i].id && sameValue(entry, next[i]));
+    return flat.length === next.length && flat.every((entry, i) => entry === next[i] || entry.id === next[i].id && deepEqual(entry, next[i]));
   };
   if (!same(rows, nextNodes) || !same(wires, nextEdges)) {
     const kept = graph.nodes.filter((node2) => node2.generatedBy !== fanId);
@@ -4446,7 +4466,7 @@ function markFanoutOverrides(previous, next) {
     if (!updated && node2.masterNodeId && !master) continue;
     const parent = before.get(node2.parentId ?? ""), movedParent = after.get(node2.parentId ?? "");
     const dx = (movedParent?.x ?? 0) - (parent?.x ?? 0), dy = (movedParent?.y ?? 0) - (parent?.y ?? 0);
-    if (!updated || node2.parentId !== updated.parentId || node2.x + dx !== updated.x || node2.y + dy !== updated.y || fields.some((field) => !sameValue(node2[field], updated[field]) && (!master || !sameValue(master[field], updated[field])))) changed.add(laneId(node2));
+    if (!updated || node2.parentId !== updated.parentId || node2.x + dx !== updated.x || node2.y + dy !== updated.y || fields.some((field) => !deepEqual(node2[field], updated[field]) && (!master || !deepEqual(master[field], updated[field])))) changed.add(laneId(node2));
   }
   const edges = new Map(next.edges.map((edge2) => [edge2.id, edge2]));
   const previousEdges = new Map(previous.edges.map((edge2) => [edge2.id, edge2]));
@@ -4456,14 +4476,14 @@ function markFanoutOverrides(previous, next) {
     const updated = edges.get(edge2.id);
     const master = edge2.masterEdgeId && edges.get(edge2.masterEdgeId);
     if (!updated && edge2.masterEdgeId && !master) continue;
-    if (!updated || !sameValue(edgeFields(edge2), edgeFields(updated))) {
+    if (!updated || !deepEqual(edgeFields(edge2), edgeFields(updated))) {
       const originalEndpoint = (id) => {
         const node2 = after.get(id);
         return node2 && node2.generatedBy === edge2.generatedBy && node2.itemKey === edge2.itemKey ? node2.masterNodeId ?? id : id;
       };
       const logical = updated && { ...updated, source: originalEndpoint(updated.source), target: originalEndpoint(updated.target) };
-      if (!logical || !master || !sameValue(edgeFields(logical), edgeFields(master))) changed.add(laneId(edge2));
-    } else if (!sameValue(edge2.waypoints ?? [], updated.waypoints ?? [])) {
+      if (!logical || !master || !deepEqual(edgeFields(logical), edgeFields(master))) changed.add(laneId(edge2));
+    } else if (!deepEqual(edge2.waypoints ?? [], updated.waypoints ?? [])) {
       const source = before.get(edge2.generatedBy), moved = source && after.get(source.id);
       if (!source || !moved || source.x === moved.x && source.y === moved.y) changed.add(laneId(edge2));
     }
@@ -4844,8 +4864,10 @@ function budgetHit(run, step, beforeDispatch, now) {
   }
 }
 
+// packages/flowspace/src/core/schedulerTypes.ts
+var isActiveStep = (step) => step.state === "queued" || step.state === "running" || step.state === "settling";
+
 // packages/flowspace/src/core/scheduler.ts
-var activeStep = (step) => step.state === "queued" || step.state === "running" || step.state === "settling";
 function consumeToken(token) {
   if (token.consumed) return;
   token.consumed = true;
@@ -4878,7 +4900,7 @@ var Scheduler = class {
     const sessions = new Set(this.runtime.running?.() ?? []);
     return /* @__PURE__ */ new Set([
       ...this.runs.flatMap(
-        (r) => r.steps.filter(activeStep).map((s) => s.nodeId)
+        (r) => r.steps.filter(isActiveStep).map((s) => s.nodeId)
       ),
       ...this.store.document().nodes.filter((n) => n.sessionId && sessions.has(n.sessionId)).map((n) => n.id)
     ]);
@@ -4886,8 +4908,8 @@ var Scheduler = class {
   waiting() {
     return new Set(
       this.runs.flatMap(
-        (r) => r.tokens.filter((t2) => !t2.ready && !t2.consumed && !t2.dismissed && (!t2.delayUntil || t2.needsRelease)).flatMap((t2) => {
-          const edge2 = r.graph.edges.find((e) => e.id === t2.edgeId);
+        (r) => r.tokens.filter((t) => !t.ready && !t.consumed && !t.dismissed && (!t.delayUntil || t.needsRelease)).flatMap((t) => {
+          const edge2 = r.graph.edges.find((e) => e.id === t.edgeId);
           return edge2 ? [edge2.target] : [];
         })
       )
@@ -4916,7 +4938,7 @@ var Scheduler = class {
       const scope = request.kind === "global" || request.kind === "single" ? null : request.kind === "from-node" ? reachable(expandIds(request.nodeIds), doc.edges, doc.nodes) : request.kind === "to-node" ? ancestorsOf(expandIds(request.nodeIds), doc.edges, doc.nodes) : expandIds(request.nodeIds);
       const groupTitles = request.kind === "group" ? request.nodeIds.map(
         (id) => doc.nodes.find((n) => n.id === id && n.kind === "group")?.title
-      ).filter((t2) => Boolean(t2?.trim())) : [];
+      ).filter((t) => Boolean(t?.trim())) : [];
       const customTitle = groupTitles.length ? groupTitles.join(" \xB7 ") : void 0;
       const run = this.create(plan.roots, scope, "canvas", customTitle);
       await this.store.changed();
@@ -5942,7 +5964,7 @@ var Scheduler = class {
     await this.emitDownstreamTokens(run, step, node2, void 0, void 0, source.text, false, source);
   }
   async cancelFanoutLane(run, batch, lane) {
-    for (const step of run.steps.filter((step2) => step2.fanoutBatchId === batch.id && step2.itemKey === lane.item.key && (activeStep(step2) || step2.state === "awaiting"))) {
+    for (const step of run.steps.filter((step2) => step2.fanoutBatchId === batch.id && step2.itemKey === lane.item.key && (isActiveStep(step2) || step2.state === "awaiting"))) {
       await this.stopStep(step);
       step.state = "aborted";
       step.endedAt = Date.now();
@@ -5984,7 +6006,7 @@ var Scheduler = class {
     do {
       progressed = false;
       const steps = new Map(run.steps.map((step) => [step.id, step]));
-      const frontier = run.steps.filter((s) => activeStep(s) || ["awaiting", "error", "interrupted", "aborted"].includes(s.state)).map((s) => s.nodeId);
+      const frontier = run.steps.filter((s) => isActiveStep(s) || ["awaiting", "error", "interrupted", "aborted"].includes(s.state)).map((s) => s.nodeId);
       const delivered = /* @__PURE__ */ new Set();
       for (const token of run.tokens) {
         const edge2 = edges.get(token.edgeId);
@@ -6044,8 +6066,8 @@ var Scheduler = class {
             const sourceFeedsBack = rank.get(origin.nodeId) >= rank.get(nodeId);
             return origin.iteration === count + (sourceFeedsBack ? 0 : 1);
           });
-          let token = candidates.find((t2) => !t2.consumed && (!back || !t2.skip));
-          if (back && !token && candidates.some((t2) => t2.skip)) continue;
+          let token = candidates.find((t) => !t.consumed && (!back || !t.skip));
+          if (back && !token && candidates.some((t) => t.skip)) continue;
           if (!token && !internal && cyclic.has(group)) token = candidates.at(-1);
           if (!token?.ready) {
             missing = true;
@@ -6107,9 +6129,9 @@ var Scheduler = class {
         const comp = order.component.get(request.nodeId);
         if (comp !== void 0 && order.cyclic.has(comp)) targetComps.add(comp);
       } else {
-        for (const t2 of run.tokens) {
-          if (!t2.loopCapReached || t2.consumed || t2.dismissed) continue;
-          const edge2 = run.graph.edges.find((e) => e.id === t2.edgeId);
+        for (const t of run.tokens) {
+          if (!t.loopCapReached || t.consumed || t.dismissed) continue;
+          const edge2 = run.graph.edges.find((e) => e.id === t.edgeId);
           const comp = edge2 ? order.component.get(edge2.target) : void 0;
           if (comp !== void 0 && order.cyclic.has(comp))
             targetComps.add(comp);
@@ -6316,7 +6338,7 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
   }
   release(runId, tokenId, accept) {
     return this.transact(async () => {
-      const run = this.requireRun(runId), token = run.tokens.find((t2) => t2.id === tokenId);
+      const run = this.requireRun(runId), token = run.tokens.find((t) => t.id === tokenId);
       if (!token || token.consumed || token.dismissed || ["cancelled", "interrupted"].includes(run.state))
         return;
       if (!accept) {
@@ -6367,7 +6389,7 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
       } else {
         run.state = "cancelled";
         delete run.pendingEvents;
-        for (const step of run.steps.filter((s) => activeStep(s) || s.state === "awaiting")) {
+        for (const step of run.steps.filter((s) => isActiveStep(s) || s.state === "awaiting")) {
           await this.stopStep(step);
           step.state = "aborted";
           step.endedAt = Date.now();
@@ -6404,7 +6426,7 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
       if (!["running", "waiting", "paused"].includes(run.state)) continue;
       run.state = "interrupted";
       for (const step of run.steps) {
-        if (activeStep(step) || step.state === "awaiting") {
+        if (isActiveStep(step) || step.state === "awaiting") {
           await this.stopStep(step);
           step.state = "interrupted";
           step.endedAt = Date.now();
@@ -6432,11 +6454,11 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
       const resume = [];
       for (const run of this.runs) {
         if (!["running", "waiting", "paused"].includes(run.state)) continue;
-        const hadActiveSteps = run.steps.some(activeStep);
+        const hadActiveSteps = run.steps.some(isActiveStep);
         const resumable = this.hasDurableWait(run) || run.state === "paused" && !hadActiveSteps;
         if (!resumable) run.state = "interrupted";
         for (const step of run.steps) {
-          if (activeStep(step) || resumable && step.fanoutBatchId && step.sessionId && step.state === "interrupted" && step.endSeq === void 0) {
+          if (isActiveStep(step) || resumable && step.fanoutBatchId && step.sessionId && step.state === "interrupted" && step.endSeq === void 0) {
             let patch;
             try {
               patch = step.sessionId && this.runtime.reconcile ? await this.runtime.reconcile(step) : { state: "interrupted", endedAt: Date.now() };
@@ -6464,7 +6486,7 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
                   );
                 }
               }
-            } else if (step.emission && !activeStep(step)) step.emission.closed = true;
+            } else if (step.emission && !isActiveStep(step)) step.emission.closed = true;
           }
         }
         if (resumable) {
@@ -6490,7 +6512,7 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
       for (const run of this.runs.filter(
         (r) => ["running", "waiting", "paused"].includes(r.state)
       )) {
-        const active2 = run.steps.filter(activeStep);
+        const active2 = run.steps.filter(isActiveStep);
         if (this.hasDurableWait(run)) {
           if (run.state !== "paused") run.state = "waiting";
         } else if (run.state !== "paused" || active2.length) run.state = "interrupted";
@@ -6515,9 +6537,9 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
     if (["paused", "cancelled", "interrupted"].includes(run.state)) return;
     if (run.steps.some((s) => s.state === "awaiting"))
       run.state = "waiting";
-    else if (run.steps.some(activeStep))
+    else if (run.steps.some(isActiveStep))
       run.state = "running";
-    else if (run.tokens.some((t2) => !t2.skip && !t2.consumed && !t2.dismissed && !t2.ready))
+    else if (run.tokens.some((t) => !t.skip && !t.consumed && !t.dismissed && !t.ready))
       run.state = "waiting";
     else if (run.pendingEvents?.length || run.fanouts?.some((batch) => batch.lanes.some((lane) => lane.state === "queued")))
       run.state = "waiting";
@@ -6530,7 +6552,7 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
       return ["error", "aborted", "interrupted"].includes(step.state);
     }) || run.state === "error")
       run.state = "error";
-    else if (run.tokens.some((t2) => !t2.skip && !t2.consumed && !t2.dismissed)) {
+    else if (run.tokens.some((t) => !t.skip && !t.consumed && !t.dismissed)) {
       run.state = "error";
       this.addNoteOnce(
         run,
@@ -6542,6 +6564,91 @@ ${reminder.task}` : isContinuation ? (node2.continuationPrompt ?? "").trim() || 
 
 // packages/flowspace/src/host/nodes/judge/ai.ts
 import { z as z12 } from "zod";
+
+// packages/flowspace/src/host/llm.ts
+async function runLlmStream(llm, req, finalize) {
+  req.signal?.throwIfAborted();
+  const startedAt = Date.now();
+  const trace = req.trace ? {
+    id: crypto.randomUUID(),
+    operation: req.trace.operation,
+    provider: req.provider,
+    model: req.model,
+    ...req.trace.itemKey !== void 0 ? { itemKey: req.trace.itemKey } : {},
+    ...req.trace.index !== void 0 ? { index: req.trace.index } : {},
+    startedAt,
+    endedAt: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    inputSummary: (req.trace.inputSummary ?? req.userText).slice(0, 240)
+  } : void 0;
+  let text = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let finished = false;
+  try {
+    for await (const chunk of llm.stream({
+      provider: req.provider,
+      model: req.model,
+      signal: req.signal,
+      purpose: req.purpose,
+      ...req.system !== void 0 ? { system: req.system } : {},
+      messages: [{ role: "user", content: [{ type: "text", text: req.userText }] }]
+    })) {
+      if (chunk.type === "usage") {
+        inputTokens += chunk.usage.inputTokens + (chunk.usage.cacheReadTokens ?? 0) + (chunk.usage.cacheWriteTokens ?? 0);
+        outputTokens += chunk.usage.outputTokens;
+        if (trace) {
+          trace.inputTokens = inputTokens;
+          trace.outputTokens = outputTokens;
+        }
+      } else if (chunk.type === "text-delta") {
+        text += chunk.text;
+      } else if (chunk.type === "finish") {
+        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") {
+          throw new Error(chunk.reason.failure.message);
+        }
+        finished = true;
+      }
+      req.signal?.throwIfAborted();
+    }
+    req.signal?.throwIfAborted();
+    if (req.requireFinish && !finished) {
+      throw new Error(req.incompleteMessage ?? "\u6A21\u578B\u672A\u5B8C\u6210\u8BF7\u6C42");
+    }
+    const value = finalize(text);
+    return { text, inputTokens, outputTokens, finished, trace, value };
+  } catch (error) {
+    if (trace) trace.error = error instanceof Error ? error.message : String(error);
+    throw error;
+  } finally {
+    if (trace && req.trace) {
+      trace.endedAt = Date.now();
+      if (text) trace.outputSummary = text.slice(0, 240);
+      req.trace.calls?.push(trace);
+      await req.trace.record?.(trace);
+    }
+  }
+}
+async function streamLlmText(llm, req) {
+  const { value: _value, ...result } = await runLlmStream(llm, req, (text) => text);
+  return result;
+}
+async function streamLlmJson(llm, req) {
+  const { parse: parse2, invalidJsonMessage, ...base } = req;
+  const { value, ...result } = await runLlmStream(llm, base, (raw) => {
+    let parsed2;
+    try {
+      parsed2 = JSON.parse(raw);
+    } catch {
+      throw new Error(invalidJsonMessage ?? "\u6A21\u578B\u672A\u8FD4\u56DE\u6709\u6548\u7684 JSON");
+    }
+    return parse2(parsed2);
+  });
+  return { ...result, data: value };
+}
+
+// packages/flowspace/src/host/nodes/judge/ai.ts
 var response = z12.object({
   branch: z12.string(),
   reason: z12.string(),
@@ -6560,28 +6667,21 @@ async function aiJudge(llm, config, input, signal) {
   ].join("\n");
   for (let attempt = 0; attempt < 2; attempt++) {
     signal.throwIfAborted();
-    let raw = "";
     telemetry.stepCount++;
-    for await (const chunk of llm.stream({
+    const res = await streamLlmText(llm, {
       provider,
       model,
       signal,
       purpose: "flowspace-judge",
       system: attempt ? system + "\n\u4E0A\u6B21\u54CD\u5E94\u65E0\u6CD5\u89E3\u6790\uFF0C\u8BF7\u4E25\u683C\u4F7F\u7528\u6307\u5B9A\u683C\u5F0F\u548C\u5206\u652F\u3002" : system,
-      messages: [{ role: "user", content: [{ type: "text", text: input }] }]
-    })) {
-      if (chunk.type === "text-delta") raw += chunk.text;
-      if (chunk.type === "usage") {
-        telemetry.inputTokens += chunk.usage.inputTokens + (chunk.usage.cacheReadTokens ?? 0) + (chunk.usage.cacheWriteTokens ?? 0);
-        telemetry.outputTokens += chunk.usage.outputTokens;
-      }
-      if (chunk.type === "finish" && (chunk.reason.kind === "error" || chunk.reason.kind === "aborted"))
-        throw new Error(chunk.reason.failure.message);
-    }
-    rawOutputs.push(raw);
+      userText: input
+    });
+    telemetry.inputTokens += res.inputTokens;
+    telemetry.outputTokens += res.outputTokens;
+    rawOutputs.push(res.text);
     let parsed2;
     try {
-      parsed2 = JSON.parse(raw);
+      parsed2 = JSON.parse(res.text);
     } catch {
       continue;
     }
@@ -6621,7 +6721,7 @@ async function awaitWorkerResult(worker, signal, timeoutMs, startupMs = 1e4) {
   let timer;
   let abort;
   try {
-    return await new Promise((resolve4, reject) => {
+    return await new Promise((resolve5, reject) => {
       timer = setTimeout(() => reject(new Error("\u4EE3\u7801\u5224\u65AD Worker \u521D\u59CB\u5316\u8D85\u65F6")), startupMs);
       abort = () => reject(signal.reason);
       signal.addEventListener("abort", abort, { once: true });
@@ -6632,7 +6732,7 @@ async function awaitWorkerResult(worker, signal, timeoutMs, startupMs = 1e4) {
           clearTimeout(timer);
           timer = setTimeout(() => reject(new Error("\u4EE3\u7801\u5224\u65AD\u6267\u884C\u8D85\u65F6")), timeoutMs);
         } else if (reply.kind === "result") {
-          resolve4(reply.value);
+          resolve5(reply.value);
         } else {
           reject(new Error(reply.message));
         }
@@ -6770,58 +6870,25 @@ async function modelCall(ctx, config, operation, payload, signal, calls, read, r
   signal.throwIfAborted();
   if (!config.provider || !config.model) throw new Error("\u8BF7\u5148\u9009\u62E9\u6570\u636E\u53D8\u6362\u7684\u4F9B\u5E94\u5546\u548C\u6A21\u578B");
   const text = JSON.stringify({ operation, ...payload });
-  const trace = {
-    id: crypto.randomUUID(),
-    operation,
+  const result = await streamLlmJson(ctx.llm, {
     provider: config.provider,
     model: config.model,
-    ...typeof payload.key === "string" ? { itemKey: payload.key } : {},
-    ...typeof payload.index === "number" ? { index: payload.index } : {},
-    startedAt: Date.now(),
-    endedAt: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    inputSummary: text.slice(0, 240)
-  };
-  let raw = "", finished = false;
-  try {
-    for await (const chunk of ctx.llm.stream({
-      provider: config.provider,
-      model: config.model,
-      signal,
-      purpose: "flowspace-transform",
-      system: [config.instruction, responseInstructions[operation]].filter(Boolean).join("\n"),
-      messages: [{ role: "user", content: [{ type: "text", text }] }]
-    })) {
-      if (chunk.type === "usage") {
-        trace.inputTokens += chunk.usage.inputTokens + (chunk.usage.cacheReadTokens ?? 0) + (chunk.usage.cacheWriteTokens ?? 0);
-        trace.outputTokens += chunk.usage.outputTokens;
-      }
-      if (chunk.type === "text-delta") raw += chunk.text;
-      if (chunk.type === "finish") {
-        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
-        finished = true;
-      }
-      signal.throwIfAborted();
+    purpose: "flowspace-transform",
+    system: [config.instruction, responseInstructions[operation]].filter(Boolean).join("\n"),
+    userText: text,
+    signal,
+    requireFinish: true,
+    incompleteMessage: "\u6A21\u578B\u672A\u5B8C\u6210\u6570\u636E\u53D8\u6362\u8BF7\u6C42",
+    parse: read,
+    trace: {
+      operation,
+      ...typeof payload.key === "string" ? { itemKey: payload.key } : {},
+      ...typeof payload.index === "number" ? { index: payload.index } : {},
+      calls,
+      record
     }
-    signal.throwIfAborted();
-    if (!finished) throw new Error("\u6A21\u578B\u672A\u5B8C\u6210\u6570\u636E\u53D8\u6362\u8BF7\u6C42");
-    let response2;
-    try {
-      response2 = JSON.parse(raw);
-    } catch {
-      throw new Error("\u6A21\u578B\u672A\u8FD4\u56DE\u6709\u6548\u7684 JSON");
-    }
-    return read(response2);
-  } catch (error) {
-    trace.error = error instanceof Error ? error.message : String(error);
-    throw error;
-  } finally {
-    trace.endedAt = Date.now();
-    if (raw) trace.outputSummary = raw.slice(0, 240);
-    calls.push(trace);
-    await record?.(trace);
-  }
+  });
+  return result.data;
 }
 function parseSource(node2, inputs) {
   const text = dataText(inputs);
@@ -7123,8 +7190,164 @@ var DataFileWatch = class {
   }
 };
 
+// packages/flowspace/src/host/content.ts
+import { createHash as createHash2 } from "node:crypto";
+
+// packages/flowspace/src/host/dshServices.ts
+import { createHash } from "node:crypto";
+function optionalService(ctx, key) {
+  return ctx.get?.(key);
+}
+var getWorkspaceChanges = (ctx) => optionalService(ctx, "workspaceChanges");
+var getTerminalController = (ctx) => optionalService(ctx, "terminalController");
+var getWorkingDirectory = (ctx) => optionalService(ctx, "workingDirectory");
+var getPlanMode = (ctx) => optionalService(ctx, "planMode");
+var getSandboxPolicy = (ctx) => optionalService(ctx, "sandboxPolicy");
+var getSubprocess = (ctx) => optionalService(ctx, "subprocess");
+var getShell = (ctx) => optionalService(ctx, "shell");
+var getApproval = (ctx) => optionalService(ctx, "approval");
+var getSpillStore = (ctx) => ctx.get?.("spillStore");
+async function resolveAgentOptional(ctx, sessionId) {
+  if (!sessionId) return void 0;
+  const result = await ctx.sessionController.resolveAgent(sessionId).catch(() => null);
+  return result && !("error" in result) ? result.agent : void 0;
+}
+function formatTurnChangesSummary(sum) {
+  return `Turn #${sum.turn} (${sum.total} files, +${sum.added} / -${sum.deleted})
+` + sum.files.map((f) => `- ${f.display} (+${f.added} / -${f.deleted})`).join("\n");
+}
+function shortHash(value) {
+  return createHash("sha1").update(value).digest("hex").slice(0, 12);
+}
+
+// packages/flowspace/src/host/content.ts
+var MAX_INLINE_CONTEXT_BYTES = 64 * 1024;
+var ContentSpills = class {
+  constructor(ctx, records) {
+    this.ctx = ctx;
+    this.records = records;
+    for (const [, record] of records.entries()) this.byLocator.set(record.locator, record);
+  }
+  byLocator = /* @__PURE__ */ new Map();
+  async store(value, source, owner) {
+    const raw = typeof value === "string" ? value : JSON.stringify(value);
+    if (Buffer.byteLength(raw, "utf8") <= MAX_INLINE_CONTEXT_BYTES) return void 0;
+    const encoding = typeof value === "string" ? "text" : "json";
+    const key = createHash2("sha256").update(JSON.stringify([owner, encoding])).update(raw).digest("hex");
+    let record = this.records.get(key);
+    if (!record) {
+      const backend = getSpillStore(this.ctx);
+      if (!backend) throw new Error("\u957F\u6761\u76EE\u9700\u8981 DSH spill \u5B58\u50A8");
+      const saved = await backend.saveText({
+        owner: { sessionId: owner },
+        source: { kind: "session-reference", sessionId: source.sourceSessionId ?? owner, label: source.title },
+        suggestedName: encoding === "json" ? "flowspace-item.json" : "flowspace-item.txt",
+        content: raw
+      });
+      record = { ...saved, encoding, preview: raw.slice(0, 2e3) };
+      await this.records.put(key, record);
+    }
+    this.byLocator.set(record.locator, record);
+    return { locator: record.locator, preview: record.preview, bytes: record.bytes };
+  }
+  saved(ref) {
+    const record = this.byLocator.get(ref.locator);
+    if (!record) throw new Error("\u6B64 Host \u6CA1\u6709\u8BE5\u6761\u76EE\u7684 spill \u8BB0\u5F55");
+    return record;
+  }
+  async read(ref) {
+    const record = this.saved(ref);
+    const fs = this.ctx.fs;
+    const raw = await fs.readText(await fs.resolve(record.locator));
+    return record.encoding === "json" ? JSON.parse(raw) : raw;
+  }
+  async freeze(source, limit, ownerSessionId) {
+    const owner = ownerSessionId ?? source.sourceSessionId ?? `flowspace:${source.sourceNodeId}`;
+    let content = source.content;
+    let text = source.text;
+    let textSpill = source.textSpill;
+    if (content?.items) {
+      if (content.items.length > limit) {
+        content = { ...content, originalCount: content.originalCount ?? content.items.length, items: content.items.slice(0, limit) };
+        text = textOfContent(content);
+        textSpill = void 0;
+      }
+      const items = [];
+      for (const item of content.items) {
+        if (item.spill) this.saved(item.spill);
+        const spill2 = item.value === void 0 ? void 0 : await this.store(item.value, source, owner);
+        items.push(spill2 ? { key: item.key, spill: spill2 } : item);
+      }
+      content = { ...content, items };
+    } else if (content?.spill) {
+      this.saved(content.spill);
+    } else if (content?.value !== void 0) {
+      const spill2 = await this.store(content.value, source, owner);
+      if (spill2) {
+        const { value: _value, ...fields2 } = content;
+        content = { ...fields2, spill: spill2 };
+      }
+    }
+    textSpill ??= await this.store(text, source, owner);
+    if (textSpill) {
+      const saved = this.saved(textSpill);
+      text = `${saved.preview}
+
+\u5B8C\u6574\u5185\u5BB9\uFF1A${saved.locator}
+${saved.retrievalHint}`;
+      content ??= { dataType: source.kind === "file" ? "file" : "text", spill: textSpill };
+    }
+    const { textSpill: _priorTextSpill, ...fields } = source;
+    return { ...fields, text, ...content ? { content } : {}, ...textSpill ? { textSpill } : {} };
+  }
+  async hydrate(source) {
+    const { textSpill, content } = source;
+    if (!textSpill && !content?.spill && !content?.items?.some((item) => item.spill)) return source;
+    const { textSpill: _textSpill, ...out } = source;
+    if (textSpill) out.text = String(await this.read(textSpill));
+    if (content?.spill) {
+      const { spill: spill2, ...fields } = content;
+      out.content = { ...fields, value: spill2.locator === textSpill?.locator ? out.text : await this.read(spill2) };
+    } else if (content?.items) {
+      const items = [];
+      for (const item of content.items) {
+        items.push(item.spill ? { key: item.key, value: await this.read(item.spill) } : item);
+      }
+      out.content = { ...content, items };
+    }
+    if (!textSpill && content && out.content && source.text === textOfContent(content))
+      out.text = textOfContent(out.content);
+    return out;
+  }
+  /** Persist an oversized inline context block through the Host spill registry (deduplicated). */
+  async saveInlineContext(body, source, sessionId) {
+    const backend = getSpillStore(this.ctx);
+    if (!backend) throw new Error("\u957F\u5F15\u7528\u9700\u8981 DSH spill \u5B58\u50A8");
+    const key = createHash2("sha256").update(JSON.stringify([sessionId, "context-md"])).update(body).digest("hex");
+    let record = this.records.get(key);
+    if (!record) {
+      const saved = await backend.saveText({
+        owner: { sessionId },
+        source: {
+          kind: "session-reference",
+          sessionId: source.sourceSessionId ?? sessionId,
+          label: source.title
+        },
+        suggestedName: `flowspace-${source.id}.md`,
+        content: body
+      });
+      record = { ...saved, encoding: "text", preview: body.slice(0, 2e3) };
+      await this.records.put(key, record);
+    }
+    this.byLocator.set(record.locator, record);
+    return `${record.preview}
+
+\u5B8C\u6574\u5185\u5BB9\uFF1A${record.locator}
+${record.retrievalHint}`;
+  }
+};
+
 // packages/flowspace/src/host/runtime.ts
-import { createHash as createHash3 } from "node:crypto";
 import { statSync } from "node:fs";
 import { resolve as resolve2 } from "node:path";
 import { foldSurface } from "@deepseek-ai/dsh-session";
@@ -7132,7 +7355,7 @@ import { isCompactCheckpointSource } from "@deepseek-ai/dsh-compaction";
 
 // packages/flowspace/src/host/git.ts
 import { execFile as execFileCb } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import {
   basename,
@@ -7143,6 +7366,50 @@ import {
   resolve
 } from "node:path";
 import { promisify } from "node:util";
+
+// packages/flowspace/src/host/serialQueue.ts
+var SerialQueue = class {
+  constructor(onError) {
+    this.onError = onError;
+  }
+  tail = Promise.resolve();
+  run(action) {
+    const next = this.tail.then(action);
+    this.tail = next.then(
+      () => void 0,
+      (error) => {
+        this.onError?.(error);
+      }
+    );
+    return next;
+  }
+};
+var KeyedSerialQueue = class {
+  constructor(onError) {
+    this.onError = onError;
+  }
+  queues = /* @__PURE__ */ new Map();
+  run(key, action) {
+    const previous = this.queues.get(key) ?? Promise.resolve();
+    const next = previous.then(action, action);
+    const settled = next.then(
+      () => void 0,
+      (error) => {
+        this.onError?.(error);
+      }
+    );
+    this.queues.set(key, settled);
+    void settled.finally(() => {
+      if (this.queues.get(key) === settled) this.queues.delete(key);
+    });
+    return next;
+  }
+  clear() {
+    this.queues.clear();
+  }
+};
+
+// packages/flowspace/src/host/git.ts
 var execFile = promisify(execFileCb);
 var SENSITIVE_ENV_KEY_RE = /(?:^dsh_|api[_-]?key|secret|token|password|passwd|credential|private[_-]?key|auth[_-]?header)/i;
 function sanitizedGitEnv(write = false, baseEnv = process.env) {
@@ -7166,8 +7433,8 @@ function sameFsPath(a, b) {
 }
 function isSubPath(root, target) {
   const r = resolve(root);
-  const t2 = resolve(target);
-  const rel = relative(r, t2);
+  const t = resolve(target);
+  const rel = relative(r, t);
   return rel === "" || !rel.startsWith("..") && !isAbsolute(rel);
 }
 function parseUnifiedDiff(raw) {
@@ -7196,7 +7463,7 @@ function parseUnifiedDiff(raw) {
   return hunks;
 }
 var HostGitService = class {
-  queues = /* @__PURE__ */ new Map();
+  queues = new KeyedSerialQueue();
   async runGit(args, opts) {
     const env = sanitizedGitEnv(Boolean(opts.write));
     try {
@@ -7222,16 +7489,7 @@ var HostGitService = class {
     }
   }
   enqueueWrite(repoKey, fn) {
-    const prev = this.queues.get(repoKey) ?? Promise.resolve();
-    const next = prev.then(fn);
-    this.queues.set(
-      repoKey,
-      next.then(
-        () => void 0,
-        () => void 0
-      )
-    );
-    return next;
+    return this.queues.run(repoKey, fn);
   }
   async inspect(cwd) {
     const targetCwd = resolve(cwd);
@@ -7410,7 +7668,7 @@ var HostGitService = class {
         subject: subjectParts.join("	")
       };
     }) : [];
-    const revision = createHash("sha1").update(
+    const revision = createHash3("sha1").update(
       JSON.stringify({
         topLevel,
         branch,
@@ -7688,115 +7946,9 @@ function parsePorcelainWorktrees(stdout) {
   });
 }
 
-// packages/flowspace/src/host/content.ts
-import { createHash as createHash2 } from "node:crypto";
-var MAX_INLINE_CONTEXT_BYTES = 64 * 1024;
-var ContentSpills = class {
-  constructor(ctx, records) {
-    this.ctx = ctx;
-    this.records = records;
-    for (const [, record] of records.entries()) this.byLocator.set(record.locator, record);
-  }
-  byLocator = /* @__PURE__ */ new Map();
-  async store(value, source, owner) {
-    const raw = typeof value === "string" ? value : JSON.stringify(value);
-    if (Buffer.byteLength(raw, "utf8") <= MAX_INLINE_CONTEXT_BYTES) return void 0;
-    const encoding = typeof value === "string" ? "text" : "json";
-    const key = createHash2("sha256").update(JSON.stringify([owner, encoding])).update(raw).digest("hex");
-    let record = this.records.get(key);
-    if (!record) {
-      const backend = this.ctx.get("spillStore");
-      if (!backend) throw new Error("\u957F\u6761\u76EE\u9700\u8981 DSH spill \u5B58\u50A8");
-      const saved = await backend.saveText({
-        owner: { sessionId: owner },
-        source: { kind: "session-reference", sessionId: source.sourceSessionId ?? owner, label: source.title },
-        suggestedName: encoding === "json" ? "flowspace-item.json" : "flowspace-item.txt",
-        content: raw
-      });
-      record = { ...saved, encoding, preview: raw.slice(0, 2e3) };
-      await this.records.put(key, record);
-    }
-    this.byLocator.set(record.locator, record);
-    return { locator: record.locator, preview: record.preview, bytes: record.bytes };
-  }
-  saved(ref) {
-    const record = this.byLocator.get(ref.locator);
-    if (!record) throw new Error("\u6B64 Host \u6CA1\u6709\u8BE5\u6761\u76EE\u7684 spill \u8BB0\u5F55");
-    return record;
-  }
-  async read(ref) {
-    const record = this.saved(ref);
-    const fs = this.ctx.fs;
-    const raw = await fs.readText(await fs.resolve(record.locator));
-    return record.encoding === "json" ? JSON.parse(raw) : raw;
-  }
-  async freeze(source, limit, ownerSessionId) {
-    const owner = ownerSessionId ?? source.sourceSessionId ?? `flowspace:${source.sourceNodeId}`;
-    let content = source.content;
-    let text = source.text;
-    let textSpill = source.textSpill;
-    if (content?.items) {
-      if (content.items.length > limit) {
-        content = { ...content, originalCount: content.originalCount ?? content.items.length, items: content.items.slice(0, limit) };
-        text = textOfContent(content);
-        textSpill = void 0;
-      }
-      const items = [];
-      for (const item of content.items) {
-        if (item.spill) this.saved(item.spill);
-        const spill2 = item.value === void 0 ? void 0 : await this.store(item.value, source, owner);
-        items.push(spill2 ? { key: item.key, spill: spill2 } : item);
-      }
-      content = { ...content, items };
-    } else if (content?.spill) {
-      this.saved(content.spill);
-    } else if (content?.value !== void 0) {
-      const spill2 = await this.store(content.value, source, owner);
-      if (spill2) {
-        const { value: _value, ...fields2 } = content;
-        content = { ...fields2, spill: spill2 };
-      }
-    }
-    textSpill ??= await this.store(text, source, owner);
-    if (textSpill) {
-      const saved = this.saved(textSpill);
-      text = `${saved.preview}
-
-\u5B8C\u6574\u5185\u5BB9\uFF1A${saved.locator}
-${saved.retrievalHint}`;
-      content ??= { dataType: source.kind === "file" ? "file" : "text", spill: textSpill };
-    }
-    const { textSpill: _priorTextSpill, ...fields } = source;
-    return { ...fields, text, ...content ? { content } : {}, ...textSpill ? { textSpill } : {} };
-  }
-  async hydrate(source) {
-    const { textSpill, content } = source;
-    if (!textSpill && !content?.spill && !content?.items?.some((item) => item.spill)) return source;
-    const { textSpill: _textSpill, ...out } = source;
-    if (textSpill) out.text = String(await this.read(textSpill));
-    if (content?.spill) {
-      const { spill: spill2, ...fields } = content;
-      out.content = { ...fields, value: spill2.locator === textSpill?.locator ? out.text : await this.read(spill2) };
-    } else if (content?.items) {
-      const items = [];
-      for (const item of content.items) {
-        items.push(item.spill ? { key: item.key, value: await this.read(item.spill) } : item);
-      }
-      out.content = { ...content, items };
-    }
-    if (!textSpill && content && out.content && source.text === textOfContent(content))
-      out.text = textOfContent(out.content);
-    return out;
-  }
-};
-
 // packages/flowspace/src/host/runtime.ts
-var shortHash = (value) => createHash3("sha1").update(value).digest("hex").slice(0, 12);
 var escapeXmlAttr = (value) => value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 var plainText = (blocks) => blocks.filter((b) => b.type === "text").map((b) => b.text).join("\n");
-function extractFileNodePaths(node2) {
-  return (node2.selectedItems?.length ? node2.selectedItems : node2.text.split(/\r?\n/)).map((p) => p.trim()).filter(Boolean);
-}
 function computeFileNodeFingerprint(node2, baseCwd) {
   const paths2 = extractFileNodePaths(node2);
   if (!paths2.length) return "missing:empty";
@@ -7854,7 +8006,7 @@ var DshRuntime = class {
     return this.ctx.agents.list().filter((a) => a.status === "running").map((a) => a.id);
   }
   isPlanModeActive(sessionId) {
-    const pm = this.ctx.get("planMode");
+    const pm = getPlanMode(this.ctx);
     if (!pm?.get) return false;
     const liveAgent = this.ctx.agents.get(sessionId);
     if (!liveAgent) return false;
@@ -7872,13 +8024,13 @@ var DshRuntime = class {
     const hasPlanPreference = node2.planMode !== void 0;
     const laneModel = node2.generatedBy ? node2.teamModel : void 0;
     if (!needsWorkdirSet && !hasPlanPreference && !laneModel) return;
-    const resolved = await this.ctx.sessionController.resolveAgent(sessionId).catch(() => null);
-    if (!resolved || "error" in resolved) return;
-    if (laneModel) resolved.agent.model.select(laneModel);
+    const agent = await resolveAgentOptional(this.ctx, sessionId);
+    if (!agent) return;
+    if (laneModel) agent.model.select(laneModel);
     if (needsWorkdirSet && targetDir) {
-      const wd = this.ctx.get("workingDirectory");
+      const wd = getWorkingDirectory(this.ctx);
       if (wd) {
-        await wd.set(resolved.agent, targetDir).catch((err) => {
+        await wd.set(agent, targetDir).catch((err) => {
           this.ctx.logger.warn(
             "FlowSpace worktree workingDirectory.set failed: %s",
             err
@@ -7887,9 +8039,9 @@ var DshRuntime = class {
       }
     }
     if (hasPlanPreference) {
-      const pm = this.ctx.get("planMode");
+      const pm = getPlanMode(this.ctx);
       try {
-        pm?.set?.(resolved.agent, Boolean(node2.planMode));
+        pm?.set?.(agent, Boolean(node2.planMode));
       } catch (err) {
         this.ctx.logger.warn("FlowSpace planMode.set failed: %s", err);
       }
@@ -7976,22 +8128,26 @@ var DshRuntime = class {
       const { source } = entry;
       let body = source.text;
       if (entry.spill) {
-        const spill2 = this.ctx.get("spillStore");
-        if (!spill2) throw new Error("\u957F\u5F15\u7528\u9700\u8981 DSH spill \u5B58\u50A8");
-        const saved = await spill2.saveText({
-          owner: { sessionId },
-          source: {
-            kind: "session-reference",
-            sessionId: source.sourceSessionId ?? sessionId,
-            label: source.title
-          },
-          suggestedName: `flowspace-${source.id}.md`,
-          content: body
-        });
-        body = `${body.slice(0, 2e3)}
+        if (this.spills) {
+          body = await this.spills.saveInlineContext(body, source, sessionId);
+        } else {
+          const spill2 = getSpillStore(this.ctx);
+          if (!spill2) throw new Error("\u957F\u5F15\u7528\u9700\u8981 DSH spill \u5B58\u50A8");
+          const saved = await spill2.saveText({
+            owner: { sessionId },
+            source: {
+              kind: "session-reference",
+              sessionId: source.sourceSessionId ?? sessionId,
+              label: source.title
+            },
+            suggestedName: `flowspace-${source.id}.md`,
+            content: body
+          });
+          body = `${body.slice(0, 2e3)}
 
 \u5B8C\u6574\u5185\u5BB9\uFF1A${saved.locator}
 ${saved.retrievalHint}`;
+        }
       }
       const fromId = source.sourceSessionId ?? source.sourceNodeId;
       const seqAttr = source.seq === void 0 ? "" : ` seq="${String(source.seq)}"`;
@@ -8338,15 +8494,12 @@ ${body}
     if (node2.kind === "changes") {
       let text2 = node2.text;
       if (!text2 && node2.changesSessionId && node2.changesSeq !== void 0) {
-        const wc = this.ctx.get("workspaceChanges");
+        const wc = getWorkspaceChanges(this.ctx);
         const sum = wc?.summary(
           node2.changesSessionId,
           node2.changesSeq
         );
-        if (sum) {
-          text2 = `Turn #${sum.turn} (${sum.total} files, +${sum.added} / -${sum.deleted})
-` + sum.files.map((f) => `- ${f.display} (+${f.added} / -${f.deleted})`).join("\n");
-        }
+        if (sum) text2 = formatTurnChangesSummary(sum);
       }
       return {
         id: uid(),
@@ -8364,13 +8517,13 @@ ${body}
     if (node2.kind === "terminal") {
       let text2 = node2.text;
       if (node2.terminalSessionId) {
-        const tc = this.ctx.get("terminalController");
+        const tc = getTerminalController(this.ctx);
         const list = tc?.list(node2.terminalSessionId) ?? [];
         const term = (node2.terminalId ? list.find((item) => item.id === node2.terminalId) : void 0) ?? list[0];
         if (tc && term) {
-          const resolved = await this.ctx.sessionController.resolveAgent(node2.terminalSessionId).catch(() => null);
-          if (resolved && !("error" in resolved)) {
-            const page = await tc.readScreen(resolved.agent, term.id, {
+          const agent = await resolveAgentOptional(this.ctx, node2.terminalSessionId);
+          if (agent) {
+            const page = await tc.readScreen(agent, term.id, {
               offset: 0,
               count: 140,
               maxBytes: 49152
@@ -8403,6 +8556,152 @@ ${body}
       version: shortHash(text),
       capturedAt: Date.now()
     };
+  }
+};
+
+// packages/flowspace/src/host/workspaceFs.ts
+import { open, readdir, readFile, realpath, stat } from "node:fs/promises";
+import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, relative as relative2, resolve as resolve3 } from "node:path";
+var SKIP_DIRS = /* @__PURE__ */ new Set([
+  "node_modules",
+  ".git",
+  ".local",
+  ".backups",
+  "dist",
+  "lib",
+  ".next",
+  "coverage"
+]);
+var WorkspaceFs = class {
+  constructor(ctx) {
+    this.ctx = ctx;
+  }
+  knownWorktrees = /* @__PURE__ */ new Set();
+  trackWorktree(path) {
+    if (path) this.knownWorktrees.add(resolve3(path));
+  }
+  /**
+   * Confine `cwd` strictly to registered DSH workspaces, `<repo>-worktrees/*` managed directories,
+   * or verified Git worktrees discovered from those workspaces.
+   */
+  resolveWorkspaceRoot(cwd) {
+    const list = this.ctx.workspaceRegistry.list();
+    if (cwd) {
+      const candidate = resolve3(cwd);
+      const inRegisteredWorkspace = list.some((w) => isSubPath(w.path, candidate));
+      const inManagedWorktreesDir = list.some(
+        (w) => isSubPath(
+          resolve3(w.path, "..", `${basename2(w.path)}-worktrees`),
+          candidate
+        )
+      );
+      const inVerifiedWorktree = [...this.knownWorktrees].some(
+        (wt) => isSubPath(wt, candidate)
+      );
+      if (inRegisteredWorkspace || inManagedWorktreesDir || inVerifiedWorktree || isSubPath(resolve3(process.cwd()), candidate)) {
+        return candidate;
+      }
+    }
+    return resolve3(list[0]?.path ?? process.cwd());
+  }
+  workspacePath(request) {
+    const base = this.resolveWorkspaceRoot(request.cwd);
+    const raw = request.path.trim();
+    if (!raw) throw new Error("\u672A\u6307\u5B9A\u6587\u4EF6\u8DEF\u5F84");
+    const full = resolve3(base, raw);
+    const rel = relative2(base, full);
+    if (rel.startsWith("..") || isAbsolute2(rel)) {
+      throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
+    }
+    return { base, raw, full, rel };
+  }
+  async workspaceFile(request) {
+    const { base, raw, full, rel } = this.workspacePath(request);
+    const info = await stat(full).catch(() => null);
+    if (!info || !info.isFile()) throw new Error(`\u6587\u4EF6\u4E0D\u5B58\u5728\uFF1A${raw}`);
+    if (!isSubPath(await realpath(base), await realpath(full))) {
+      throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
+    }
+    return { full, rel, info, raw };
+  }
+  async checkedTarget(path, cwd, signal) {
+    const { base, full } = this.workspacePath({ path, cwd });
+    const root = await this.ctx.fs.resolve(base, { signal });
+    const target = await this.ctx.fs.resolve(full, { signal });
+    if (!this.ctx.fs.contains(root, target)) {
+      throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
+    }
+    return target;
+  }
+  async checkedWatchTarget(path, cwd, signal) {
+    const { base, full } = this.workspacePath({ path, cwd });
+    const physical = await realpath(full).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+      return realpath(dirname2(full));
+    });
+    if (!isSubPath(await realpath(base), physical)) {
+      throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
+    }
+    return this.ctx.fs.resolve(full, { signal });
+  }
+  async readFullText(path, cwd, signal) {
+    const { full } = await this.workspaceFile({ path, cwd });
+    const body = await readFile(full, { signal });
+    if (body.includes(0)) throw new Error(`\u4E8C\u8FDB\u5236\u6587\u4EF6\u4E0D\u80FD\u4F5C\u4E3A\u6587\u672C\u8F93\u5165\uFF1A${path}`);
+    return new TextDecoder().decode(body);
+  }
+  async readBoundedText(request, maxReadBytes = MAX_INLINE_CONTEXT_BYTES, maxChars = 24e3) {
+    const { full, rel, info, raw } = await this.workspaceFile(request);
+    const toRead = Math.min(info.size, maxReadBytes);
+    if (toRead === 0) {
+      return {
+        path: rel.replaceAll("\\", "/"),
+        content: "",
+        truncated: false
+      };
+    }
+    const fh = await open(full, "r");
+    try {
+      const buf = Buffer.allocUnsafe(toRead);
+      const { bytesRead } = await fh.read(buf, 0, toRead, 0);
+      const slice = buf.subarray(0, bytesRead);
+      if (slice.includes(0)) {
+        throw new Error(`\u4E8C\u8FDB\u5236\u6587\u4EF6\u4E0D\u652F\u6301\u6587\u672C\u9884\u89C8\uFF1A${raw}`);
+      }
+      const decoded = new TextDecoder("utf-8", { fatal: false }).decode(slice);
+      const truncated = bytesRead < info.size || decoded.length > maxChars;
+      return {
+        path: rel.replaceAll("\\", "/"),
+        content: decoded.length > maxChars ? decoded.slice(0, maxChars) : decoded,
+        truncated
+      };
+    } finally {
+      await fh.close();
+    }
+  }
+  async listFiles(request) {
+    const base = this.resolveWorkspaceRoot(request.cwd);
+    const out = [];
+    const walk = async (dir, depth) => {
+      if (depth > 3 || out.length >= 80) return;
+      let entries;
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (out.length >= 80) break;
+        if (SKIP_DIRS.has(entry.name)) continue;
+        const full = resolve3(dir, entry.name);
+        if (entry.isDirectory()) await walk(full, depth + 1);
+        else if (entry.isFile()) {
+          out.push(relative2(base, full).replaceAll("\\", "/"));
+        }
+      }
+    };
+    await walk(base, 0);
+    return out;
   }
 };
 
@@ -8445,24 +8744,57 @@ function registerFlowEmit(ctx, scheduler) {
 
 // packages/flowspace/src/host/containers.ts
 import { createHash as createHash4 } from "node:crypto";
+import { z as z16 } from "zod";
+
+// packages/flowspace/src/host/toolPrimitives.ts
 import { z as z15 } from "zod";
-var lookup = z15.strictObject({ edgeId: z15.string() });
-var update = lookup.extend({ expectedVersion: z15.string(), text: z15.string() });
+var jsonToolOutput = {
+  schema: { type: "object", additionalProperties: true },
+  render: (_args, value) => [
+    { type: "text", text: JSON.stringify(value) }
+  ]
+};
+function zodToolSchema(schema5) {
+  return JSON.parse(
+    JSON.stringify(z15.toJSONSchema(schema5, { target: "draft-7" }))
+  );
+}
+async function requestToolApproval(ctx, exec, toolName, reason, deniedMessage = "\u64CD\u4F5C\u672A\u83B7\u6279\u51C6") {
+  const approval = getApproval(ctx);
+  const result = await approval?.request({
+    agent: exec.agent,
+    toolName,
+    callId: exec.callId,
+    signal: exec.signal,
+    reason
+  });
+  if (result !== "allowed-once") throw new Error(deniedMessage);
+}
+async function approveWrite(ctx, exec, toolName, title, deniedMessage = "\u5BB9\u5668\u6539\u52A8\u672A\u83B7\u6279\u51C6") {
+  await requestToolApproval(
+    ctx,
+    exec,
+    toolName,
+    `\u5141\u8BB8 Agent \u4FEE\u6539\u300C${title}\u300D\u4E2D\u7684\u5185\u5BB9\uFF1F`,
+    deniedMessage
+  );
+}
+
+// packages/flowspace/src/host/containers.ts
+var lookup = z16.strictObject({ edgeId: z16.string() });
+var update = lookup.extend({ expectedVersion: z16.string(), text: z16.string() });
 var boardUpdate = lookup.extend({
-  action: z15.enum(["add", "edit", "delete", "move", "toggle", "comment", "check"]),
-  itemId: z15.string().optional(),
-  expectedVersion: z15.string(),
-  text: z15.string().optional(),
-  columnId: z15.string().optional(),
-  checklistId: z15.string().optional()
+  action: z16.enum(["add", "edit", "delete", "move", "toggle", "comment", "check"]),
+  itemId: z16.string().optional(),
+  expectedVersion: z16.string(),
+  text: z16.string().optional(),
+  columnId: z16.string().optional(),
+  checklistId: z16.string().optional()
 });
 var versionOf = (entry) => {
   if (!entry) return "absent";
   const value = entry.kind === "board" ? { column: entry.columnId, card: entry.card } : entry;
-  return createHash4("sha256").update(JSON.stringify(
-    value,
-    (key, value2) => value2 && typeof value2 === "object" && !Array.isArray(value2) ? Object.fromEntries(Object.entries(value2).sort(([a], [b]) => a.localeCompare(b))) : value2
-  )).digest("hex");
+  return createHash4("sha256").update(canonicalJson(value)).digest("hex");
 };
 function requireVersion(expected, actual) {
   if (expected !== actual) throw new Error(`\u6761\u76EE\u7248\u672C\u51B2\u7A81\u3002\u5F53\u524D\u7248\u672C ${actual}\u3002\u8BF7\u8BFB\u53D6\u6700\u65B0\u5185\u5BB9\u540E\u518D\u8BD5\u3002`);
@@ -8739,21 +9071,6 @@ var ContainerStore = class {
     return undone;
   }
 };
-var jsonToolOutput = {
-  schema: { type: "object", additionalProperties: true },
-  render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }]
-};
-async function approveWrite(ctx, exec, toolName, title) {
-  const approval = ctx.get("approval");
-  const result = await approval?.request({
-    agent: exec.agent,
-    toolName,
-    callId: exec.callId,
-    signal: exec.signal,
-    reason: `\u5141\u8BB8 Agent \u4FEE\u6539\u300C${title}\u300D\u4E2D\u7684\u5185\u5BB9\uFF1F`
-  });
-  if (result !== "allowed-once") throw new Error("\u5BB9\u5668\u6539\u52A8\u672A\u83B7\u6279\u51C6");
-}
 function registerContainerTools(ctx, store, scheduler) {
   for (const kind of ["board", "note", "file"]) {
     const when = ({ agent }) => store.mounts(agent.id, kind).length > 0;
@@ -8778,7 +9095,7 @@ function registerContainerTools(ctx, store, scheduler) {
     ctx.tools.register({
       name: toolName,
       description: kind === "board" ? "Change one granted FlowSpace board card. Use board_read first to get its current version. For add, expectedVersion is absent." : `Replace the text of one granted FlowSpace ${kind}. Read it first to get the current version.`,
-      parameters: JSON.parse(JSON.stringify(z15.toJSONSchema(schema5, { target: "draft-7" }))),
+      parameters: zodToolSchema(schema5),
       output: jsonToolOutput,
       async execute(raw, exec) {
         const args = schema5.parse(raw);
@@ -8807,34 +9124,600 @@ function registerContainerTools(ctx, store, scheduler) {
 }
 
 // packages/flowspace/src/host/variables.ts
-import { z as z16 } from "zod";
-var variableRecordSchema = z16.object({
-  id: z16.string(),
-  key: z16.string(),
-  name: z16.string(),
-  scope: z16.enum(VARIABLE_SCOPES),
-  type: z16.enum(VARIABLE_TYPES),
-  runId: z16.string().optional(),
-  lane: z16.string().optional(),
-  version: z16.number().int().nonnegative(),
-  value: z16.json(),
-  history: z16.array(z16.object({
-    id: z16.string(),
-    writer: z16.string(),
-    at: z16.number(),
-    version: z16.number().int().positive(),
-    from: z16.json(),
-    to: z16.json(),
-    runId: z16.string().optional(),
-    stepId: z16.string().optional()
-  }))
+import { z as z18 } from "zod";
+
+// packages/flowspace/src/host/storage.ts
+import { z as z17 } from "zod";
+import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
+var variableRecordSchema = z17.object({
+  id: z17.string(),
+  key: z17.string(),
+  name: z17.string(),
+  scope: z17.enum(VARIABLE_SCOPES),
+  type: z17.enum(VARIABLE_TYPES),
+  runId: z17.string().optional(),
+  lane: z17.string().optional(),
+  version: z17.number().int().nonnegative(),
+  value: z17.json(),
+  history: z17.array(
+    z17.object({
+      id: z17.string(),
+      writer: z17.string(),
+      at: z17.number(),
+      version: z17.number().int().positive(),
+      from: z17.json(),
+      to: z17.json(),
+      runId: z17.string().optional(),
+      stepId: z17.string().optional()
+    })
+  )
 });
-var humanWrite = z16.strictObject({
-  id: z16.string(),
-  runId: z16.string().optional(),
-  lane: z16.string().optional(),
-  expectedVersion: z16.number().int().nonnegative(),
-  value: z16.json().optional()
+var assetId = z17.string().trim().min(1);
+var teamModelSchema = z17.object({
+  provider: assetId,
+  model: assetId,
+  reasoningEffort: assetId.optional()
+});
+var saveRoleSchema = z17.object({
+  id: assetId,
+  title: assetId,
+  description: z17.string(),
+  persona: z17.string(),
+  model: teamModelSchema,
+  revision: z17.number().int().nonnegative()
+});
+var maxTeamSlots = 8;
+var saveTeamSchema = z17.object({
+  id: assetId,
+  title: assetId,
+  lead: z17.object({ persona: z17.string(), model: teamModelSchema }),
+  slots: z17.array(z17.object({
+    slotId: z17.string().regex(/^(?!lead$)[a-z][a-z0-9-]{0,31}$/, "Invalid native subagent slot name"),
+    roleId: assetId,
+    label: assetId,
+    model: teamModelSchema.optional(),
+    maxInstances: z17.number().int().positive().optional(),
+    nodeId: assetId.optional()
+  })).min(1).max(maxTeamSlots),
+  norms: z17.string(),
+  revision: z17.number().int().nonnegative()
+}).refine((team) => new Set(team.slots.map((slot) => slot.slotId)).size === team.slots.length, {
+  path: ["slots"],
+  message: "Slot names must be unique"
+});
+var revisionFields = {
+  revision: z17.number().int().positive(),
+  archived: z17.boolean().optional()
+};
+var roleDefinitionSchema = saveRoleSchema.extend(revisionFields);
+var teamBlueprintSchema = saveTeamSchema.safeExtend(revisionFields);
+var archiveTeamAssetSchema = z17.object({
+  id: assetId,
+  revision: revisionFields.revision
+});
+var teamReferenceSchema = z17.object({
+  teamId: assetId,
+  revision: revisionFields.revision.optional()
+});
+var teamDependenciesSchema = z17.object({
+  teams: z17.array(teamBlueprintSchema),
+  roles: z17.array(roleDefinitionSchema)
+}).refine(
+  ({ teams, roles }) => new Set(teams.map((team) => team.id)).size === teams.length && new Set(roles.map((role) => role.id)).size === roles.length,
+  "Team dependency IDs must be unique"
+);
+var teamModelReplacementSchema = z17.array(z17.object({ from: teamModelSchema, to: teamModelSchema }));
+var teamSessionSchema = z17.object({
+  leadSessionId: assetId,
+  nodeId: assetId,
+  roster: z17.object({
+    team: teamBlueprintSchema,
+    roles: z17.array(roleDefinitionSchema)
+  }),
+  delegations: z17.array(z17.object({
+    sessionId: assetId,
+    slotId: assetId,
+    roleId: assetId,
+    model: teamModelSchema,
+    roleRevision: revisionFields.revision,
+    /** The canvas role node the member was delegated through. */
+    nodeId: assetId.optional()
+  })),
+  /** Subagents the session already had when it became a team; they stay plain subagents. */
+  priorChildren: z17.array(assetId).optional(),
+  /** The node lost its roles: the session is a plain agent again, its member record kept. */
+  released: z17.boolean().optional()
+});
+var groupPort = z17.object({
+  id: z17.string(),
+  portId: z17.string().optional(),
+  kind: z17.enum(["reference", "continuation", "event"]),
+  direction: z17.enum(["in", "out"]),
+  name: z17.string(),
+  nodes: z17.array(z17.string()),
+  hidden: z17.boolean()
+});
+var budget = z17.object({
+  tokens: z17.number().int().positive().optional(),
+  seconds: z17.number().positive().optional(),
+  rounds: z17.number().int().positive().optional()
+});
+var boardChecklistItem = z17.object({
+  id: z17.string(),
+  text: z17.string().max(BOARD_LIMITS.checklistText),
+  done: z17.boolean()
+});
+var boardCard = z17.object({
+  id: z17.string(),
+  text: z17.string(),
+  description: z17.string().max(BOARD_LIMITS.description).optional(),
+  done: z17.boolean().optional(),
+  priority: z17.enum(BOARD_PRIORITIES).optional(),
+  tags: z17.array(z17.string().min(1).max(BOARD_LIMITS.tag)).max(BOARD_LIMITS.tags).optional(),
+  dueDate: z17.iso.date().optional(),
+  checklist: z17.array(boardChecklistItem).max(BOARD_LIMITS.checklist).optional(),
+  comments: z17.array(z17.object({ id: z17.string(), by: z17.string(), text: z17.string(), createdAt: z17.number() })).optional(),
+  author: z17.string().optional(),
+  previousColumnId: z17.string().optional(),
+  createdAt: z17.number().int().nonnegative().optional(),
+  updatedAt: z17.number().int().nonnegative().optional()
+});
+var boardColumn = z17.object({
+  id: z17.string(),
+  name: z17.string(),
+  cards: z17.array(boardCard),
+  role: z17.enum(BOARD_ROLES).optional(),
+  color: z17.enum(BOARD_COLORS).optional(),
+  wipLimit: z17.number().int().positive().max(BOARD_LIMITS.wip).optional(),
+  collapsed: z17.boolean().optional()
+});
+var boardSettings = z17.object({
+  view: z17.enum(["board", "list"]).optional(),
+  autoMoveDone: z17.boolean().optional(),
+  showCompleted: z17.boolean().optional(),
+  refScope: z17.enum(BOARD_REF_SCOPES).optional()
+});
+var windowState = z17.object({
+  x: z17.number().finite(),
+  y: z17.number().finite(),
+  w: z17.number().positive(),
+  h: z17.number().positive(),
+  snap: z17.enum(["left", "right", "max"]).nullable().optional(),
+  z: z17.number().optional()
+});
+var fanoutPairIds = z17.object({ fanId: assetId, mergeId: assetId });
+var generationRevision = z17.number().int().nonnegative().optional();
+var node = z17.object({
+  breakpoint: z17.boolean().optional(),
+  budget: budget.optional(),
+  laneBindings: z17.object({
+    provider: z17.string().optional(),
+    model: z17.string().optional(),
+    persona: z17.string().optional(),
+    cwd: z17.string().optional()
+  }).optional(),
+  lanePersona: z17.string().optional(),
+  canvasToolsOnly: z17.boolean().optional(),
+  id: z17.string(),
+  kind: z17.enum([
+    "agent",
+    "note",
+    "file",
+    "display",
+    "group",
+    "board",
+    "detail",
+    "git",
+    "changes",
+    "terminal",
+    "role",
+    "flow"
+  ]),
+  flowType: z17.string().regex(/^[a-z0-9-]+\/[a-z0-9-]+$/).optional(),
+  config: z17.record(z17.string(), z17.json()).optional(),
+  configVersion: z17.number().int().nonnegative().optional(),
+  title: z17.string(),
+  x: z17.number().finite(),
+  y: z17.number().finite(),
+  width: z17.number().positive(),
+  height: z17.number().positive(),
+  expanded: z17.boolean(),
+  parentId: z17.string().optional(),
+  fanout: fanoutPairIds.optional(),
+  masterOf: assetId.optional(),
+  generatedBy: assetId.optional(),
+  itemKey: assetId.optional(),
+  itemTitle: z17.string().optional(),
+  masterNodeId: assetId.optional(),
+  laneIndex: z17.number().int().nonnegative().optional(),
+  overridden: z17.boolean().optional(),
+  removed: z17.boolean().optional(),
+  generatedRevision: generationRevision,
+  sessionId: z17.string().optional(),
+  workspaceId: z17.string().optional(),
+  cwd: z17.string().optional(),
+  branch: z17.string().optional(),
+  worktreePath: z17.string().optional(),
+  agentPreset: z17.string().optional(),
+  teamRef: teamReferenceSchema.optional(),
+  teamConfig: z17.object({
+    persona: z17.string(),
+    norms: z17.string(),
+    model: teamModelSchema.optional()
+  }).optional(),
+  teamLayout: z17.enum(["row", "orbit", "tree"]).optional(),
+  roleRef: assetId.optional(),
+  teamModel: teamModelSchema.optional(),
+  maxInstances: z17.number().int().positive().max(8).optional(),
+  staffOf: z17.string().optional(),
+  slotId: z17.string().regex(SLOT_ID, "Invalid native subagent slot name").optional(),
+  planMode: z17.boolean().optional(),
+  customTitle: z17.boolean().optional(),
+  subAgentsExpanded: z17.boolean().optional(),
+  task: z17.string(),
+  draft: z17.string(),
+  continuationPrompt: z17.string().optional(),
+  continuationCollapsed: z17.boolean().optional(),
+  nativeTrigger: z17.enum(["inherit", "enabled", "disabled"]),
+  participation: z17.enum(["global", "manual", "paused", "bypassed"]),
+  text: z17.string(),
+  sourceNodeId: z17.string().optional(),
+  sourceSeq: z17.number().optional(),
+  fixed: z17.boolean(),
+  collapsed: z17.boolean(),
+  lastSubmittedTask: z17.string().optional(),
+  tab: z17.enum(["task", "conversation", "execution", "crew"]).optional(),
+  pinned: z17.boolean().optional(),
+  roleLabel: z17.string().optional(),
+  rerun: z17.enum(["change", "update", "always"]).optional(),
+  color: z17.enum(["violet", "teal", "blue", "amber"]).optional(),
+  ports: z17.array(groupPort).optional(),
+  templateId: z17.string().optional(),
+  templateRevision: z17.number().int().positive().optional(),
+  templateSlotId: z17.string().optional(),
+  titleKey: z17.string().optional(),
+  window: windowState.nullable().optional(),
+  columns: z17.array(boardColumn).optional(),
+  boardSettings: boardSettings.optional(),
+  items: z17.array(z17.string()).optional(),
+  selectedItems: z17.array(z17.string()).optional(),
+  nudge: z17.object({
+    by: z17.string(),
+    origX: z17.number().finite().optional(),
+    origY: z17.number().finite().optional(),
+    origW: z17.number().positive().optional(),
+    origH: z17.number().positive().optional()
+  }).optional(),
+  gitTab: z17.enum(["changes", "history", "branches"]).optional(),
+  gitCommitOid: z17.string().optional(),
+  changesSessionId: z17.string().optional(),
+  changesSeq: z17.number().optional(),
+  changesTurn: z17.number().optional(),
+  terminalSessionId: z17.string().optional(),
+  terminalId: z17.string().optional()
+});
+var waypoint = z17.object({
+  x: z17.number().finite(),
+  y: z17.number().finite()
+});
+var spill = z17.object({
+  locator: z17.string().min(1),
+  preview: z17.string(),
+  bytes: z17.number().int().nonnegative()
+});
+var contentItem = z17.object({
+  key: z17.string().min(1),
+  value: z17.json().optional(),
+  spill: spill.optional()
+}).refine((item) => item.value !== void 0 !== !!item.spill, "\u6761\u76EE\u5FC5\u987B\u5305\u542B\u4E00\u4E2A\u503C\u6216 spill \u5F15\u7528");
+var flowContentSchema = z17.object({
+  dataType: z17.enum(["text", "record", "list", "signal", "file"]),
+  value: z17.json().optional(),
+  items: z17.array(contentItem).optional(),
+  originalCount: z17.number().int().nonnegative().optional(),
+  spill: spill.optional()
+}).superRefine((content, ctx) => {
+  if (content.dataType === "list") {
+    if (!content.items || content.spill || content.value !== void 0)
+      ctx.addIssue({ code: "custom", message: "\u5217\u8868\u5185\u5BB9\u5FC5\u987B\u4F7F\u7528\u6709\u5E8F\u6761\u76EE" });
+    else if (new Set(content.items.map((item) => item.key)).size !== content.items.length)
+      ctx.addIssue({ code: "custom", path: ["items"], message: "\u5217\u8868\u6761\u76EE\u6807\u8BC6\u91CD\u590D" });
+    else if (content.originalCount !== void 0 && content.originalCount < content.items.length)
+      ctx.addIssue({ code: "custom", path: ["originalCount"], message: "\u539F\u59CB\u9879\u6570\u5C0F\u4E8E\u5DF2\u4FDD\u7559\u9879\u6570" });
+    return;
+  }
+  if (content.items || content.spill && content.value !== void 0) {
+    ctx.addIssue({ code: "custom", message: "\u5185\u5BB9\u503C\u4E0E\u6761\u76EE\u3001spill \u5F15\u7528\u4E0D\u80FD\u6DF7\u7528" });
+  } else if (!content.spill && (content.dataType === "text" && typeof content.value !== "string" || content.dataType === "record" && (!content.value || typeof content.value !== "object" || Array.isArray(content.value)) || content.dataType === "file" && content.value === void 0)) {
+    ctx.addIssue({ code: "custom", path: ["value"], message: "\u5185\u5BB9\u4E0E\u7AEF\u53E3\u7C7B\u578B\u4E0D\u7B26" });
+  }
+});
+var edge = z17.object({
+  id: z17.string(),
+  source: z17.string(),
+  target: z17.string(),
+  generatedBy: assetId.optional(),
+  itemKey: assetId.optional(),
+  masterEdgeId: assetId.optional(),
+  generatedRevision: generationRevision,
+  sourcePort: z17.string().optional(),
+  targetPort: z17.string().optional(),
+  emitMode: z17.enum(["stream", "end"]).optional(),
+  permission: z17.enum(["read", "advance", "edit"]).optional(),
+  ask: z17.boolean().optional(),
+  delivery: z17.object({ mode: z17.enum(["lines", "paragraph", "list"]), columnId: z17.string().optional() }).optional(),
+  logic: z17.object({
+    negate: z17.boolean().optional(),
+    fromRound: z17.number().int().nonnegative().optional(),
+    maxTimes: z17.number().int().nonnegative().optional(),
+    delayMs: z17.number().int().nonnegative().optional()
+  }).optional(),
+  kind: z17.enum(["reference", "continuation", "event"]),
+  event: z17.object({
+    mode: z17.enum(["end", "change", "continuous"]),
+    kinds: z17.array(z17.enum(["running", "waiting", "done", "error", "budget", "output", "tool", "usage", "container"])),
+    reasons: z17.array(z17.string()).optional(),
+    cooldownMs: z17.number().int().nonnegative().optional(),
+    maxTimes: z17.number().int().positive().optional(),
+    full: z17.boolean().optional()
+  }).optional(),
+  mode: z17.enum(["conclusion", "session", "fork"]),
+  trigger: z17.enum(["off", "auto", "confirm"]),
+  maxRounds: z17.number().int().positive(),
+  always: z17.boolean(),
+  sentVersion: z17.string().optional(),
+  currentVersion: z17.string().optional(),
+  sourceItemKey: z17.string().optional(),
+  snapshotTitle: z17.string().optional(),
+  snapshotText: z17.string().optional(),
+  snapshotContent: flowContentSchema.optional(),
+  originMode: z17.enum(["conclusion", "session", "fork"]).optional(),
+  waypoints: z17.array(waypoint).optional(),
+  placedCapsules: z17.array(z17.string()).optional()
+});
+var workflowTemplateSchema = z17.object({
+  id: z17.string(),
+  fanout: fanoutPairIds.optional(),
+  title: z17.string(),
+  description: z17.string(),
+  revision: z17.number().int().positive(),
+  builtin: z17.boolean().optional(),
+  color: z17.enum(["violet", "teal", "blue", "amber"]).optional(),
+  w: z17.number().positive(),
+  h: z17.number().positive(),
+  nodes: z17.array(node),
+  edges: z17.array(edge),
+  ports: z17.array(groupPort)
+});
+var canvasSnapshotSchema = z17.object({
+  id: z17.string(),
+  title: z17.string(),
+  createdAt: z17.number(),
+  nodes: z17.array(node),
+  edges: z17.array(edge),
+  viewport: z17.object({
+    x: z17.number(),
+    y: z17.number(),
+    zoom: z17.number().positive()
+  }),
+  summary: z17.object({
+    drafts: z17.number(),
+    stopping: z17.number(),
+    awaiting: z17.number(),
+    queued: z17.number(),
+    recentOutputs: z17.array(
+      z17.object({
+        title: z17.string(),
+        snippet: z17.string()
+      })
+    )
+  }).optional()
+});
+var documentSchema = z17.object({
+  containerRevision: z17.number().int().nonnegative().optional(),
+  version: z17.literal(1),
+  generationRevision,
+  id: z17.literal("main"),
+  title: z17.string(),
+  nodes: z17.array(node),
+  edges: z17.array(edge),
+  viewport: z17.object({
+    x: z17.number(),
+    y: z17.number(),
+    zoom: z17.number().positive()
+  }),
+  settings: z17.object({
+    nativeChatTriggers: z17.boolean(),
+    reducedMotion: z17.boolean(),
+    automaticTriggers: z17.boolean().optional(),
+    budget: budget.optional(),
+    triggerGuards: z17.object({
+      cooldownSec: z17.number().nonnegative().optional(),
+      dailyLimit: z17.number().int().positive().optional(),
+      busy: z17.enum(["skip", "queue", "interrupt"]).optional()
+    }).optional(),
+    listLimit: z17.number().int().positive().optional()
+  }),
+  prefs: z17.object({
+    theme: z17.enum(["dark", "light", "auto"]).optional(),
+    wheel: z17.enum(["zoom", "pan"]).optional(),
+    wireRouting: z17.enum(["avoid", "overlap"]).optional(),
+    snap: z17.boolean().optional(),
+    filter: z17.enum(["auto", "running", "3d", "7d", "all"]).optional(),
+    hiddenWorkspaces: z17.array(z17.string()).optional(),
+    showBranches: z17.boolean().optional(),
+    showWorktrees: z17.boolean().optional()
+  }).optional(),
+  templates: z17.array(workflowTemplateSchema).optional(),
+  snapshots: z17.array(canvasSnapshotSchema).optional()
+});
+var containerEntrySchema = z17.discriminatedUnion("kind", [
+  z17.object({ kind: z17.literal("board"), columnId: z17.string(), beforeId: z17.string().optional(), card: boardCard }),
+  z17.object({ kind: z17.literal("note"), text: z17.string() }),
+  z17.object({ kind: z17.literal("file"), text: z17.string(), path: z17.string(), cwd: z17.string() })
+]).nullable();
+var flowspaceDomain = defineDomain({
+  name: "flowspace",
+  version: 1,
+  tables: {
+    documents: domainTable(documentSchema),
+    runs: domainTable(
+      z17.custom(
+        (v) => typeof v === "object" && v !== null && "id" in v && "steps" in v
+      ).transform((run) => {
+        for (const token of run.tokens) token.createdAt ??= token.source.capturedAt;
+        return run;
+      })
+    ),
+    templates: domainTable(workflowTemplateSchema),
+    snapshots: domainTable(canvasSnapshotSchema),
+    roles: domainTable(roleDefinitionSchema),
+    teams: domainTable(teamBlueprintSchema),
+    team_sessions: domainTable(teamSessionSchema),
+    variables: domainTable(variableRecordSchema),
+    play_counters: domainTable(z17.object({ next: z17.number().int().nonnegative(), lastStep: z17.string(), index: z17.number().int().nonnegative() })),
+    arena_results: domainTable(z17.object({ id: z17.string(), runId: z17.string(), tag: z17.string(), model: teamModelSchema, won: z17.boolean() })),
+    triggers: domainTable(z17.object({
+      id: z17.string(),
+      nextAt: z17.number().optional(),
+      lastAt: z17.number().optional(),
+      hits: z17.number(),
+      missed: z17.number(),
+      day: z17.string().optional(),
+      configKey: z17.string().optional(),
+      queued: z17.array(z17.custom()).optional(),
+      observed: z17.record(z17.string(), z17.string()).optional()
+    })),
+    content_spills: domainTable(spill.extend({
+      encoding: z17.enum(["text", "json"]),
+      retrievalHint: z17.string()
+    })),
+    container_changes: domainTable(z17.object({
+      id: z17.string(),
+      nodeId: z17.string(),
+      itemId: z17.string().optional(),
+      edgeId: z17.string().optional(),
+      sessionId: z17.string().optional(),
+      runId: z17.string().optional(),
+      stepId: z17.string().optional(),
+      by: z17.string(),
+      at: z17.number(),
+      revision: z17.number().int().positive(),
+      before: containerEntrySchema,
+      after: containerEntrySchema,
+      beforeVersion: z17.string(),
+      afterVersion: z17.string(),
+      pending: z17.boolean().optional(),
+      revertedBy: z17.string().optional()
+    }))
+  }
+});
+function checkGraph(graph) {
+  const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
+  const missingPlugins = /* @__PURE__ */ new Set();
+  for (const n of graph.nodes) {
+    if (n.fanout) {
+      const fan = nodes.get(n.fanout.fanId), merge = nodes.get(n.fanout.mergeId);
+      if (n.kind !== "group" || fan?.flowType !== "flowspace/fanout" || merge?.flowType !== "flowspace/merge-sort" || fan.parentId !== n.id || merge.parentId !== n.id) throw new Error("\u6247\u51FA\u4E0E\u5408\u5E76\u5FC5\u987B\u4F4D\u4E8E\u6240\u5C5E\u7684\u6247\u51FA\u5206\u7EC4\u5185");
+    }
+    if (n.generatedBy && (!n.itemKey || !n.masterNodeId && !n.overridden || n.laneIndex === void 0 || nodes.get(n.generatedBy)?.flowType !== "flowspace/fanout")) throw new Error("\u6CF3\u9053\u8282\u70B9\u7F3A\u5C11\u6761\u76EE\u3001\u6BCD\u7248\u6216\u6247\u51FA\u6765\u6E90");
+    if (n.window === null) {
+      delete n.window;
+    } else if (n.window && n.window.snap === null) {
+      delete n.window.snap;
+    }
+    if (n.kind === "board") graph.edges = pruneBoardReferences(n, graph.edges);
+    if (n.kind !== "flow") continue;
+    const descriptor = descriptorOf(n.flowType);
+    if (!descriptor) {
+      missingPlugins.add(n.id);
+      continue;
+    }
+    const version = n.configVersion ?? 1;
+    if (version > descriptor.version)
+      throw new Error(`${n.title}\uFF1A\u914D\u7F6E\u7248\u672C ${version} \u9AD8\u4E8E\u5DF2\u5B89\u88C5\u7684 ${descriptor.version}`);
+    let config = n.config ?? descriptor.defaultConfig;
+    if (n.config && version < descriptor.version && descriptor.migrate)
+      config = descriptor.migrate(n.config, version);
+    const parsed2 = descriptor.configSchema.safeParse(config);
+    if (!parsed2.success) throw new Error(`${n.title}\uFF1A\u8282\u70B9\u914D\u7F6E\u65E0\u6548\uFF08${z17.prettifyError(parsed2.error)}\uFF09`);
+    n.config = parsed2.data;
+    n.configVersion = descriptor.version;
+  }
+  for (const edge2 of graph.edges) {
+    const source = nodes.get(edge2.source), target = nodes.get(edge2.target);
+    const result = canConnect({
+      ...edge2,
+      source,
+      target,
+      edges: graph.edges,
+      edgeId: edge2.id
+    });
+    if (result.ok) {
+      if (edge2.kind === "event") {
+        const seen = /* @__PURE__ */ new Set([edge2.target]);
+        const pending2 = [edge2.target];
+        while (pending2.length) {
+          const current = pending2.pop();
+          for (const link of graph.edges) {
+            if (link.source !== current || link.kind === "reference" || link.trigger === "off" || seen.has(link.target)) continue;
+            seen.add(link.target);
+            pending2.push(link.target);
+          }
+        }
+        if ((target?.kind === "agent" || seen.has(edge2.source)) && !edge2.event?.cooldownMs)
+          throw new Error("\u53D1\u5F80 Agent \u6216\u6784\u6210\u73AF\u8DEF\u7684\u4E8B\u4EF6\u7EBF\u9700\u8981\u51B7\u5374\u65F6\u95F4");
+        if (seen.has(edge2.source) && !edge2.event?.maxTimes) throw new Error("\u4E8B\u4EF6\u73AF\u8DEF\u9700\u8981\u6B21\u6570\u4E0A\u9650");
+      }
+      if (edge2.emitMode && (source?.kind !== "agent" || edge2.kind !== "continuation" || !target || !structuredInput(target, edge2.targetPort))) throw new Error("\u4EA7\u51FA\u6A21\u5F0F\u9700\u8981 Agent \u63A5\u7EED\u5230\u5217\u8868\u6216\u8BB0\u5F55\u8F93\u5165");
+      if (edge2.emitMode === "stream" && target && !canStreamTo(target, edge2.targetPort))
+        throw new Error("\u968F\u51FA\u968F\u53D1\u9700\u8981\u6247\u51FA\u3001\u5408\u5E76\u5206\u62E3\u6216\u6570\u636E\u8282\u70B9");
+      continue;
+    }
+    if (result.reason === "flow_invalid_output" && missingPlugins.has(edge2.source)) continue;
+    if (result.reason === "flow_invalid_input" && missingPlugins.has(edge2.target)) continue;
+    throw new Error(tFor("zh", result.reason));
+  }
+}
+function checkDocument(doc) {
+  checkGraph(doc);
+  for (const template2 of doc.templates ?? []) checkGraph(template2);
+  for (const snapshot2 of doc.snapshots ?? []) checkGraph(snapshot2);
+  const ids = new Set(doc.nodes.map((n) => n.id));
+  if (ids.size !== doc.nodes.length) throw new Error("\u8282\u70B9\u8EAB\u4EFD\u91CD\u590D");
+  const sessions = doc.nodes.flatMap((n) => n.sessionId ? [n.sessionId] : []);
+  if (sessions.length !== new Set(sessions).size)
+    throw new Error("\u4E00\u4E2A\u4F1A\u8BDD\u53EA\u80FD\u5BF9\u5E94\u4E00\u4E2A Agent \u8282\u70B9");
+  const byId = new Map(doc.nodes.map((n) => [n.id, n]));
+  const staffSlots = /* @__PURE__ */ new Map();
+  for (const n of doc.nodes) {
+    if ((n.teamRef || n.teamConfig) && n.kind !== "agent") throw new Error("\u56E2\u961F\u5FC5\u987B\u4F7F\u7528 Agent \u8282\u70B9");
+    if (n.teamRef && n.teamConfig) throw new Error("\u56E2\u961F\u53EA\u80FD\u5F15\u7528\u7F16\u5236\u5E93\u6216\u5728\u753B\u5E03\u4E0A\u7EC4\u5EFA\uFF0C\u4E0D\u80FD\u540C\u65F6\u4F7F\u7528");
+    if (n.staffOf !== void 0) {
+      if (n.kind !== "role") throw new Error("\u53EA\u6709\u5C97\u4F4D\u8282\u70B9\u53EF\u4EE5\u63A5\u5165\u56E2\u961F");
+      if (byId.get(n.staffOf)?.kind !== "agent") throw new Error("\u5C97\u4F4D\u8282\u70B9\u53EA\u80FD\u63A5\u5165 Agent \u8282\u70B9");
+      const taken = staffSlots.get(n.staffOf) ?? /* @__PURE__ */ new Set();
+      if (n.slotId && taken.has(n.slotId)) throw new Error(`\u540C\u4E00\u56E2\u961F\u7684\u5C97\u4F4D\u540D\u91CD\u590D: ${n.slotId}`);
+      if (n.slotId) taken.add(n.slotId);
+      staffSlots.set(n.staffOf, taken);
+    }
+    if (!n.parentId) continue;
+    const parent = doc.nodes.find((p) => p.id === n.parentId);
+    if (!parent || parent.kind !== "group" || parent.id === n.id)
+      throw new Error("\u65E0\u6548\u5206\u7EC4");
+    const grand = parent.parentId && doc.nodes.find((p) => p.id === parent.parentId);
+    if (grand && (grand.parentId || n.kind === "group"))
+      throw new Error("\u5206\u7EC4\u6700\u591A\u4E24\u5C42");
+  }
+}
+
+// packages/flowspace/src/host/variables.ts
+var humanWrite = z18.strictObject({
+  id: z18.string(),
+  runId: z18.string().optional(),
+  lane: z18.string().optional(),
+  expectedVersion: z18.number().int().nonnegative(),
+  value: z18.json().optional()
 });
 var laneKey = (step) => step?.fanoutId && step.itemKey ? JSON.stringify([step.fanoutId, step.itemKey]) : void 0;
 function applyOperation(current, operation, input) {
@@ -9020,18 +9903,17 @@ var VariableStore = class {
       return found;
     };
     const when = ({ agent }) => mounts(agent.id).length > 0;
-    const get = z16.strictObject({ edgeId: z16.string().optional() });
-    const set = z16.strictObject({
-      edgeId: z16.string(),
-      expectedVersion: z16.number().int().nonnegative().optional(),
-      operation: z16.enum(VARIABLE_OPERATIONS).default("set"),
-      value: z16.json()
+    const get = z18.strictObject({ edgeId: z18.string().optional() });
+    const set = z18.strictObject({
+      edgeId: z18.string(),
+      expectedVersion: z18.number().int().nonnegative().optional(),
+      operation: z18.enum(VARIABLE_OPERATIONS).default("set"),
+      value: z18.json()
     });
-    const parameters = (schema5) => JSON.parse(JSON.stringify(z16.toJSONSchema(schema5, { target: "draft-7" })));
     ctx.tools.register({
       name: "var_get",
       description: "List writable variables or get a variable's current value and version by its reference edge ID.",
-      parameters: parameters(get),
+      parameters: zodToolSchema(get),
       output: jsonToolOutput,
       execute: async (raw, exec) => {
         const args = get.parse(raw);
@@ -9056,7 +9938,7 @@ var VariableStore = class {
         const args = set.parse(raw);
         const id = exec.agent.id;
         const before = select(id, args.edgeId);
-        if (before.edge.ask) await approveWrite(ctx, exec, "var_set", before.node.title);
+        if (before.edge.ask) await approveWrite(ctx, exec, "var_set", before.node.title, "\u53D8\u91CF\u4FEE\u6539\u672A\u83B7\u6279\u51C6");
         return scheduler.transact(async () => {
           exec.signal.throwIfAborted();
           const current = select(id, args.edgeId);
@@ -9078,10 +9960,10 @@ var VariableStore = class {
 };
 
 // packages/flowspace/src/host/nodes/operations.ts
-import { readFile } from "node:fs/promises";
-import { z as z17 } from "zod";
-var stringValues = z17.record(z17.string(), z17.string());
-var operationRequest = z17.strictObject({ nodeId: z17.string(), values: stringValues.default({}) });
+import { readFile as readFile2 } from "node:fs/promises";
+import { z as z19 } from "zod";
+var stringValues = z19.record(z19.string(), z19.string());
+var operationRequest = z19.strictObject({ nodeId: z19.string(), values: stringValues.default({}) });
 var softActions = /* @__PURE__ */ new Set(["discard", "push", "removeWorktree"]);
 var requiredFields = {
   commit: ["message"],
@@ -9110,7 +9992,7 @@ function interpolate(text, step) {
   });
   return expand(text).replace(/\{\{\s*(input|task)\s*\}\}/g, (_match, key) => key === "task" ? step.task : step.sources.at(-1)?.text ?? "");
 }
-var fullOutput = (output) => output.spillPath ? readFile(output.spillPath, "utf8") : Promise.resolve(output.text);
+var fullOutput = (output) => output.spillPath ? readFile2(output.spillPath, "utf8") : Promise.resolve(output.text);
 var OperationService = class {
   constructor(ctx, git, document, runs, workdir, sessionDirectory) {
     this.ctx = ctx;
@@ -9121,58 +10003,32 @@ var OperationService = class {
     this.sessionDirectory = sessionDirectory;
   }
   terminals = /* @__PURE__ */ new Map();
-  terminalQueue = /* @__PURE__ */ new Map();
+  terminalQueue = new KeyedSerialQueue();
   dispose() {
     this.terminals.clear();
     this.terminalQueue.clear();
   }
-  async agent(sessionId) {
-    if (!sessionId) return;
-    const result = await this.ctx.sessionController.resolveAgent(sessionId);
-    return "error" in result ? void 0 : result.agent;
+  agent(sessionId) {
+    return resolveAgentOptional(this.ctx, sessionId);
   }
   async fullAccess(id) {
     const agent = await this.agent(id);
-    const policy = this.ctx.get("sandboxPolicy");
+    const policy = getSandboxPolicy(this.ctx);
     return !!agent && policy?.resolve({ session: agent.session }).mode === "danger-full-access";
   }
   async generate(config, node2, step, name, signal, record) {
     if (!config.provider || !config.model) return void 0;
-    const messages = [{ role: "user", content: [{
-      type: "text",
-      text: JSON.stringify({ operation: node2.title, parameter: name, sources: step.sources.map((source) => source.text) })
-    }] }];
-    let text = "";
-    let inputTokens = 0, outputTokens = 0;
-    const startedAt = Date.now();
-    for await (const chunk of this.ctx.llm.stream({
+    const { text } = await streamLlmText(this.ctx.llm, {
       provider: config.provider,
       model: config.model,
-      signal,
-      messages,
       purpose: "flowspace-parameters",
-      system: 'Give the requested operation parameter as a JSON object {"value":"..."}.'
-    })) {
-      if (chunk.type === "text-delta") text += chunk.text;
-      if (chunk.type === "usage") {
-        inputTokens += chunk.usage.inputTokens;
-        outputTokens += chunk.usage.outputTokens;
-      }
-    }
-    await record?.({
-      id: crypto.randomUUID(),
-      operation: "execution parameter",
-      provider: config.provider,
-      model: config.model,
-      startedAt,
-      endedAt: Date.now(),
-      inputTokens,
-      outputTokens,
-      inputSummary: name,
-      outputSummary: text.slice(0, 240)
+      system: 'Give the requested operation parameter as a JSON object {"value":"..."}.',
+      userText: JSON.stringify({ operation: node2.title, parameter: name, sources: step.sources.map((source) => source.text) }),
+      signal,
+      trace: { operation: "execution parameter", inputSummary: name, record }
     });
     try {
-      return z17.object({ value: z17.string().min(1) }).parse(JSON.parse(text)).value;
+      return z19.object({ value: z19.string().min(1) }).parse(JSON.parse(text)).value;
     } catch {
       return void 0;
     }
@@ -9262,7 +10118,7 @@ ${JSON.stringify({ action: config.action, ...values }, null, 2)}`;
       return { exitCode: 0, timedOut: false, stdout: result.commits[0]?.oid ?? result.branch ?? config.action, stderr: "" };
     }
     if (!config.program.trim()) throw new Error("\u8BF7\u5148\u6307\u5B9A\u53EF\u6267\u884C\u7A0B\u5E8F");
-    const subprocess = this.ctx.get("subprocess");
+    const subprocess = getSubprocess(this.ctx);
     if (!subprocess) throw new Error("\u6B64 DSH \u914D\u7F6E\u6CA1\u6709\u5B50\u8FDB\u7A0B\u670D\u52A1");
     const deadline = new AbortController();
     const timer = setTimeout(() => deadline.abort(), Math.round(config.timeoutSec * 1e3));
@@ -9273,7 +10129,7 @@ ${JSON.stringify({ action: config.action, ...values }, null, 2)}`;
     try {
       if (config.mode === "interactive") return await this.interactive(node2, config, operation, args, combined);
       if (config.sandbox) {
-        const shell = this.ctx.get("shell");
+        const shell = getShell(this.ctx);
         if (!shell?.sandboxMode || shell.sandboxMode === "danger-full-access") throw new Error("\u6B64 DSH \u914D\u7F6E\u6CA1\u6709\u542F\u7528\u53D7\u9650 Shell \u6267\u884C\u5668");
         const pwsh = /pwsh/i.test(shell.constructor.name);
         const command = (pwsh ? "& " : "") + [config.program, ...args].map((arg) => shellQuote(arg, pwsh)).join(" ");
@@ -9302,7 +10158,7 @@ ${JSON.stringify({ action: config.action, ...values }, null, 2)}`;
     }
   }
   async interactive(node2, config, operation, args, signal) {
-    const controller = this.ctx.get("terminalController");
+    const controller = getTerminalController(this.ctx);
     const sessionId = operation.sessionId ?? node2.terminalSessionId;
     const owner = await this.agent(sessionId);
     if (!controller || !owner) throw new Error("\u4EA4\u4E92\u6267\u884C\u9700\u8981\u7ED1\u5B9A\u5E26\u539F\u751F\u7EC8\u7AEF\u670D\u52A1\u7684\u4F1A\u8BDD");
@@ -9313,7 +10169,7 @@ ${JSON.stringify({ action: config.action, ...values }, null, 2)}`;
       if (config.terminalId && config.terminalId !== terminal?.id) throw new Error("\u8BE5\u7EC8\u7AEF\u4E0D\u5C5E\u4E8E\u6B64\u6267\u884C\u8282\u70B9");
       if (terminal?.info.control === "user") throw new Error("\u6B64\u7EC8\u7AEF\u5DF2\u7531\u7528\u6237\u63A5\u7BA1");
       if (!terminal || terminal.info.state !== "running") {
-        const policy = this.ctx.get("sandboxPolicy");
+        const policy = getSandboxPolicy(this.ctx);
         terminal = await controller.openForAgent(owner, {
           title: node2.title,
           cwd: operation.cwd,
@@ -9358,11 +10214,7 @@ ${JSON.stringify({ action: config.action, ...values }, null, 2)}`;
         mark.dispose();
       }
     };
-    const pending2 = (this.terminalQueue.get(key) ?? Promise.resolve()).then(execute, execute);
-    this.terminalQueue.set(key, pending2);
-    return pending2.finally(() => {
-      if (this.terminalQueue.get(key) === pending2) this.terminalQueue.delete(key);
-    });
+    return this.terminalQueue.run(key, execute);
   }
   prefetch(run, step) {
     if (step.parameterRetryFor) {
@@ -9384,7 +10236,7 @@ ${JSON.stringify({ action: config.action, ...values }, null, 2)}`;
       const ids = new Set(this.document().edges.filter((edge2) => edge2.kind === "reference" && edge2.target === target?.id).map((edge2) => edge2.source));
       return this.document().nodes.filter((node2) => ids.has(node2.id) && isOperation(node2.flowType));
     };
-    const schema5 = JSON.parse(JSON.stringify(z17.toJSONSchema(operationRequest, { target: "draft-7" })));
+    const schema5 = zodToolSchema(operationRequest);
     this.ctx.tools.register({
       name: "provide_flow_parameters",
       description: "Supply parameters to a downstream FlowSpace operation before ending this turn.",
@@ -9428,7 +10280,7 @@ ${JSON.stringify({ action: config.action, ...values }, null, 2)}`;
         };
         const operation = await this.prepare(node2, config, step, owner?.run, exec.signal, id, values);
         if (operation.missing.length) throw new Error(`\u9700\u8981\u8865\u9F50\u53C2\u6570\uFF1A${operation.missing.join(", ")}`);
-        if (await this.requiresApproval(config, operation)) await approveWrite(this.ctx, exec, "flow_execute", operation.preview);
+        if (await this.requiresApproval(config, operation)) await approveWrite(this.ctx, exec, "flow_execute", operation.preview, "\u6267\u884C\u64CD\u4F5C\u672A\u83B7\u6279\u51C6");
         if (!lookup2(id).some((candidate) => candidate.id === node2.id && JSON.stringify(candidate.config) === JSON.stringify(node2.config)))
           throw new Error("\u6267\u884C\u8282\u70B9\u5B9A\u4E49\u6216\u6388\u6743\u5DF2\u53D8\u5316");
         return this.perform(node2, config, operation, exec.signal);
@@ -9450,20 +10302,16 @@ var humanExecutor = (ctx) => async (node2, step, signal) => {
   let initial = node2.flowType === "flowspace/human-review" ? { text: step.sources.at(-1)?.text ?? "" } : {};
   if (config.timeoutAction === "default") initial = checkAnswers(fields, JSON.parse(config.defaultAnswer));
   if (config.aiPrefill && config.provider && config.model) {
-    let raw = "";
     try {
-      for await (const chunk of ctx.llm.stream({
+      const res = await streamLlmText(ctx.llm, {
         provider: config.provider,
         model: config.model,
         signal,
         purpose: "flowspace-form-prefill",
         system: "Suggest form answers in a single JSON object keyed by field name.",
-        messages: [{ role: "user", content: [{
-          type: "text",
-          text: JSON.stringify({ question: config.question, fields, source: step.sources.at(-1)?.text })
-        }] }]
-      })) if (chunk.type === "text-delta") raw += chunk.text;
-      initial = checkAnswers(fields, JSON.parse(raw));
+        userText: JSON.stringify({ question: config.question, fields, source: step.sources.at(-1)?.text })
+      });
+      initial = checkAnswers(fields, JSON.parse(res.text));
     } catch {
       signal.throwIfAborted();
     }
@@ -9514,9 +10362,10 @@ var TriggerService = class {
     this.publish = publish;
     this.path = path;
     this.changes = changes;
+    this.serial = new SerialQueue((error) => this.ctx.logger.warn("FlowSpace \u89E6\u53D1\u5668\uFF1A%s", error));
   }
   startedAt = Date.now();
-  serial = Promise.resolve();
+  serial;
   timer;
   running = false;
   observedAtBoot = /* @__PURE__ */ new Set();
@@ -9535,9 +10384,7 @@ var TriggerService = class {
     return () => clearInterval(this.timer);
   }
   queue(action) {
-    const next = this.serial.then(action);
-    this.serial = next.then(() => void 0, (error) => this.ctx.logger.warn("FlowSpace \u89E6\u53D1\u5668\uFF1A%s", error));
-    return next;
+    return this.serial.run(action);
   }
   launch(id, values) {
     return this.queue(async () => {
@@ -9728,24 +10575,19 @@ async function buildReport(ctx, run, model) {
   const chosen = scores.toSorted((a, b) => (b.lane.score ?? 0) - (a.lane.score ?? 0))[0];
   const best = chosen && run.graph.nodes.find((node2) => node2.generatedBy === chosen.batch.fanId && node2.itemKey === chosen.lane.item.key);
   const bestNode = best?.title ?? run.graph.nodes.find((node2) => node2.id === run.steps.findLast((step) => step.state === "completed" && step.sessionId)?.nodeId)?.title;
-  let summary = "";
-  for await (const chunk of ctx.llm.stream({
+  const { text: summary } = await streamLlmText(ctx.llm, {
     provider: model.provider,
     model: model.model,
     purpose: "flowspace-run-report",
     system: "Summarize this completed FlowSpace run in three short sentences using the provided results.",
-    messages: [{ role: "user", content: [{ type: "text", text: JSON.stringify({
+    userText: JSON.stringify({
       title: run.title,
       ...usage,
       bestNode,
       steps: run.steps.slice(-40).map((step) => ({ state: step.state, task: step.task.slice(0, 180), output: step.output?.slice(0, 480) })),
       artifacts: run.deliverables?.map((artifact) => artifact.path)
-    }) }] }]
-  })) {
-    if (chunk.type === "text-delta") summary += chunk.text;
-    if (chunk.type === "finish" && (chunk.reason.kind === "error" || chunk.reason.kind === "aborted"))
-      throw new Error(chunk.reason.failure.message);
-  }
+    })
+  });
   if (!summary.trim()) throw new Error("\u6A21\u578B\u6CA1\u6709\u8FD4\u56DE\u6218\u62A5");
   return { summary, ...usage, bestNode, artifacts: run.deliverables ?? [] };
 }
@@ -9784,571 +10626,6 @@ async function reconcileFanoutDrafts(next, previous, runs, resolveDeferred, chan
     }
   }
   return changed;
-}
-
-// packages/flowspace/src/host/storage.ts
-import { z as z18 } from "zod";
-import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
-var assetId = z18.string().trim().min(1);
-var teamModelSchema = z18.object({
-  provider: assetId,
-  model: assetId,
-  reasoningEffort: assetId.optional()
-});
-var saveRoleSchema = z18.object({
-  id: assetId,
-  title: assetId,
-  description: z18.string(),
-  persona: z18.string(),
-  model: teamModelSchema,
-  revision: z18.number().int().nonnegative()
-});
-var maxTeamSlots = 8;
-var saveTeamSchema = z18.object({
-  id: assetId,
-  title: assetId,
-  lead: z18.object({ persona: z18.string(), model: teamModelSchema }),
-  slots: z18.array(z18.object({
-    slotId: z18.string().regex(/^(?!lead$)[a-z][a-z0-9-]{0,31}$/, "Invalid native subagent slot name"),
-    roleId: assetId,
-    label: assetId,
-    model: teamModelSchema.optional(),
-    maxInstances: z18.number().int().positive().optional(),
-    nodeId: assetId.optional()
-  })).min(1).max(maxTeamSlots),
-  norms: z18.string(),
-  revision: z18.number().int().nonnegative()
-}).refine((team) => new Set(team.slots.map((slot) => slot.slotId)).size === team.slots.length, {
-  path: ["slots"],
-  message: "Slot names must be unique"
-});
-var revisionFields = {
-  revision: z18.number().int().positive(),
-  archived: z18.boolean().optional()
-};
-var roleDefinitionSchema = saveRoleSchema.extend(revisionFields);
-var teamBlueprintSchema = saveTeamSchema.safeExtend(revisionFields);
-var archiveTeamAssetSchema = z18.object({
-  id: assetId,
-  revision: revisionFields.revision
-});
-var teamReferenceSchema = z18.object({
-  teamId: assetId,
-  revision: revisionFields.revision.optional()
-});
-var teamDependenciesSchema = z18.object({
-  teams: z18.array(teamBlueprintSchema),
-  roles: z18.array(roleDefinitionSchema)
-}).refine(
-  ({ teams, roles }) => new Set(teams.map((team) => team.id)).size === teams.length && new Set(roles.map((role) => role.id)).size === roles.length,
-  "Team dependency IDs must be unique"
-);
-var teamModelReplacementSchema = z18.array(z18.object({ from: teamModelSchema, to: teamModelSchema }));
-var teamSessionSchema = z18.object({
-  leadSessionId: assetId,
-  nodeId: assetId,
-  roster: z18.object({
-    team: teamBlueprintSchema,
-    roles: z18.array(roleDefinitionSchema)
-  }),
-  delegations: z18.array(z18.object({
-    sessionId: assetId,
-    slotId: assetId,
-    roleId: assetId,
-    model: teamModelSchema,
-    roleRevision: revisionFields.revision,
-    /** The canvas role node the member was delegated through. */
-    nodeId: assetId.optional()
-  })),
-  /** Subagents the session already had when it became a team; they stay plain subagents. */
-  priorChildren: z18.array(assetId).optional(),
-  /** The node lost its roles: the session is a plain agent again, its member record kept. */
-  released: z18.boolean().optional()
-});
-var groupPort = z18.object({
-  id: z18.string(),
-  portId: z18.string().optional(),
-  kind: z18.enum(["reference", "continuation", "event"]),
-  direction: z18.enum(["in", "out"]),
-  name: z18.string(),
-  nodes: z18.array(z18.string()),
-  hidden: z18.boolean()
-});
-var budget = z18.object({
-  tokens: z18.number().int().positive().optional(),
-  seconds: z18.number().positive().optional(),
-  rounds: z18.number().int().positive().optional()
-});
-var boardChecklistItem = z18.object({
-  id: z18.string(),
-  text: z18.string().max(BOARD_LIMITS.checklistText),
-  done: z18.boolean()
-});
-var boardCard = z18.object({
-  id: z18.string(),
-  text: z18.string(),
-  description: z18.string().max(BOARD_LIMITS.description).optional(),
-  done: z18.boolean().optional(),
-  priority: z18.enum(BOARD_PRIORITIES).optional(),
-  tags: z18.array(z18.string().min(1).max(BOARD_LIMITS.tag)).max(BOARD_LIMITS.tags).optional(),
-  dueDate: z18.iso.date().optional(),
-  checklist: z18.array(boardChecklistItem).max(BOARD_LIMITS.checklist).optional(),
-  comments: z18.array(z18.object({ id: z18.string(), by: z18.string(), text: z18.string(), createdAt: z18.number() })).optional(),
-  author: z18.string().optional(),
-  previousColumnId: z18.string().optional(),
-  createdAt: z18.number().int().nonnegative().optional(),
-  updatedAt: z18.number().int().nonnegative().optional()
-});
-var boardColumn = z18.object({
-  id: z18.string(),
-  name: z18.string(),
-  cards: z18.array(boardCard),
-  role: z18.enum(BOARD_ROLES).optional(),
-  color: z18.enum(BOARD_COLORS).optional(),
-  wipLimit: z18.number().int().positive().max(BOARD_LIMITS.wip).optional(),
-  collapsed: z18.boolean().optional()
-});
-var boardSettings = z18.object({
-  view: z18.enum(["board", "list"]).optional(),
-  autoMoveDone: z18.boolean().optional(),
-  showCompleted: z18.boolean().optional(),
-  refScope: z18.enum(BOARD_REF_SCOPES).optional()
-});
-var windowState = z18.object({
-  x: z18.number().finite(),
-  y: z18.number().finite(),
-  w: z18.number().positive(),
-  h: z18.number().positive(),
-  snap: z18.enum(["left", "right", "max"]).nullable().optional(),
-  z: z18.number().optional()
-});
-var fanoutPairIds = z18.object({ fanId: assetId, mergeId: assetId });
-var generationRevision = z18.number().int().nonnegative().optional();
-var node = z18.object({
-  breakpoint: z18.boolean().optional(),
-  budget: budget.optional(),
-  laneBindings: z18.object({
-    provider: z18.string().optional(),
-    model: z18.string().optional(),
-    persona: z18.string().optional(),
-    cwd: z18.string().optional()
-  }).optional(),
-  lanePersona: z18.string().optional(),
-  canvasToolsOnly: z18.boolean().optional(),
-  id: z18.string(),
-  kind: z18.enum([
-    "agent",
-    "note",
-    "file",
-    "display",
-    "group",
-    "board",
-    "detail",
-    "git",
-    "changes",
-    "terminal",
-    "role",
-    "flow"
-  ]),
-  flowType: z18.string().regex(/^[a-z0-9-]+\/[a-z0-9-]+$/).optional(),
-  config: z18.record(z18.string(), z18.json()).optional(),
-  configVersion: z18.number().int().nonnegative().optional(),
-  title: z18.string(),
-  x: z18.number().finite(),
-  y: z18.number().finite(),
-  width: z18.number().positive(),
-  height: z18.number().positive(),
-  expanded: z18.boolean(),
-  parentId: z18.string().optional(),
-  fanout: fanoutPairIds.optional(),
-  masterOf: assetId.optional(),
-  generatedBy: assetId.optional(),
-  itemKey: assetId.optional(),
-  itemTitle: z18.string().optional(),
-  masterNodeId: assetId.optional(),
-  laneIndex: z18.number().int().nonnegative().optional(),
-  overridden: z18.boolean().optional(),
-  removed: z18.boolean().optional(),
-  generatedRevision: generationRevision,
-  sessionId: z18.string().optional(),
-  workspaceId: z18.string().optional(),
-  cwd: z18.string().optional(),
-  branch: z18.string().optional(),
-  worktreePath: z18.string().optional(),
-  agentPreset: z18.string().optional(),
-  teamRef: teamReferenceSchema.optional(),
-  teamConfig: z18.object({
-    persona: z18.string(),
-    norms: z18.string(),
-    model: teamModelSchema.optional()
-  }).optional(),
-  teamLayout: z18.enum(["row", "orbit", "tree"]).optional(),
-  roleRef: assetId.optional(),
-  teamModel: teamModelSchema.optional(),
-  maxInstances: z18.number().int().positive().max(8).optional(),
-  staffOf: z18.string().optional(),
-  slotId: z18.string().regex(SLOT_ID, "Invalid native subagent slot name").optional(),
-  planMode: z18.boolean().optional(),
-  customTitle: z18.boolean().optional(),
-  subAgentsExpanded: z18.boolean().optional(),
-  task: z18.string(),
-  draft: z18.string(),
-  continuationPrompt: z18.string().optional(),
-  continuationCollapsed: z18.boolean().optional(),
-  nativeTrigger: z18.enum(["inherit", "enabled", "disabled"]),
-  participation: z18.enum(["global", "manual", "paused", "bypassed"]),
-  text: z18.string(),
-  sourceNodeId: z18.string().optional(),
-  sourceSeq: z18.number().optional(),
-  fixed: z18.boolean(),
-  collapsed: z18.boolean(),
-  lastSubmittedTask: z18.string().optional(),
-  tab: z18.enum(["task", "conversation", "execution", "crew"]).optional(),
-  pinned: z18.boolean().optional(),
-  roleLabel: z18.string().optional(),
-  rerun: z18.enum(["change", "update", "always"]).optional(),
-  color: z18.enum(["violet", "teal", "blue", "amber"]).optional(),
-  ports: z18.array(groupPort).optional(),
-  templateId: z18.string().optional(),
-  templateRevision: z18.number().int().positive().optional(),
-  templateSlotId: z18.string().optional(),
-  titleKey: z18.string().optional(),
-  window: windowState.nullable().optional(),
-  columns: z18.array(boardColumn).optional(),
-  boardSettings: boardSettings.optional(),
-  items: z18.array(z18.string()).optional(),
-  selectedItems: z18.array(z18.string()).optional(),
-  nudge: z18.object({
-    by: z18.string(),
-    origX: z18.number().finite().optional(),
-    origY: z18.number().finite().optional(),
-    origW: z18.number().positive().optional(),
-    origH: z18.number().positive().optional()
-  }).optional(),
-  gitTab: z18.enum(["changes", "history", "branches"]).optional(),
-  gitCommitOid: z18.string().optional(),
-  changesSessionId: z18.string().optional(),
-  changesSeq: z18.number().optional(),
-  changesTurn: z18.number().optional(),
-  terminalSessionId: z18.string().optional(),
-  terminalId: z18.string().optional()
-});
-var waypoint = z18.object({
-  x: z18.number().finite(),
-  y: z18.number().finite()
-});
-var spill = z18.object({
-  locator: z18.string().min(1),
-  preview: z18.string(),
-  bytes: z18.number().int().nonnegative()
-});
-var contentItem = z18.object({
-  key: z18.string().min(1),
-  value: z18.json().optional(),
-  spill: spill.optional()
-}).refine((item) => item.value !== void 0 !== !!item.spill, "\u6761\u76EE\u5FC5\u987B\u5305\u542B\u4E00\u4E2A\u503C\u6216 spill \u5F15\u7528");
-var flowContentSchema = z18.object({
-  dataType: z18.enum(["text", "record", "list", "signal", "file"]),
-  value: z18.json().optional(),
-  items: z18.array(contentItem).optional(),
-  originalCount: z18.number().int().nonnegative().optional(),
-  spill: spill.optional()
-}).superRefine((content, ctx) => {
-  if (content.dataType === "list") {
-    if (!content.items || content.spill || content.value !== void 0)
-      ctx.addIssue({ code: "custom", message: "\u5217\u8868\u5185\u5BB9\u5FC5\u987B\u4F7F\u7528\u6709\u5E8F\u6761\u76EE" });
-    else if (new Set(content.items.map((item) => item.key)).size !== content.items.length)
-      ctx.addIssue({ code: "custom", path: ["items"], message: "\u5217\u8868\u6761\u76EE\u6807\u8BC6\u91CD\u590D" });
-    else if (content.originalCount !== void 0 && content.originalCount < content.items.length)
-      ctx.addIssue({ code: "custom", path: ["originalCount"], message: "\u539F\u59CB\u9879\u6570\u5C0F\u4E8E\u5DF2\u4FDD\u7559\u9879\u6570" });
-    return;
-  }
-  if (content.items || content.spill && content.value !== void 0) {
-    ctx.addIssue({ code: "custom", message: "\u5185\u5BB9\u503C\u4E0E\u6761\u76EE\u3001spill \u5F15\u7528\u4E0D\u80FD\u6DF7\u7528" });
-  } else if (!content.spill && (content.dataType === "text" && typeof content.value !== "string" || content.dataType === "record" && (!content.value || typeof content.value !== "object" || Array.isArray(content.value)) || content.dataType === "file" && content.value === void 0)) {
-    ctx.addIssue({ code: "custom", path: ["value"], message: "\u5185\u5BB9\u4E0E\u7AEF\u53E3\u7C7B\u578B\u4E0D\u7B26" });
-  }
-});
-var edge = z18.object({
-  id: z18.string(),
-  source: z18.string(),
-  target: z18.string(),
-  generatedBy: assetId.optional(),
-  itemKey: assetId.optional(),
-  masterEdgeId: assetId.optional(),
-  generatedRevision: generationRevision,
-  sourcePort: z18.string().optional(),
-  targetPort: z18.string().optional(),
-  emitMode: z18.enum(["stream", "end"]).optional(),
-  permission: z18.enum(["read", "advance", "edit"]).optional(),
-  ask: z18.boolean().optional(),
-  delivery: z18.object({ mode: z18.enum(["lines", "paragraph", "list"]), columnId: z18.string().optional() }).optional(),
-  logic: z18.object({
-    negate: z18.boolean().optional(),
-    fromRound: z18.number().int().nonnegative().optional(),
-    maxTimes: z18.number().int().nonnegative().optional(),
-    delayMs: z18.number().int().nonnegative().optional()
-  }).optional(),
-  kind: z18.enum(["reference", "continuation", "event"]),
-  event: z18.object({
-    mode: z18.enum(["end", "change", "continuous"]),
-    kinds: z18.array(z18.enum(["running", "waiting", "done", "error", "budget", "output", "tool", "usage", "container"])),
-    reasons: z18.array(z18.string()).optional(),
-    cooldownMs: z18.number().int().nonnegative().optional(),
-    maxTimes: z18.number().int().positive().optional(),
-    full: z18.boolean().optional()
-  }).optional(),
-  mode: z18.enum(["conclusion", "session", "fork"]),
-  trigger: z18.enum(["off", "auto", "confirm"]),
-  maxRounds: z18.number().int().positive(),
-  always: z18.boolean(),
-  sentVersion: z18.string().optional(),
-  currentVersion: z18.string().optional(),
-  sourceItemKey: z18.string().optional(),
-  snapshotTitle: z18.string().optional(),
-  snapshotText: z18.string().optional(),
-  snapshotContent: flowContentSchema.optional(),
-  originMode: z18.enum(["conclusion", "session", "fork"]).optional(),
-  waypoints: z18.array(waypoint).optional(),
-  placedCapsules: z18.array(z18.string()).optional()
-});
-var workflowTemplateSchema = z18.object({
-  id: z18.string(),
-  fanout: fanoutPairIds.optional(),
-  title: z18.string(),
-  description: z18.string(),
-  revision: z18.number().int().positive(),
-  builtin: z18.boolean().optional(),
-  color: z18.enum(["violet", "teal", "blue", "amber"]).optional(),
-  w: z18.number().positive(),
-  h: z18.number().positive(),
-  nodes: z18.array(node),
-  edges: z18.array(edge),
-  ports: z18.array(groupPort)
-});
-var canvasSnapshotSchema = z18.object({
-  id: z18.string(),
-  title: z18.string(),
-  createdAt: z18.number(),
-  nodes: z18.array(node),
-  edges: z18.array(edge),
-  viewport: z18.object({
-    x: z18.number(),
-    y: z18.number(),
-    zoom: z18.number().positive()
-  }),
-  summary: z18.object({
-    drafts: z18.number(),
-    stopping: z18.number(),
-    awaiting: z18.number(),
-    queued: z18.number(),
-    recentOutputs: z18.array(
-      z18.object({
-        title: z18.string(),
-        snippet: z18.string()
-      })
-    )
-  }).optional()
-});
-var documentSchema = z18.object({
-  containerRevision: z18.number().int().nonnegative().optional(),
-  version: z18.literal(1),
-  generationRevision,
-  id: z18.literal("main"),
-  title: z18.string(),
-  nodes: z18.array(node),
-  edges: z18.array(edge),
-  viewport: z18.object({
-    x: z18.number(),
-    y: z18.number(),
-    zoom: z18.number().positive()
-  }),
-  settings: z18.object({
-    nativeChatTriggers: z18.boolean(),
-    reducedMotion: z18.boolean(),
-    automaticTriggers: z18.boolean().optional(),
-    budget: budget.optional(),
-    triggerGuards: z18.object({
-      cooldownSec: z18.number().nonnegative().optional(),
-      dailyLimit: z18.number().int().positive().optional(),
-      busy: z18.enum(["skip", "queue", "interrupt"]).optional()
-    }).optional(),
-    listLimit: z18.number().int().positive().optional()
-  }),
-  prefs: z18.object({
-    theme: z18.enum(["dark", "light", "auto"]).optional(),
-    wheel: z18.enum(["zoom", "pan"]).optional(),
-    wireRouting: z18.enum(["avoid", "overlap"]).optional(),
-    snap: z18.boolean().optional(),
-    filter: z18.enum(["auto", "running", "3d", "7d", "all"]).optional(),
-    hiddenWorkspaces: z18.array(z18.string()).optional(),
-    showBranches: z18.boolean().optional(),
-    showWorktrees: z18.boolean().optional()
-  }).optional(),
-  templates: z18.array(workflowTemplateSchema).optional(),
-  snapshots: z18.array(canvasSnapshotSchema).optional()
-});
-var flowspaceDomain = defineDomain({
-  name: "flowspace",
-  version: 1,
-  tables: {
-    documents: domainTable(documentSchema),
-    runs: domainTable(
-      z18.custom(
-        (v) => typeof v === "object" && v !== null && "id" in v && "steps" in v
-      ).transform((run) => {
-        for (const token of run.tokens) token.createdAt ??= token.source.capturedAt;
-        return run;
-      })
-    ),
-    templates: domainTable(workflowTemplateSchema),
-    snapshots: domainTable(canvasSnapshotSchema),
-    roles: domainTable(roleDefinitionSchema),
-    teams: domainTable(teamBlueprintSchema),
-    team_sessions: domainTable(teamSessionSchema),
-    variables: domainTable(variableRecordSchema),
-    play_counters: domainTable(z18.object({ next: z18.number().int().nonnegative(), lastStep: z18.string(), index: z18.number().int().nonnegative() })),
-    arena_results: domainTable(z18.object({ id: z18.string(), runId: z18.string(), tag: z18.string(), model: teamModelSchema, won: z18.boolean() })),
-    triggers: domainTable(z18.object({
-      id: z18.string(),
-      nextAt: z18.number().optional(),
-      lastAt: z18.number().optional(),
-      hits: z18.number(),
-      missed: z18.number(),
-      day: z18.string().optional(),
-      configKey: z18.string().optional(),
-      queued: z18.array(z18.custom()).optional(),
-      observed: z18.record(z18.string(), z18.string()).optional()
-    })),
-    content_spills: domainTable(spill.extend({
-      encoding: z18.enum(["text", "json"]),
-      retrievalHint: z18.string()
-    })),
-    container_changes: domainTable(z18.object({
-      id: z18.string(),
-      nodeId: z18.string(),
-      itemId: z18.string().optional(),
-      edgeId: z18.string().optional(),
-      sessionId: z18.string().optional(),
-      runId: z18.string().optional(),
-      stepId: z18.string().optional(),
-      by: z18.string(),
-      at: z18.number(),
-      revision: z18.number().int().positive(),
-      before: z18.discriminatedUnion("kind", [
-        z18.object({ kind: z18.literal("board"), columnId: z18.string(), beforeId: z18.string().optional(), card: boardCard }),
-        z18.object({ kind: z18.literal("note"), text: z18.string() }),
-        z18.object({ kind: z18.literal("file"), text: z18.string(), path: z18.string(), cwd: z18.string() })
-      ]).nullable(),
-      after: z18.discriminatedUnion("kind", [
-        z18.object({ kind: z18.literal("board"), columnId: z18.string(), beforeId: z18.string().optional(), card: boardCard }),
-        z18.object({ kind: z18.literal("note"), text: z18.string() }),
-        z18.object({ kind: z18.literal("file"), text: z18.string(), path: z18.string(), cwd: z18.string() })
-      ]).nullable(),
-      beforeVersion: z18.string(),
-      afterVersion: z18.string(),
-      pending: z18.boolean().optional(),
-      revertedBy: z18.string().optional()
-    }))
-  }
-});
-function checkGraph(graph) {
-  const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
-  const missingPlugins = /* @__PURE__ */ new Set();
-  for (const n of graph.nodes) {
-    if (n.fanout) {
-      const fan = nodes.get(n.fanout.fanId), merge = nodes.get(n.fanout.mergeId);
-      if (n.kind !== "group" || fan?.flowType !== "flowspace/fanout" || merge?.flowType !== "flowspace/merge-sort" || fan.parentId !== n.id || merge.parentId !== n.id) throw new Error("\u6247\u51FA\u4E0E\u5408\u5E76\u5FC5\u987B\u4F4D\u4E8E\u6240\u5C5E\u7684\u6247\u51FA\u5206\u7EC4\u5185");
-    }
-    if (n.generatedBy && (!n.itemKey || !n.masterNodeId && !n.overridden || n.laneIndex === void 0 || nodes.get(n.generatedBy)?.flowType !== "flowspace/fanout")) throw new Error("\u6CF3\u9053\u8282\u70B9\u7F3A\u5C11\u6761\u76EE\u3001\u6BCD\u7248\u6216\u6247\u51FA\u6765\u6E90");
-    if (n.window === null) {
-      delete n.window;
-    } else if (n.window && n.window.snap === null) {
-      delete n.window.snap;
-    }
-    if (n.kind === "board") graph.edges = pruneBoardReferences(n, graph.edges);
-    if (n.kind !== "flow") continue;
-    const descriptor = descriptorOf(n.flowType);
-    if (!descriptor) {
-      missingPlugins.add(n.id);
-      continue;
-    }
-    const version = n.configVersion ?? 1;
-    if (version > descriptor.version)
-      throw new Error(`${n.title}\uFF1A\u914D\u7F6E\u7248\u672C ${version} \u9AD8\u4E8E\u5DF2\u5B89\u88C5\u7684 ${descriptor.version}`);
-    let config = n.config ?? descriptor.defaultConfig;
-    if (n.config && version < descriptor.version && descriptor.migrate)
-      config = descriptor.migrate(n.config, version);
-    const parsed2 = descriptor.configSchema.safeParse(config);
-    if (!parsed2.success) throw new Error(`${n.title}\uFF1A\u8282\u70B9\u914D\u7F6E\u65E0\u6548\uFF08${z18.prettifyError(parsed2.error)}\uFF09`);
-    n.config = parsed2.data;
-    n.configVersion = descriptor.version;
-  }
-  for (const edge2 of graph.edges) {
-    const source = nodes.get(edge2.source), target = nodes.get(edge2.target);
-    const result = canConnect({
-      ...edge2,
-      source,
-      target,
-      edges: graph.edges,
-      edgeId: edge2.id
-    });
-    if (result.ok) {
-      if (edge2.kind === "event") {
-        const seen = /* @__PURE__ */ new Set([edge2.target]);
-        const pending2 = [edge2.target];
-        while (pending2.length) {
-          const current = pending2.pop();
-          for (const link of graph.edges) {
-            if (link.source !== current || link.kind === "reference" || link.trigger === "off" || seen.has(link.target)) continue;
-            seen.add(link.target);
-            pending2.push(link.target);
-          }
-        }
-        if ((target?.kind === "agent" || seen.has(edge2.source)) && !edge2.event?.cooldownMs)
-          throw new Error("\u53D1\u5F80 Agent \u6216\u6784\u6210\u73AF\u8DEF\u7684\u4E8B\u4EF6\u7EBF\u9700\u8981\u51B7\u5374\u65F6\u95F4");
-        if (seen.has(edge2.source) && !edge2.event?.maxTimes) throw new Error("\u4E8B\u4EF6\u73AF\u8DEF\u9700\u8981\u6B21\u6570\u4E0A\u9650");
-      }
-      if (edge2.emitMode && (source?.kind !== "agent" || edge2.kind !== "continuation" || !target || !structuredInput(target, edge2.targetPort))) throw new Error("\u4EA7\u51FA\u6A21\u5F0F\u9700\u8981 Agent \u63A5\u7EED\u5230\u5217\u8868\u6216\u8BB0\u5F55\u8F93\u5165");
-      if (edge2.emitMode === "stream" && target && !canStreamTo(target, edge2.targetPort))
-        throw new Error("\u968F\u51FA\u968F\u53D1\u9700\u8981\u6247\u51FA\u3001\u5408\u5E76\u5206\u62E3\u6216\u6570\u636E\u8282\u70B9");
-      continue;
-    }
-    if (result.reason === "flow_invalid_output" && missingPlugins.has(edge2.source)) continue;
-    if (result.reason === "flow_invalid_input" && missingPlugins.has(edge2.target)) continue;
-    throw new Error(tFor("zh", result.reason));
-  }
-}
-function checkDocument(doc) {
-  checkGraph(doc);
-  for (const template2 of doc.templates ?? []) checkGraph(template2);
-  for (const snapshot2 of doc.snapshots ?? []) checkGraph(snapshot2);
-  const ids = new Set(doc.nodes.map((n) => n.id));
-  if (ids.size !== doc.nodes.length) throw new Error("\u8282\u70B9\u8EAB\u4EFD\u91CD\u590D");
-  const sessions = doc.nodes.flatMap((n) => n.sessionId ? [n.sessionId] : []);
-  if (sessions.length !== new Set(sessions).size)
-    throw new Error("\u4E00\u4E2A\u4F1A\u8BDD\u53EA\u80FD\u5BF9\u5E94\u4E00\u4E2A Agent \u8282\u70B9");
-  const byId = new Map(doc.nodes.map((n) => [n.id, n]));
-  const staffSlots = /* @__PURE__ */ new Map();
-  for (const n of doc.nodes) {
-    if ((n.teamRef || n.teamConfig) && n.kind !== "agent") throw new Error("\u56E2\u961F\u5FC5\u987B\u4F7F\u7528 Agent \u8282\u70B9");
-    if (n.teamRef && n.teamConfig) throw new Error("\u56E2\u961F\u53EA\u80FD\u5F15\u7528\u7F16\u5236\u5E93\u6216\u5728\u753B\u5E03\u4E0A\u7EC4\u5EFA\uFF0C\u4E0D\u80FD\u540C\u65F6\u4F7F\u7528");
-    if (n.staffOf !== void 0) {
-      if (n.kind !== "role") throw new Error("\u53EA\u6709\u5C97\u4F4D\u8282\u70B9\u53EF\u4EE5\u63A5\u5165\u56E2\u961F");
-      if (byId.get(n.staffOf)?.kind !== "agent") throw new Error("\u5C97\u4F4D\u8282\u70B9\u53EA\u80FD\u63A5\u5165 Agent \u8282\u70B9");
-      const taken = staffSlots.get(n.staffOf) ?? /* @__PURE__ */ new Set();
-      if (n.slotId && taken.has(n.slotId)) throw new Error(`\u540C\u4E00\u56E2\u961F\u7684\u5C97\u4F4D\u540D\u91CD\u590D: ${n.slotId}`);
-      if (n.slotId) taken.add(n.slotId);
-      staffSlots.set(n.staffOf, taken);
-    }
-    if (!n.parentId) continue;
-    const parent = doc.nodes.find((p) => p.id === n.parentId);
-    if (!parent || parent.kind !== "group" || parent.id === n.id)
-      throw new Error("\u65E0\u6548\u5206\u7EC4");
-    const grand = parent.parentId && doc.nodes.find((p) => p.id === parent.parentId);
-    if (grand && (grand.parentId || n.kind === "group"))
-      throw new Error("\u5206\u7EC4\u6700\u591A\u4E24\u5C42");
-  }
 }
 
 // packages/flowspace/src/host/teamAssets.ts
@@ -10572,9 +10849,9 @@ var TeamAssets = class {
 };
 
 // packages/flowspace/src/host/teamDelegate.ts
-import { z as z19 } from "zod";
+import { z as z20 } from "zod";
 var teamDelegateName = "team_delegate";
-var inputSchema = z19.object({ slot: z19.string().min(1), task: z19.string().trim().min(1) });
+var inputSchema = z20.object({ slot: z20.string().min(1), task: z20.string().trim().min(1) });
 function teamAgentOptions(model) {
   return { ...model, reasoningEffort: model.reasoningEffort };
 }
@@ -10650,9 +10927,6 @@ function registerTeamDelegate(ctx, isLead, delegate) {
 
 // packages/flowspace/src/host/teamRuntime.ts
 var delegationTools = ["subagent", "subagent_fork", "workflow"];
-function stableJson(value) {
-  return JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
-}
 function leadDefault(agent) {
   const current = agent.model.current();
   if (!current) throw new Error("\u8BF7\u4E3A\u56E2\u961F\u4E3B\u7BA1\u9009\u62E9\u6A21\u578B\u3002 / Choose a model for the team lead.");
@@ -10718,11 +10992,11 @@ var TeamRuntime = class {
   activations = /* @__PURE__ */ new Map();
   refreshes = /* @__PURE__ */ new Map();
   waits = /* @__PURE__ */ new Map();
-  delegateTails = /* @__PURE__ */ new Map();
+  delegateQueue = new KeyedSerialQueue();
   userTurns = /* @__PURE__ */ new Map();
   epochs = /* @__PURE__ */ new Set();
   pendingSaves = /* @__PURE__ */ new Map();
-  syncs = /* @__PURE__ */ new Map();
+  syncQueue = new KeyedSerialQueue();
   warn(error) {
     this.ctx.logger.warn("FlowSpace team: %s", error);
   }
@@ -10783,9 +11057,7 @@ var TeamRuntime = class {
   sync(nodeId) {
     const sessionId = this.nodes().find((node2) => node2.id === nodeId)?.sessionId;
     if (!sessionId) return Promise.resolve();
-    const previous = this.syncs.get(sessionId) ?? Promise.resolve();
-    const next = previous.catch(() => {
-    }).then(async () => {
+    return this.syncQueue.run(sessionId, async () => {
       const wanted = () => {
         const nodes = this.nodes();
         const node2 = nodes.find((candidate) => candidate.id === nodeId && candidate.sessionId === sessionId);
@@ -10802,12 +11074,6 @@ var TeamRuntime = class {
         if (later && !later.team && this.records.has(sessionId)) await this.release(sessionId);
       }
     });
-    this.syncs.set(sessionId, next);
-    void next.finally(() => {
-      if (this.syncs.get(sessionId) === next) this.syncs.delete(sessionId);
-    }).catch(() => {
-    });
-    return next;
   }
   async release(sessionId) {
     const record = { ...this.records.get(sessionId), released: true };
@@ -10851,7 +11117,7 @@ var TeamRuntime = class {
       this.userTurns.set(agent.id, turn);
       if (!this.epochs.has(agent.id)) {
         const roster = this.currentRoster(record);
-        if (roster && stableJson(roster) !== stableJson(record.roster)) {
+        if (roster && canonicalJson(roster) !== canonicalJson(record.roster)) {
           const next = { ...record, roster };
           this.records.set(agent.id, next);
           const saved = this.save(next);
@@ -10897,9 +11163,7 @@ Coordinate work and report the team's results. Assign new work through team_dele
 </team-brief>`;
   }
   delegate(parent, args, signal) {
-    const previous = this.delegateTails.get(parent.id) ?? Promise.resolve();
-    const next = previous.catch(() => {
-    }).then(async () => {
+    return this.delegateQueue.run(parent.id, async () => {
       const record = this.records.get(parent.id);
       if (!record) throw new Error("Only a FlowSpace team lead can delegate to a slot.");
       const rows = await this.ctx.subagents.listDescendants(parent.id, signal);
@@ -10940,12 +11204,6 @@ Coordinate work and report the team's results. Assign new work through team_dele
         throw error;
       }
     });
-    this.delegateTails.set(parent.id, next);
-    void next.finally(() => {
-      if (this.delegateTails.get(parent.id) === next) this.delegateTails.delete(parent.id);
-    }).catch(() => {
-    });
-    return next;
   }
   waitForIdle(sessionId) {
     const current = this.waits.get(sessionId);
@@ -11105,7 +11363,6 @@ function teamBriefMessage(text) {
     source: { kind: "flowspace-team", form: "snapshot", sections: [{ name: "flowspace-team", text }] }
   });
 }
-var shortHash2 = (value) => createHash5("sha1").update(value).digest("hex").slice(0, 12);
 var _follow_dec, _stopNode_dec, _canvasPresence_dec, _readWorkspaceFile_dec, _workspaceFiles_dec, _readTerminalScreen_dec, _openSessionTerminal_dec, _sessionTerminals_dec, _sessionChangeDiff_dec, _sessionChanges_dec, _gitAction_dec, _gitDiff_dec, _gitInspect_dec, _projectStructures_dec, _workspaces_dec, _sessions_dec, _display_dec, _bind_dec, _inspectEdgePayload_dec, _restoreSnapshot_dec, _release_dec, _previewData_dec, _remindEmission_dec, _answerHuman_dec, _command_dec, _extendLoop_dec, _rerunFailed_dec, _start_dec, _plan_dec, _draft_dec, _importWorkflow_dec, _generateReport_dec, _debugStep_dec, _launchTrigger_dec, _writeVariable_dec, _revertContainerChange_dec, _save_dec, _listModelRoutes_dec, _archiveTeam_dec, _saveTeam_dec, _listTeams_dec, _archiveRole_dec, _saveRole_dec, _listRoles_dec, _snapshot_dec, _a, _init, _b;
 var FlowspaceService = class extends (_b = TypertRemoteService) {
   constructor(ctx) {
@@ -11122,10 +11379,10 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
       listeners: /* @__PURE__ */ new Set(),
       turnOutput: /* @__PURE__ */ new Map(),
       canvasSessions: /* @__PURE__ */ new Set(),
-      knownWorktrees: /* @__PURE__ */ new Set(),
       injectedSteps: /* @__PURE__ */ new Set()
     });
     __publicField(this, "domain");
+    __publicField(this, "workspaceFs");
     __publicField(this, "teamAssets");
     __publicField(this, "teams");
     __publicField(this, "teamBriefs", /* @__PURE__ */ new Map());
@@ -11194,8 +11451,9 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
     validateTriggers(storedDoc);
     syncUntitledAgentTitles(storedDoc);
     this.state.doc = sanitizeDocumentForWire(storedDoc);
+    this.workspaceFs = new WorkspaceFs(this.ctx);
     for (const n of this.state.doc.nodes) {
-      if (n.worktreePath) this.state.knownWorktrees.add(resolve3(n.worktreePath));
+      this.workspaceFs.trackWorktree(n.worktreePath);
     }
     this.state.runs = [...this.domain.table("runs").entries()].map(([, r]) => structuredClone(r)).sort((a, b) => a.createdAt - b.createdAt);
     this.runtime = new DshRuntime(
@@ -11205,12 +11463,7 @@ var FlowspaceService = class extends (_b = TypertRemoteService) {
       this.nodeExecutors,
       this.domain.table("content_spills"),
       () => this.state.doc.settings.listLimit,
-      async (path, cwd) => {
-        const { full } = await this.workspaceFile({ path, cwd });
-        const body = await readFile2(full);
-        if (body.includes(0)) throw new Error(`\u4E8C\u8FDB\u5236\u6587\u4EF6\u4E0D\u80FD\u4F5C\u4E3A\u6587\u672C\u8F93\u5165\uFF1A${path}`);
-        return new TextDecoder().decode(body);
-      }
+      (path, cwd) => this.workspaceFs.readFullText(path, cwd)
     );
     const executors = judgeExecutors(this.ctx, this.runtime.contextText.bind(this.runtime));
     for (const descriptor of judges) this.registerNodeKind(descriptor, executors[descriptor.flowType]);
@@ -11319,7 +11572,7 @@ ${resolvedTask}` : resolvedTask;
       () => this.state.doc,
       () => this.persist(),
       () => this.publish(),
-      (request) => this.workspacePath(request)
+      (request) => this.workspaceFs.workspacePath(request)
     );
     await this.containers.recover();
     this.triggers = new TriggerService(
@@ -11330,7 +11583,7 @@ ${resolvedTask}` : resolvedTask;
       () => this.state.doc,
       () => this.state.runs,
       () => this.publish(),
-      (request) => this.workspacePath(request),
+      (request) => this.workspaceFs.workspacePath(request),
       () => [
         ...this.containers.changes().map((change) => ({
           key: change.id,
@@ -11379,17 +11632,13 @@ ${resolvedTask}` : resolvedTask;
     await this.scheduler.recover().catch(
       (e) => this.ctx.logger.warn("FlowSpace run recovery warning: %s", e)
     );
-    this.dataFileWatch = new DataFileWatch(this.ctx.fs, async (path, cwd, signal) => {
-      const { base, full } = this.workspacePath({ path, cwd });
-      const physical = await realpath(full).catch((error) => {
-        if (error.code !== "ENOENT") throw error;
-        return realpath(dirname2(full));
-      });
-      if (!isSubPath(await realpath(base), physical)) throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
-      return this.ctx.fs.resolve(full, { signal });
-    }, (ids) => {
-      void this.refreshDataFiles(ids).catch((error) => this.ctx.logger.warn("FlowSpace \u6587\u4EF6\u9884\u89C8\u66F4\u65B0\u5931\u8D25: %s", error));
-    });
+    this.dataFileWatch = new DataFileWatch(
+      this.ctx.fs,
+      (path, cwd, signal) => this.workspaceFs.checkedWatchTarget(path, cwd, signal),
+      (ids) => {
+        void this.refreshDataFiles(ids).catch((error) => this.ctx.logger.warn("FlowSpace \u6587\u4EF6\u9884\u89C8\u66F4\u65B0\u5931\u8D25: %s", error));
+      }
+    );
     this.ctx.effect(() => () => this.dataFileWatch.dispose());
     await this.dataFileWatch.sync(this.state.doc);
     const fileIds = this.state.doc.nodes.filter((node2) => node2.kind === "file").map((node2) => node2.id);
@@ -11681,7 +11930,7 @@ ${resolvedTask}` : resolvedTask;
           );
           const effectiveCwd = lastWorkdir?.data?.cwd ?? node2.worktreePath ?? node2.cwd;
           if (effectiveCwd) {
-            this.state.knownWorktrees.add(resolve3(effectiveCwd));
+            this.workspaceFs.trackWorktree(effectiveCwd);
           }
           this.state.live.set(node2.id, {
             nodeId: node2.id,
@@ -11736,7 +11985,7 @@ ${resolvedTask}` : resolvedTask;
     return false;
   }
   collectSessionChangesFromEvents(sessionId, events) {
-    const wc = this.ctx.get("workspaceChanges");
+    const wc = getWorkspaceChanges(this.ctx);
     if (!wc) return [];
     const byTurn = /* @__PURE__ */ new Map();
     for (const ev of events) {
@@ -11818,7 +12067,7 @@ ${resolvedTask}` : resolvedTask;
     }
     if (evAny.type === "working-directory/change" && evAny.data?.cwd) {
       const nextCwd = String(evAny.data.cwd);
-      this.state.knownWorktrees.add(resolve3(nextCwd));
+      this.workspaceFs.trackWorktree(nextCwd);
       const old = this.state.live.get(node2.id);
       this.state.live.set(node2.id, {
         nodeId: node2.id,
@@ -11857,7 +12106,7 @@ ${resolvedTask}` : resolvedTask;
       }
     }
     if (evAny.type === "workspace/changes") {
-      const wc = this.ctx.get("workspaceChanges");
+      const wc = getWorkspaceChanges(this.ctx);
       const sum = wc?.summary(sessionId, event.seq);
       if (sum) {
         const turnEntry = {
@@ -11897,8 +12146,7 @@ ${resolvedTask}` : resolvedTask;
           if (chNode.kind === "changes" && !chNode.fixed && chNode.changesSessionId === sessionId) {
             chNode.changesSeq = event.seq;
             chNode.changesTurn = sum.turn;
-            chNode.text = `Turn #${sum.turn} (${sum.total} files, +${sum.added} / -${sum.deleted})
-` + sum.files.map((f) => `- ${f.display} (+${f.added} / -${f.deleted})`).join("\n");
+            chNode.text = formatTurnChangesSummary(sum);
             docMutated = true;
           }
         }
@@ -11974,7 +12222,7 @@ ${resolvedTask}` : resolvedTask;
         continue;
       }
       if (n.flowType === "flowspace/constant") {
-        out[n.id] = `${n.id}:${shortHash2(JSON.stringify(n.config))}`;
+        out[n.id] = `${n.id}:${shortHash(JSON.stringify(n.config))}`;
         continue;
       }
       if (n.kind === "agent") {
@@ -11990,22 +12238,22 @@ ${resolvedTask}` : resolvedTask;
         continue;
       }
       if (n.kind === "board") {
-        out[n.id] = `${n.id}:${shortHash2(resolveBoardReference(n).text)}`;
+        out[n.id] = `${n.id}:${shortHash(resolveBoardReference(n).text)}`;
         continue;
       }
       if (n.kind === "note" || n.kind === "display" || n.kind === "git" || n.kind === "changes" || n.kind === "terminal") {
-        out[n.id] = `${n.id}:${shortHash2(n.text)}`;
+        out[n.id] = `${n.id}:${shortHash(n.text)}`;
       }
     }
     return out;
   }
   referenceVersion(edge2, source, sourceVersions) {
-    if (edge2.snapshotContent) return `${edge2.source}:${shortHash2(JSON.stringify(edge2.snapshotContent))}`;
+    if (edge2.snapshotContent) return `${edge2.source}:${shortHash(JSON.stringify(edge2.snapshotContent))}`;
     if (source?.kind === "board" && (edge2.sourceItemKey !== void 0 || !edge2.snapshotText)) {
       if (edge2.sourceItemKey === void 0 && sourceVersions[source.id]) return sourceVersions[source.id];
-      return `${source.id}:${shortHash2(resolveBoardReference(source, edge2.sourceItemKey).text)}`;
+      return `${source.id}:${shortHash(resolveBoardReference(source, edge2.sourceItemKey).text)}`;
     }
-    return edge2.snapshotText ? `${edge2.source}:${shortHash2(edge2.snapshotText)}` : sourceVersions[edge2.source] ?? edge2.currentVersion;
+    return edge2.snapshotText ? `${edge2.source}:${shortHash(edge2.snapshotText)}` : sourceVersions[edge2.source] ?? edge2.currentVersion;
   }
   syncLiveReferenceVersions(doc, sourceVersions = this.computeSourceVersions()) {
     const nodes = new Map(doc.nodes.map((node2) => [node2.id, node2]));
@@ -12046,7 +12294,7 @@ ${resolvedTask}` : resolvedTask;
     this.state.doc = cleanDoc;
     await this.domain.table("documents").put("main", structuredClone(cleanDoc));
     const retainedTemplates = new Set(
-      (cleanDoc.templates ?? []).map((t2) => t2.id)
+      (cleanDoc.templates ?? []).map((t) => t.id)
     );
     for (const id of this.domain.table("templates").keys())
       if (!retainedTemplates.has(id))
@@ -12165,7 +12413,7 @@ ${resolvedTask}` : resolvedTask;
         throw new Error("\u56E2\u961F\u4E3B\u7BA1\u4F1A\u8BDD\u5FC5\u987B\u7531\u5BF9\u5E94\u7684\u753B\u5E03\u56E2\u961F\u8282\u70B9\u521B\u5EFA");
       if (old) node2.lastSubmittedTask = old.lastSubmittedTask;
       syncUntitledAgentNode(node2);
-      if (node2.worktreePath) this.state.knownWorktrees.add(resolve3(node2.worktreePath));
+      if (node2.worktreePath) this.workspaceFs.trackWorktree(node2.worktreePath);
       if (node2.kind === "agent" && node2.sessionId && old && old.planMode !== node2.planMode) {
         void this.runtime.ensure(node2).catch(() => {
         });
@@ -12398,7 +12646,7 @@ ${resolvedTask}` : resolvedTask;
     });
   }
   async inspectEdgePayload(request) {
-    const run = request.runId ? this.state.runs.find((r) => r.id === request.runId) : [...this.state.runs].reverse().find((r) => r.tokens.some((t2) => t2.edgeId === request.edgeId));
+    const run = request.runId ? this.state.runs.find((r) => r.id === request.runId) : [...this.state.runs].reverse().find((r) => r.tokens.some((t) => t.edgeId === request.edgeId));
     const edge2 = this.state.doc.edges.find((e) => e.id === request.edgeId) ?? run?.graph.edges.find((e) => e.id === request.edgeId);
     if (!edge2) throw new Error("\u8FDE\u7EBF\u4E0D\u5B58\u5728");
     const source = this.state.doc.nodes.find((n) => n.id === edge2.source) ?? run?.graph.nodes.find((n) => n.id === edge2.source);
@@ -12476,9 +12724,9 @@ ${resolvedTask}` : resolvedTask;
       const previews = [cap.text];
       for (const p of paths2.slice(0, 4)) {
         try {
-          const full = resolve3(baseCwd, p);
-          const rel = relative2(baseCwd, full);
-          if (rel.startsWith("..") || isAbsolute2(rel)) continue;
+          const full = resolve4(baseCwd, p);
+          const rel = relative3(baseCwd, full);
+          if (rel.startsWith("..") || isAbsolute3(rel)) continue;
           const st = statSync2(full);
           if (st.isFile()) {
             totalDiskBytes += st.size;
@@ -12520,7 +12768,7 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
       ...seq !== void 0 ? { seq } : {},
       byteLength,
       ...itemCount !== void 0 ? { itemCount, originalCount: structured?.originalCount } : {},
-      willSpill: byteLength > 65536,
+      willSpill: byteLength > MAX_INLINE_CONTEXT_BYTES,
       freshness,
       summary,
       content
@@ -12541,7 +12789,7 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
       node2.branch = request.branch ?? node2.branch;
       node2.worktreePath = request.worktreePath ?? node2.worktreePath;
       if (node2.worktreePath) {
-        this.state.knownWorktrees.add(resolve3(node2.worktreePath));
+        this.workspaceFs.trackWorktree(node2.worktreePath);
       }
       if (request.sessionId) {
         var _stack = [];
@@ -12623,7 +12871,7 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
         if (status?.topLevel && sameFsPath(status.topLevel, w.path)) {
           for (const wt of status.worktrees) {
             if (wt.path && !wt.isMain) {
-              this.state.knownWorktrees.add(resolve3(wt.path));
+              this.workspaceFs.trackWorktree(wt.path);
             }
           }
         }
@@ -12647,7 +12895,7 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
     if (status.topLevel && sameFsPath(status.topLevel, base)) {
       for (const wt of status.worktrees) {
         if (wt.path && !wt.isMain) {
-          this.state.knownWorktrees.add(resolve3(wt.path));
+          this.workspaceFs.trackWorktree(wt.path);
         }
       }
     }
@@ -12663,7 +12911,7 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
     if (status.topLevel && sameFsPath(status.topLevel, base)) {
       for (const wt of status.worktrees) {
         if (wt.path && !wt.isMain) {
-          this.state.knownWorktrees.add(resolve3(wt.path));
+          this.workspaceFs.trackWorktree(wt.path);
         }
       }
     }
@@ -12686,7 +12934,7 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
     }
   }
   async sessionChangeDiff(request) {
-    const wc = this.ctx.get("workspaceChanges");
+    const wc = getWorkspaceChanges(this.ctx);
     if (!wc) {
       throw new Error("\u5F53\u524D Host \u672A\u6302\u8F7D workspace-changes \u670D\u52A1");
     }
@@ -12757,20 +13005,20 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
     };
   }
   sessionTerminals(request) {
-    const tc = this.ctx.get("terminalController");
+    const tc = getTerminalController(this.ctx);
     if (!tc || !request.sessionId) return [];
-    return tc.list(request.sessionId).map((t2) => ({
-      id: t2.id,
+    return tc.list(request.sessionId).map((t) => ({
+      id: t.id,
       sessionId: request.sessionId,
-      title: t2.title,
-      cwd: t2.cwd,
-      state: t2.state,
-      exitCode: t2.exitCode,
-      origin: t2.origin
+      title: t.title,
+      cwd: t.cwd,
+      state: t.state,
+      exitCode: t.exitCode,
+      origin: t.origin
     }));
   }
   async openSessionTerminal(request) {
-    const tc = this.ctx.get("terminalController");
+    const tc = getTerminalController(this.ctx);
     if (!tc) throw new Error("\u5F53\u524D\u73AF\u5883\u672A\u542F\u7528 terminalController");
     const resolved = await this.ctx.sessionController.resolveAgent(
       request.sessionId
@@ -12792,11 +13040,11 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
     };
   }
   async readTerminalScreen(request) {
-    const tc = this.ctx.get("terminalController");
+    const tc = getTerminalController(this.ctx);
     if (!tc) throw new Error("\u5F53\u524D\u73AF\u5883\u672A\u542F\u7528 terminalController");
     const sid = request.sessionId;
     const list = tc.list(sid);
-    const chosen = (request.terminalId ? list.find((t2) => t2.id === request.terminalId) : void 0) ?? list[0];
+    const chosen = (request.terminalId ? list.find((t) => t.id === request.terminalId) : void 0) ?? list[0];
     if (!chosen) {
       return {
         sessionId: request.sessionId,
@@ -12813,7 +13061,7 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
     const page = await tc.readScreen(resolved.agent, chosen.id, {
       offset: 0,
       count: Math.min(400, Math.max(20, request.lines ?? 140)),
-      maxBytes: 65536
+      maxBytes: MAX_INLINE_CONTEXT_BYTES
     });
     return {
       sessionId: request.sessionId,
@@ -12825,112 +13073,14 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
       truncated: page.truncated
     };
   }
-  async workspaceFiles(request) {
-    const base = this.resolveWorkspaceRoot(request.cwd);
-    const out = [];
-    const skip = /* @__PURE__ */ new Set([
-      "node_modules",
-      ".git",
-      ".local",
-      ".backups",
-      "dist",
-      "lib",
-      ".next",
-      "coverage"
-    ]);
-    const walk = async (dir, depth) => {
-      if (depth > 3 || out.length >= 80) return;
-      let entries;
-      try {
-        entries = await readdir(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries) {
-        if (out.length >= 80) break;
-        if (skip.has(entry.name)) continue;
-        const full = resolve3(dir, entry.name);
-        if (entry.isDirectory()) await walk(full, depth + 1);
-        else if (entry.isFile())
-          out.push(relative2(base, full).replaceAll("\\", "/"));
-      }
-    };
-    await walk(base, 0);
-    return out;
+  workspaceFiles(request) {
+    return this.workspaceFs.listFiles(request);
   }
-  workspacePath(request) {
-    const base = this.resolveWorkspaceRoot(request.cwd);
-    const raw = request.path.trim();
-    if (!raw) throw new Error("\u672A\u6307\u5B9A\u6587\u4EF6\u8DEF\u5F84");
-    const full = resolve3(base, raw);
-    const rel = relative2(base, full);
-    if (rel.startsWith("..") || isAbsolute2(rel))
-      throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
-    return { base, raw, full, rel };
+  readWorkspaceFile(request) {
+    return this.workspaceFs.readBoundedText(request);
   }
-  async workspaceFile(request) {
-    const { base, raw, full, rel } = this.workspacePath(request);
-    const info = await stat(full).catch(() => null);
-    if (!info || !info.isFile()) throw new Error(`\u6587\u4EF6\u4E0D\u5B58\u5728\uFF1A${raw}`);
-    if (!isSubPath(await realpath(base), await realpath(full))) throw new Error("\u6587\u4EF6\u8DEF\u5F84\u8D85\u51FA\u5F53\u524D\u5DE5\u4F5C\u533A");
-    return { full, rel, info, raw };
-  }
-  async readWorkspaceFile(request) {
-    const { full, rel, info, raw } = await this.workspaceFile(request);
-    const maxReadBytes = 65536;
-    const maxChars = 24e3;
-    const toRead = Math.min(info.size, maxReadBytes);
-    if (toRead === 0) {
-      return {
-        path: rel.replaceAll("\\", "/"),
-        content: "",
-        truncated: false
-      };
-    }
-    const fh = await open(full, "r");
-    try {
-      const buf = Buffer.allocUnsafe(toRead);
-      const { bytesRead } = await fh.read(buf, 0, toRead, 0);
-      const slice = buf.subarray(0, bytesRead);
-      if (slice.includes(0)) {
-        throw new Error(`\u4E8C\u8FDB\u5236\u6587\u4EF6\u4E0D\u652F\u6301\u6587\u672C\u9884\u89C8\uFF1A${raw}`);
-      }
-      const decoded = new TextDecoder("utf-8", { fatal: false }).decode(slice);
-      const truncated = bytesRead < info.size || decoded.length > maxChars;
-      return {
-        path: rel.replaceAll("\\", "/"),
-        content: decoded.length > maxChars ? decoded.slice(0, maxChars) : decoded,
-        truncated
-      };
-    } finally {
-      await fh.close();
-    }
-  }
-  /**
-   * Confine `cwd` strictly to registered DSH workspaces, `<repo>-worktrees/*` managed directories,
-   * or verified Git worktrees discovered from those workspaces (no arbitrary `../*` sibling folders).
-   */
   resolveWorkspaceRoot(cwd) {
-    const list = this.ctx.workspaceRegistry.list();
-    if (cwd) {
-      const candidate = resolve3(cwd);
-      const inRegisteredWorkspace = list.some(
-        (w) => isSubPath(w.path, candidate)
-      );
-      const inManagedWorktreesDir = list.some(
-        (w) => isSubPath(
-          resolve3(w.path, "..", `${basename2(w.path)}-worktrees`),
-          candidate
-        )
-      );
-      const inVerifiedWorktree = [...this.state.knownWorktrees].some(
-        (wt) => isSubPath(wt, candidate)
-      );
-      if (inRegisteredWorkspace || inManagedWorktreesDir || inVerifiedWorktree || isSubPath(resolve3(process.cwd()), candidate)) {
-        return candidate;
-      }
-    }
-    return resolve3(list[0]?.path ?? process.cwd());
+    return this.workspaceFs.resolveWorkspaceRoot(cwd);
   }
   canvasPresence(sessionIds) {
     this.state.canvasSessions = new Set(sessionIds);
@@ -12954,8 +13104,8 @@ ${preview.content.slice(0, 4e3)}${preview.truncated || preview.content.length > 
     try {
       while (!signal.aborted && !this.disposed) {
         if (!changed)
-          await new Promise((resolve4) => {
-            wake = resolve4;
+          await new Promise((resolve5) => {
+            wake = resolve5;
           });
         if (signal.aborted || this.disposed) break;
         changed = false;

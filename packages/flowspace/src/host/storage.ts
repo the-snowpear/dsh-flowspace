@@ -3,9 +3,9 @@ import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
 import { sanitizeDocumentForWire } from "../core/document.ts";
 import { canConnect, canStreamTo, structuredInput } from "../core/connect.ts";
 import { descriptorOf } from "../core/nodes/registry.ts";
-import { tFor } from "../client/i18n.ts";
+import { tFor } from "../core/i18n.ts";
 import { BOARD_COLORS, BOARD_LIMITS, BOARD_PRIORITIES, BOARD_REF_SCOPES, BOARD_ROLES, pruneBoardReferences } from "../core/board.ts";
-import { variableRecordSchema } from "./variables.ts";
+import { VARIABLE_SCOPES, VARIABLE_TYPES } from "../core/nodes/variables.ts";
 import { SLOT_ID } from "../core/team.ts";
 import type {
   CanvasSnapshot,
@@ -14,10 +14,35 @@ import type {
   FlowspaceRun,
   RoleDefinition,
   TeamBlueprint,
+  VariableRecord,
   WorkflowTemplate,
 } from "../types.ts";
 
 export { sanitizeDocumentForWire };
+
+export const variableRecordSchema: z.ZodType<VariableRecord> = z.object({
+  id: z.string(),
+  key: z.string(),
+  name: z.string(),
+  scope: z.enum(VARIABLE_SCOPES),
+  type: z.enum(VARIABLE_TYPES),
+  runId: z.string().optional(),
+  lane: z.string().optional(),
+  version: z.number().int().nonnegative(),
+  value: z.json(),
+  history: z.array(
+    z.object({
+      id: z.string(),
+      writer: z.string(),
+      at: z.number(),
+      version: z.number().int().positive(),
+      from: z.json(),
+      to: z.json(),
+      runId: z.string().optional(),
+      stepId: z.string().optional(),
+    }),
+  ),
+});
 
 const assetId = z.string().trim().min(1);
 export const teamModelSchema = z.object({
@@ -438,6 +463,12 @@ export const documentSchema: z.ZodType<FlowspaceDocument> = z.object({
   snapshots: z.array(canvasSnapshotSchema).optional(),
 });
 
+const containerEntrySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("board"), columnId: z.string(), beforeId: z.string().optional(), card: boardCard }),
+  z.object({ kind: z.literal("note"), text: z.string() }),
+  z.object({ kind: z.literal("file"), text: z.string(), path: z.string(), cwd: z.string() }),
+]).nullable();
+
 export const flowspaceDomain = defineDomain({
   name: "flowspace",
   version: 1,
@@ -473,16 +504,8 @@ export const flowspaceDomain = defineDomain({
       id: z.string(), nodeId: z.string(), itemId: z.string().optional(), edgeId: z.string().optional(),
       sessionId: z.string().optional(), runId: z.string().optional(), stepId: z.string().optional(),
       by: z.string(), at: z.number(), revision: z.number().int().positive(),
-      before: z.discriminatedUnion("kind", [
-        z.object({ kind: z.literal("board"), columnId: z.string(), beforeId: z.string().optional(), card: boardCard }),
-        z.object({ kind: z.literal("note"), text: z.string() }),
-        z.object({ kind: z.literal("file"), text: z.string(), path: z.string(), cwd: z.string() }),
-      ]).nullable(),
-      after: z.discriminatedUnion("kind", [
-        z.object({ kind: z.literal("board"), columnId: z.string(), beforeId: z.string().optional(), card: boardCard }),
-        z.object({ kind: z.literal("note"), text: z.string() }),
-        z.object({ kind: z.literal("file"), text: z.string(), path: z.string(), cwd: z.string() }),
-      ]).nullable(),
+      before: containerEntrySchema,
+      after: containerEntrySchema,
       beforeVersion: z.string(), afterVersion: z.string(),
       pending: z.boolean().optional(), revertedBy: z.string().optional(),
     })),

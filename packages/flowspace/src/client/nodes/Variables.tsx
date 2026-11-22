@@ -3,8 +3,8 @@ import type { FlowNode, FlowspaceSnapshot, JsonValue, VariableRecord } from "../
 import { variableValue } from "../../core/nodes/variables.ts";
 import type { CanvasBridge } from "../bridge.ts";
 import { t } from "../i18n.ts";
-import type { NodeViewProps } from "./index.ts";
-import { FlowShell } from "./judge/JudgeView.tsx";
+import { FlowShell } from "./FlowShell.tsx";
+import type { NodeViewProps } from "./types.ts";
 
 const textOf = (value: JsonValue) => typeof value === "string" ? value : JSON.stringify(value);
 const latest = (snapshot: FlowspaceSnapshot | null, node: FlowNode, runId?: string) => {

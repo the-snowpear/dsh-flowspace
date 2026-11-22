@@ -1,6 +1,6 @@
 import type { FlowContent, FlowEdge, FlowItem, FlowNode, FlowspaceDocument } from "../types.ts";
-import { nodeBox } from "../client/geometry.ts";
-import { tFor, type Locale } from "../client/i18n.ts";
+import { nodeBox } from "./geometry.ts";
+import { tFor, type Locale } from "./i18n.ts";
 import { boardContent } from "./board.ts";
 import { canConnect } from "./connect.ts";
 import { contentList, contentOf, DEFAULT_LIST_LIMIT, selectedFileContent } from "./content.ts";
@@ -12,6 +12,7 @@ import {
   stripForFreshInstance,
 } from "./nodeFields.ts";
 import { createStaticResolver, type PreviewOverrides } from "./nodes/data/preview.ts";
+import { deepEqual as sameValue } from "./utils.ts";
 
 type Graph = Pick<FlowspaceDocument, "nodes" | "edges">;
 type SourceGraph = Graph & Pick<FlowspaceDocument, "settings">;
@@ -292,17 +293,6 @@ function laneMap<T extends { id: string; itemKey?: string; generatedBy?: string 
     else result.set(object.itemKey, [object]);
   }
   return result;
-}
-
-// Storage and RPC may reorder object keys or omit optional undefined fields.
-function sameValue(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
-  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((value, i) => sameValue(value, b[i]));
-  if (Array.isArray(b)) return false;
-  const left = a as Record<string, unknown>, right = b as Record<string, unknown>;
-  return Object.keys(left).every(key => sameValue(left[key], right[key])) &&
-    Object.keys(right).every(key => right[key] === undefined || Object.hasOwn(left, key));
 }
 
 /** Reconcile a complete ordered set. The run graph and editable graph independently get identical IDs. */

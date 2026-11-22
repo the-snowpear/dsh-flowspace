@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import type { Context } from "@deepseek-ai/cordis";
 import type { FsTarget, FsVersion } from "@deepseek-ai/dsh-fs";
 import type { KvTable } from "@deepseek-ai/dsh-storage-domain";
-import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
 import { z } from "zod";
 import {
   findBoardCard, moveBoardCard, newBoardCard, normalizeBoardColumns,
@@ -11,9 +10,12 @@ import {
 import { boardIdsForReference, canvasEntry, containerPermission, writeCanvasEntry } from "../core/containers.ts";
 import { parseEmission } from "../core/emission.ts";
 import { DEFAULT_LIST_LIMIT, textOfContent } from "../core/content.ts";
+import { canonicalJson, extractFileNodePaths } from "../core/utils.ts";
 import type { Scheduler } from "../core/scheduler.ts";
-import type { ContainerChange, ContainerEntry, ContextSnapshot, FlowEdge, FlowNode, FlowspaceDocument, FlowspaceRun, FlowToken, JsonValue } from "../types.ts";
-import { extractFileNodePaths } from "./runtime.ts";
+import type { ContainerChange, ContainerEntry, ContextSnapshot, FlowEdge, FlowNode, FlowspaceDocument, FlowspaceRun, FlowToken } from "../types.ts";
+import { approveWrite, jsonToolOutput, zodToolSchema } from "./toolPrimitives.ts";
+
+export { approveWrite, jsonToolOutput };
 
 const lookup = z.strictObject({ edgeId: z.string() });
 const update = lookup.extend({ expectedVersion: z.string(), text: z.string() });
@@ -31,11 +33,7 @@ type FileEntry = { target: FsTarget; version: FsVersion | undefined; entry: Extr
 const versionOf = (entry: ContainerEntry | null) => {
   if (!entry) return "absent";
   const value = entry.kind === "board" ? { column: entry.columnId, card: entry.card } : entry;
-  return createHash("sha256").update(JSON.stringify(value, (key, value: JsonValue) =>
-    value && typeof value === "object" && !Array.isArray(value)
-      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)))
-      : value,
-  )).digest("hex");
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
 };
 
 function requireVersion(expected: string, actual: string): void {
@@ -305,21 +303,6 @@ export class ContainerStore {
   }
 }
 
-type Approval = {
-  request(req: { agent: unknown; toolName: string; callId: string; reason: string; signal: AbortSignal }): Promise<string>;
-};
-export const jsonToolOutput = {
-  schema: { type: "object" as const, additionalProperties: true },
-  render: (_args: unknown, value: JsonValue) => [{ type: "text" as const, text: JSON.stringify(value) }],
-};
-export async function approveWrite(ctx: Context, exec: ToolRunContext, toolName: string, title: string) {
-  const approval = ctx.get("approval") as Approval | undefined;
-  const result = await approval?.request({
-    agent: exec.agent, toolName, callId: exec.callId, signal: exec.signal, reason: `允许 Agent 修改「${title}」中的内容？`,
-  });
-  if (result !== "allowed-once") throw new Error("容器改动未获批准");
-}
-
 export function registerContainerTools(ctx: Context, store: ContainerStore, scheduler: Scheduler) {
   for (const kind of ["board", "note", "file"] as const) {
     const when = ({ agent }: { agent: { id: string } }) => store.mounts(agent.id, kind).length > 0;
@@ -346,7 +329,7 @@ export function registerContainerTools(ctx: Context, store: ContainerStore, sche
       description: kind === "board"
         ? "Change one granted FlowSpace board card. Use board_read first to get its current version. For add, expectedVersion is absent."
         : `Replace the text of one granted FlowSpace ${kind}. Read it first to get the current version.`,
-      parameters: JSON.parse(JSON.stringify(z.toJSONSchema(schema, { target: "draft-7" }))),
+      parameters: zodToolSchema(schema),
       output: jsonToolOutput,
       async execute(raw, exec) {
         const args = schema.parse(raw);

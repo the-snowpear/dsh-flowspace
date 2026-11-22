@@ -6,13 +6,14 @@ import { dataItems, dataMode, dataText, transformData, type DataInput } from "..
 import { snapshotWithContent } from "../../core/nodes/input.ts";
 import type { ExecResult, ExecutionOptions, NodeExecutor } from "../../core/nodes/types.ts";
 import type { ContextSnapshot, DataCallTrace, FlowContent, FlowItem, FlowNode, JsonObject, JsonValue, RunStep } from "../../types.ts";
+import { streamLlmJson, type LlmStreamClient } from "../llm.ts";
 import { runDataCode, type DataCodeInput } from "./judge/code.ts";
 
 declare module "@deepseek-ai/dsh-llm/types" {
   interface LlmRequestPurposeMap { "flowspace-transform": true }
 }
 
-type ModelContext = { llm: Pick<Context["llm"], "stream"> };
+type ModelContext = { llm: LlmStreamClient };
 type DataResult = Exclude<ExecResult, { awaiting: unknown }>;
 type ModelConfig = { provider: string; model: string; instruction: string };
 const mapped = z.strictObject({ value: z.json() });
@@ -33,44 +34,25 @@ async function modelCall<T>(ctx: ModelContext, config: ModelConfig, operation: s
   signal.throwIfAborted();
   if (!config.provider || !config.model) throw new Error("请先选择数据变换的供应商和模型");
   const text = JSON.stringify({ operation, ...payload });
-  const trace: DataCallTrace = {
-    id: crypto.randomUUID(), operation, provider: config.provider, model: config.model,
-    ...(typeof payload.key === "string" ? { itemKey: payload.key } : {}),
-    ...(typeof payload.index === "number" ? { index: payload.index } : {}),
-    startedAt: Date.now(), endedAt: 0, inputTokens: 0, outputTokens: 0, inputSummary: text.slice(0, 240),
-  };
-  let raw = "", finished = false;
-  try {
-    for await (const chunk of ctx.llm.stream({
-      provider: config.provider, model: config.model, signal, purpose: "flowspace-transform",
-      system: [config.instruction, responseInstructions[operation]].filter(Boolean).join("\n"),
-      messages: [{ role: "user", content: [{ type: "text", text }] }],
-    })) {
-      if (chunk.type === "usage") {
-        trace.inputTokens += chunk.usage.inputTokens + (chunk.usage.cacheReadTokens ?? 0) + (chunk.usage.cacheWriteTokens ?? 0);
-        trace.outputTokens += chunk.usage.outputTokens;
-      }
-      if (chunk.type === "text-delta") raw += chunk.text;
-      if (chunk.type === "finish") {
-        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
-        finished = true;
-      }
-      signal.throwIfAborted();
-    }
-    signal.throwIfAborted();
-    if (!finished) throw new Error("模型未完成数据变换请求");
-    let response: unknown;
-    try { response = JSON.parse(raw); } catch { throw new Error("模型未返回有效的 JSON"); }
-    return read(response);
-  } catch (error) {
-    trace.error = error instanceof Error ? error.message : String(error);
-    throw error;
-  } finally {
-    trace.endedAt = Date.now();
-    if (raw) trace.outputSummary = raw.slice(0, 240);
-    calls.push(trace);
-    await record?.(trace);
-  }
+  const result = await streamLlmJson(ctx.llm, {
+    provider: config.provider,
+    model: config.model,
+    purpose: "flowspace-transform",
+    system: [config.instruction, responseInstructions[operation]].filter(Boolean).join("\n"),
+    userText: text,
+    signal,
+    requireFinish: true,
+    incompleteMessage: "模型未完成数据变换请求",
+    parse: read,
+    trace: {
+      operation,
+      ...(typeof payload.key === "string" ? { itemKey: payload.key } : {}),
+      ...(typeof payload.index === "number" ? { index: payload.index } : {}),
+      calls,
+      record,
+    },
+  });
+  return result.data;
 }
 
 function parseSource(node: FlowNode, inputs: DataInput[]): ContextSnapshot {

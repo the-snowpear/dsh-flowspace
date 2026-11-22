@@ -5,22 +5,16 @@ import { containerPermission } from "../core/containers.ts";
 import { DEFAULT_LIST_LIMIT } from "../core/content.ts";
 import { snapshotWithContent } from "../core/nodes/input.ts";
 import {
-  VARIABLE_OPERATIONS, VARIABLE_SCOPES, VARIABLE_TYPES, assignmentConfig, variableContent,
+  VARIABLE_OPERATIONS, assignmentConfig, variableContent,
   variableNode, variableTemplate, variableValue, type VariableDefinition, type VariableOperation,
 } from "../core/nodes/variables.ts";
 import type { NodeExecutor } from "../core/nodes/types.ts";
 import type { Scheduler } from "../core/scheduler.ts";
 import type { ContextSnapshot, FlowNode, FlowspaceDocument, FlowspaceRun, JsonObject, JsonValue, RunStep, VariableRecord } from "../types.ts";
-import { approveWrite, jsonToolOutput } from "./containers.ts";
+import { variableRecordSchema } from "./storage.ts";
+import { approveWrite, jsonToolOutput, zodToolSchema } from "./toolPrimitives.ts";
 
-export const variableRecordSchema: z.ZodType<VariableRecord> = z.object({
-  id: z.string(), key: z.string(), name: z.string(), scope: z.enum(VARIABLE_SCOPES), type: z.enum(VARIABLE_TYPES),
-  runId: z.string().optional(), lane: z.string().optional(), version: z.number().int().nonnegative(), value: z.json(),
-  history: z.array(z.object({
-    id: z.string(), writer: z.string(), at: z.number(), version: z.number().int().positive(),
-    from: z.json(), to: z.json(), runId: z.string().optional(), stepId: z.string().optional(),
-  })),
-});
+export { variableRecordSchema };
 const humanWrite = z.strictObject({ id: z.string(), runId: z.string().optional(), lane: z.string().optional(),
   expectedVersion: z.number().int().nonnegative(), value: z.json().optional() });
 type VariableOwner = { runId?: string; lane?: string; stepId?: string; writer: string; writeId?: string };
@@ -197,10 +191,9 @@ export class VariableStore {
     const get = z.strictObject({ edgeId: z.string().optional() });
     const set = z.strictObject({ edgeId: z.string(), expectedVersion: z.number().int().nonnegative().optional(),
       operation: z.enum(VARIABLE_OPERATIONS).default("set"), value: z.json() });
-    const parameters = (schema: z.ZodType) => JSON.parse(JSON.stringify(z.toJSONSchema(schema, { target: "draft-7" })));
     ctx.tools.register({
       name: "var_get", description: "List writable variables or get a variable's current value and version by its reference edge ID.",
-      parameters: parameters(get), output: jsonToolOutput,
+      parameters: zodToolSchema(get), output: jsonToolOutput,
       execute: async (raw, exec) => {
         const args = get.parse(raw);
         const id = exec.agent!.id;
@@ -220,7 +213,7 @@ export class VariableStore {
         const args = set.parse(raw);
         const id = exec.agent!.id;
         const before = select(id, args.edgeId);
-        if (before.edge.ask) await approveWrite(ctx, exec, "var_set", before.node.title);
+        if (before.edge.ask) await approveWrite(ctx, exec, "var_set", before.node.title, "变量修改未获批准");
         return scheduler.transact(async () => {
           exec.signal.throwIfAborted();
           const current = select(id, args.edgeId);

@@ -1,20 +1,12 @@
 import type { ContextSnapshot, FlowContent, FlowItem, FlowNode, JsonValue } from "../types.ts";
+import { canonicalJson, extractFileNodePaths } from "./utils.ts";
 
+export { canonicalJson };
 export const DEFAULT_LIST_LIMIT = 1000;
 
 export function selectedFileContent(node: FlowNode, limit = DEFAULT_LIST_LIMIT): FlowContent {
-  const selected = node.selectedItems?.length ? node.selectedItems : node.text.split(/\r?\n/);
-  const paths = [...new Set(selected.map(path => path.trim()).filter(Boolean))];
+  const paths = extractFileNodePaths(node, true);
   return contentList(paths, limit, paths);
-}
-
-/** A record's JSON member order does not affect list identity or exact deduplication. */
-export function canonicalJson(value: JsonValue, normalizeText?: (text: string) => string): string {
-  return JSON.stringify(value, (_key, member) => {
-    if (normalizeText && typeof member === "string") return normalizeText(member);
-    if (!member || typeof member !== "object" || Array.isArray(member)) return member;
-    return Object.fromEntries(Object.keys(member).sort().map(key => [key, member[key]]));
-  });
 }
 
 function itemHash(value: JsonValue): string {

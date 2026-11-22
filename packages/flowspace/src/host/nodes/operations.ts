@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import type { Context } from "@deepseek-ai/cordis";
-import type { SessionId } from "@deepseek-ai/dsh-session";
 import { z } from "zod";
 import { contentList, DEFAULT_LIST_LIMIT } from "../../core/content.ts";
 import { snapshotWithContent } from "../../core/nodes/input.ts";
@@ -9,8 +8,14 @@ import { variableTemplate } from "../../core/nodes/variables.ts";
 import type { ExecutionOptions, NodeExecutor } from "../../core/nodes/types.ts";
 import type { Scheduler } from "../../core/scheduler.ts";
 import type { FlowNode, FlowspaceDocument, FlowspaceRun, GitActionRequest, PreparedOperation, RunStep } from "../../types.ts";
-import { approveWrite, jsonToolOutput } from "../containers.ts";
+import {
+  getSandboxPolicy, getShell, getSubprocess, getTerminalController, resolveAgentOptional,
+  type NativeTerminal, type ProcessOutput,
+} from "../dshServices.ts";
 import { sameFsPath, type HostGitService } from "../git.ts";
+import { streamLlmText } from "../llm.ts";
+import { KeyedSerialQueue } from "../serialQueue.ts";
+import { approveWrite, jsonToolOutput, zodToolSchema } from "../toolPrimitives.ts";
 
 declare module "@deepseek-ai/dsh-llm/types" {
   interface LlmRequestPurposeMap { "flowspace-parameters": true }
@@ -47,34 +52,11 @@ function interpolate(text: string, step: RunStep) {
 }
 
 type ShellResult = { exitCode: number | null; timedOut: boolean; stdout: string; stderr: string };
-type ProcessOutput = { text: string; spillPath?: string };
-interface Subprocess {
-  resolveExecutable(name: string, env?: Record<string, string>, signal?: AbortSignal): Promise<string>;
-  spawn(spec: { argv: string[]; cwd: string; stdio: { stdin: "ignore"; stdout: typeof stdio; stderr: typeof stdio };
-    graceMs: number; signal: AbortSignal }): {
-    done: Promise<{ exitCode: number | null }>;
-    collected: { stdout: { readFrom(offset: number): ProcessOutput }; stderr: { readFrom(offset: number): ProcessOutput } };
-  };
-}
-type ShellPolicy = { mode: string; workspaceRoot: string };
-interface NativeTerminal {
-  id: string;
-  info: { state: "running" | "exited" | "failed"; shell: { path: string }; control?: "agent" | "user" };
-  revision: number;
-  changed(after: number, signal: AbortSignal): Promise<number>;
-  write(data: string): Promise<void>;
-  drain(): Promise<void>;
-  mark(): { lines(): { lines: readonly string[] }; dispose(): void };
-}
-interface TerminalController {
-  openForAgent(owner: unknown, request: { title: string; cwd: string; cols: number; rows: number;
-    policy: ShellPolicy; preferredShells: string[] }, signal: AbortSignal): Promise<NativeTerminal>;
-}
 const fullOutput = (output: ProcessOutput) => output.spillPath ? readFile(output.spillPath, "utf8") : Promise.resolve(output.text);
 
 export class OperationService {
   private readonly terminals = new Map<string, NativeTerminal>();
-  private readonly terminalQueue = new Map<string, Promise<unknown>>();
+  private readonly terminalQueue = new KeyedSerialQueue();
   constructor(
     private readonly ctx: Context,
     private readonly git: HostGitService,
@@ -89,40 +71,28 @@ export class OperationService {
     this.terminalQueue.clear();
   }
 
-  private async agent(sessionId?: string) {
-    if (!sessionId) return;
-    const result = await this.ctx.sessionController.resolveAgent(sessionId as SessionId);
-    return "error" in result ? undefined : result.agent;
+  private agent(sessionId?: string) {
+    return resolveAgentOptional(this.ctx, sessionId);
   }
 
   private async fullAccess(id?: string) {
     const agent = await this.agent(id);
-    const policy = this.ctx.get("sandboxPolicy") as {
-      resolve(request: { session?: unknown }): { mode: string };
-    } | undefined;
+    const policy = getSandboxPolicy(this.ctx);
     return !!agent && policy?.resolve({ session: agent.session }).mode === "danger-full-access";
   }
 
   private async generate(config: OperationConfig, node: FlowNode, step: RunStep, name: string, signal: AbortSignal,
     record?: ExecutionOptions["recordCall"]) {
     if (!config.provider || !config.model) return undefined;
-    const messages = [{ role: "user" as const, content: [{ type: "text" as const,
-      text: JSON.stringify({ operation: node.title, parameter: name, sources: step.sources.map(source => source.text) }) }] }];
-    let text = "";
-    let inputTokens = 0, outputTokens = 0;
-    const startedAt = Date.now();
-    for await (const chunk of this.ctx.llm.stream({
-      provider: config.provider, model: config.model, signal, messages, purpose: "flowspace-parameters",
+    const { text } = await streamLlmText(this.ctx.llm, {
+      provider: config.provider,
+      model: config.model,
+      purpose: "flowspace-parameters",
       system: 'Give the requested operation parameter as a JSON object {"value":"..."}.',
-    })) {
-      if (chunk.type === "text-delta") text += chunk.text;
-      if (chunk.type === "usage") {
-        inputTokens += chunk.usage.inputTokens;
-        outputTokens += chunk.usage.outputTokens;
-      }
-    }
-    await record?.({ id: crypto.randomUUID(), operation: "execution parameter", provider: config.provider, model: config.model,
-      startedAt, endedAt: Date.now(), inputTokens, outputTokens, inputSummary: name, outputSummary: text.slice(0, 240) });
+      userText: JSON.stringify({ operation: node.title, parameter: name, sources: step.sources.map(source => source.text) }),
+      signal,
+      trace: { operation: "execution parameter", inputSummary: name, record },
+    });
     try { return z.object({ value: z.string().min(1) }).parse(JSON.parse(text)).value; }
     catch { return undefined; }
   }
@@ -211,7 +181,7 @@ export class OperationService {
       return { exitCode: 0, timedOut: false, stdout: result.commits[0]?.oid ?? result.branch ?? config.action, stderr: "" };
     }
     if (!config.program.trim()) throw new Error("请先指定可执行程序");
-    const subprocess = this.ctx.get("subprocess") as Subprocess | undefined;
+    const subprocess = getSubprocess(this.ctx);
     if (!subprocess) throw new Error("此 DSH 配置没有子进程服务");
     const deadline = new AbortController();
     const timer = setTimeout(() => deadline.abort(), Math.round(config.timeoutSec * 1000));
@@ -222,10 +192,7 @@ export class OperationService {
     try {
       if (config.mode === "interactive") return await this.interactive(node, config, operation, args, combined);
       if (config.sandbox) {
-        const shell = this.ctx.get("shell") as {
-          sandboxMode?: string; resolve(input: object): unknown;
-          execute(spec: unknown): { result(): Promise<{ exitCode: number | null; timedOut: boolean; stdout: ProcessOutput; stderr: ProcessOutput }> };
-        } | undefined;
+        const shell = getShell(this.ctx);
         if (!shell?.sandboxMode || shell.sandboxMode === "danger-full-access") throw new Error("此 DSH 配置没有启用受限 Shell 执行器");
         const pwsh = /pwsh/i.test(shell.constructor.name);
         const command = (pwsh ? "& " : "") + [config.program, ...args].map(arg => shellQuote(arg, pwsh)).join(" ");
@@ -244,7 +211,7 @@ export class OperationService {
   }
 
   private async interactive(node: FlowNode, config: TerminalOperation, operation: PreparedOperation, args: string[], signal: AbortSignal): Promise<ShellResult> {
-    const controller = this.ctx.get("terminalController") as TerminalController | undefined;
+    const controller = getTerminalController(this.ctx);
     const sessionId = operation.sessionId ?? node.terminalSessionId;
     const owner = await this.agent(sessionId);
     if (!controller || !owner) throw new Error("交互执行需要绑定带原生终端服务的会话");
@@ -255,7 +222,7 @@ export class OperationService {
       if (config.terminalId && config.terminalId !== terminal?.id) throw new Error("该终端不属于此执行节点");
       if (terminal?.info.control === "user") throw new Error("此终端已由用户接管");
       if (!terminal || terminal.info.state !== "running") {
-        const policy = this.ctx.get("sandboxPolicy") as { resolve(request: { session: unknown }): ShellPolicy } | undefined;
+        const policy = getSandboxPolicy(this.ctx);
         terminal = await controller.openForAgent(owner, { title: node.title, cwd: operation.cwd, cols: 100, rows: 28,
           preferredShells: process.platform === "win32" ? ["pwsh.exe", "powershell.exe"] : ["bash", "sh"],
           policy: policy?.resolve({ session: owner.session }) ?? { mode: "danger-full-access", workspaceRoot: operation.cwd },
@@ -292,9 +259,7 @@ export class OperationService {
         return { exitCode: null, timedOut: true, stdout: output, stderr: "" };
       } finally { mark.dispose(); }
     };
-    const pending = (this.terminalQueue.get(key) ?? Promise.resolve()).then(execute, execute);
-    this.terminalQueue.set(key, pending);
-    return pending.finally(() => { if (this.terminalQueue.get(key) === pending) this.terminalQueue.delete(key); });
+    return this.terminalQueue.run(key, execute);
   }
 
   prefetch(run: FlowspaceRun, step: RunStep) {
@@ -320,7 +285,7 @@ export class OperationService {
         .map(edge => edge.source));
       return this.document().nodes.filter(node => ids.has(node.id) && isOperation(node.flowType));
     };
-    const schema = JSON.parse(JSON.stringify(z.toJSONSchema(operationRequest, { target: "draft-7" })));
+    const schema = zodToolSchema(operationRequest);
     this.ctx.tools.register({
       name: "provide_flow_parameters", description: "Supply parameters to a downstream FlowSpace operation before ending this turn.",
       parameters: schema, output: jsonToolOutput,
@@ -352,7 +317,7 @@ export class OperationService {
           state: "running", iteration: 0, sources: [], task: "", createdAt: Date.now() };
         const operation = await this.prepare(node, config, step, owner?.run, exec.signal, id, values);
         if (operation.missing.length) throw new Error(`需要补齐参数：${operation.missing.join(", ")}`);
-        if (await this.requiresApproval(config, operation)) await approveWrite(this.ctx, exec, "flow_execute", operation.preview);
+        if (await this.requiresApproval(config, operation)) await approveWrite(this.ctx, exec, "flow_execute", operation.preview, "执行操作未获批准");
         if (!lookup(id).some(candidate => candidate.id === node.id && JSON.stringify(candidate.config) === JSON.stringify(node.config)))
           throw new Error("执行节点定义或授权已变化");
         return this.perform(node, config, operation, exec.signal);

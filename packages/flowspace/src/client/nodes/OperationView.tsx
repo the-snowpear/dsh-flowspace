@@ -1,8 +1,8 @@
 import type { FlowNode } from "../../types.ts";
 import { t } from "../i18n.ts";
-import type { NodeViewProps } from "./index.ts";
+import { FlowShell } from "./FlowShell.tsx";
 import { HumanApproval, OperationCommand } from "./judge/HumanApproval.tsx";
-import { FlowShell } from "./judge/JudgeView.tsx";
+import type { NodeViewProps } from "./types.ts";
 
 export function OperationCompact({ node, run }: NodeViewProps) {
   const step = run?.steps.findLast(step => step.nodeId === node.id);

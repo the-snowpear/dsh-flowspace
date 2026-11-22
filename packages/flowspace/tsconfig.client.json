@@ -6,16 +6,22 @@
     "src/client/**/*.tsx",
     "src/types.ts",
     "src/core/board.ts",
+    "src/core/boxes.ts",
     "src/core/budget.ts",
-    "src/core/content.ts",
-    "src/core/fanout.ts",
-    "src/core/generation.ts",
     "src/core/connect.ts",
     "src/core/containers.ts",
+    "src/core/content.ts",
     "src/core/document.ts",
-    "src/core/nodeFields.ts",
+    "src/core/fanout.ts",
+    "src/core/generation.ts",
+    "src/core/geometry.ts",
     "src/core/graph.ts",
+    "src/core/i18n.ts",
+    "src/core/laneIds.ts",
+    "src/core/nodeFields.ts",
     "src/core/nodes/**/*.ts",
-    "src/core/team.ts"
+    "src/core/team.ts",
+    "src/core/templates.ts",
+    "src/core/utils.ts"
   ]
 }

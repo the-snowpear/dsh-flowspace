@@ -1,6 +1,3 @@
-import type { FC } from "react";
-import type { FlowNode, FlowspaceDocument, FlowspaceRun, FlowspaceSnapshot } from "../../types.ts";
-import type { CanvasBridge } from "../bridge.ts";
 import { judges } from "../../core/nodes/judge/index.ts";
 import { fanout, mergeSort } from "../../core/nodes/fanout.ts";
 import { dataDescriptors } from "../../core/nodes/data/descriptors.ts";
@@ -12,16 +9,10 @@ import { gitExec, terminalExec } from "../../core/nodes/operations.ts";
 import { humanNodes, noticeNode, triggerNode } from "../../core/nodes/interactions.ts";
 import { randomNode } from "../../core/nodes/play.ts";
 import { HumanChoiceFull, HumanCompact, HumanFull, NoticeFull, TriggerCompact, TriggerFull } from "./InteractionViews.tsx";
+import type { NodeView, NodeViewProps } from "./types.ts";
 
-export { FlowCountdown } from "./judge/HumanApproval.tsx";
-export interface NodeViewProps {
-  node: FlowNode;
-  run?: FlowspaceRun;
-  doc: FlowspaceDocument;
-  snapshot: FlowspaceSnapshot | null;
-  bridge: CanvasBridge;
-}
-type NodeView = { Compact: FC<NodeViewProps>; Full: FC<NodeViewProps> };
+export { FlowCountdown } from "./FlowCountdown.tsx";
+export type { NodeView, NodeViewProps };
 const views = new Map<string, NodeView>([...judges, fanout, mergeSort].map(descriptor =>
   [descriptor.flowType, { Compact: JudgeCompact, Full: JudgeFull }]));
 for (const descriptor of dataDescriptors) views.set(descriptor.flowType, { Compact: DataCompact, Full: DataFull });

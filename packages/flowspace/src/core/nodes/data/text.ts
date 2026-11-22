@@ -1,31 +1,5 @@
 import type { JsonObject, JsonValue } from "../../../types.ts";
-
-interface Heading { line: number; level: number; title: string }
-
-/** Headings inside a fenced example belong to the example, not the document outline. */
-function markdown(text: string) {
-  const lines = text.split(/\r\n?|\n/);
-  const headings: Heading[] = [];
-  const blocks: { language: string; code: string }[] = [];
-  let fence: { marker: string; language: string; start: number } | undefined;
-  for (let line = 0; line < lines.length; line++) {
-    const value = lines[line];
-    const marker = /^ {0,3}(\x60{3,}|~{3,})(.*)$/.exec(value);
-    if (fence) {
-      if (marker && marker[1][0] === fence.marker[0] && marker[1].length >= fence.marker.length && !marker[2].trim()) {
-        blocks.push({ language: fence.language, code: lines.slice(fence.start, line).join("\n") });
-        fence = undefined;
-      }
-    } else if (marker) {
-      fence = { marker: marker[1], language: marker[2].trim().split(/\s+/)[0], start: line + 1 };
-    } else {
-      const heading = /^ {0,3}(#{1,6})(?:\s+(.+)|\s*)$/.exec(value);
-      if (heading) headings.push({ line, level: heading[1].length, title: (heading[2] ?? "").trim().replace(/\s+#+$/, "") });
-    }
-  }
-  if (fence) blocks.push({ language: fence.language, code: lines.slice(fence.start).join("\n") });
-  return { lines, headings, blocks };
-}
+import { parseMarkdownFences as markdown } from "../../utils.ts";
 
 function pieces(values: string[]): string[] {
   return values.map(value => value.trim()).filter(Boolean);

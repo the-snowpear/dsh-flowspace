@@ -6,6 +6,7 @@ import { snapshotWithContent } from "../../core/nodes/input.ts";
 import { randomConfig, seededIndex } from "../../core/nodes/play.ts";
 import type { NodeExecutor } from "../../core/nodes/types.ts";
 import type { ArenaResult, FlowspaceRun, RunReport, TeamModel } from "../../types.ts";
+import { streamLlmText } from "../llm.ts";
 
 declare module "@deepseek-ai/dsh-llm/types" {
   interface LlmRequestPurposeMap { "flowspace-run-report": true }
@@ -55,20 +56,19 @@ export async function buildReport(ctx: Context, run: FlowspaceRun, model: TeamMo
   const best = chosen && run.graph.nodes.find(node => node.generatedBy === chosen.batch.fanId && node.itemKey === chosen.lane.item.key);
   const bestNode = best?.title ?? run.graph.nodes.find(node =>
     node.id === run.steps.findLast(step => step.state === "completed" && step.sessionId)?.nodeId)?.title;
-  let summary = "";
-  for await (const chunk of ctx.llm.stream({
-    provider: model.provider as Parameters<Context["llm"]["stream"]>[0]["provider"],
-    model: model.model, purpose: "flowspace-run-report",
+  const { text: summary } = await streamLlmText(ctx.llm, {
+    provider: model.provider,
+    model: model.model,
+    purpose: "flowspace-run-report",
     system: "Summarize this completed FlowSpace run in three short sentences using the provided results.",
-    messages: [{ role: "user", content: [{ type: "text", text: JSON.stringify({ title: run.title, ...usage, bestNode,
+    userText: JSON.stringify({
+      title: run.title,
+      ...usage,
+      bestNode,
       steps: run.steps.slice(-40).map(step => ({ state: step.state, task: step.task.slice(0, 180), output: step.output?.slice(0, 480) })),
       artifacts: run.deliverables?.map(artifact => artifact.path),
-    }) }] }],
-  })) {
-    if (chunk.type === "text-delta") summary += chunk.text;
-    if (chunk.type === "finish" && (chunk.reason.kind === "error" || chunk.reason.kind === "aborted"))
-      throw new Error(chunk.reason.failure.message);
-  }
+    }),
+  });
   if (!summary.trim()) throw new Error("模型没有返回战报");
   return { summary, ...usage, bestNode, artifacts: run.deliverables ?? [] };
 }

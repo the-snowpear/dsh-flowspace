@@ -1,8 +1,8 @@
 import { z } from "zod";
-import type { Context } from "@deepseek-ai/cordis";
 import type {} from "@deepseek-ai/dsh-llm";
 import type { AiConfig } from "../../../core/nodes/judge/index.ts";
 import type { RunStep, StepTelemetry } from "../../../types.ts";
+import { streamLlmText, type LlmStreamClient } from "../../llm.ts";
 
 declare module "@deepseek-ai/dsh-llm/types" {
   interface LlmRequestPurposeMap { "flowspace-judge": true }
@@ -12,7 +12,7 @@ const response = z.object({
   branch: z.string(), reason: z.string(), confidence: z.number().min(0).max(1),
 });
 
-export async function aiJudge(llm: Pick<Context["llm"], "stream">, config: AiConfig, input: string, signal: AbortSignal) {
+export async function aiJudge(llm: LlmStreamClient, config: AiConfig, input: string, signal: AbortSignal) {
   const { provider, model, branches } = config;
   if (!provider || !model) throw new Error("请先选择 AI 判断的供应商和模型");
   const rawOutputs: string[] = [];
@@ -22,24 +22,20 @@ export async function aiJudge(llm: Pick<Context["llm"], "stream">, config: AiCon
     '选择一个列出的分支。只返回 JSON {"branch":"分支 id","reason":"判断理由","confidence":0-1}。'].join("\n");
   for (let attempt = 0; attempt < 2; attempt++) {
     signal.throwIfAborted();
-    let raw = "";
     telemetry.stepCount++;
-    for await (const chunk of llm.stream({
-      provider, model, signal, purpose: "flowspace-judge",
+    const res = await streamLlmText(llm, {
+      provider,
+      model,
+      signal,
+      purpose: "flowspace-judge",
       system: attempt ? system + "\n上次响应无法解析，请严格使用指定格式和分支。" : system,
-      messages: [{ role: "user", content: [{ type: "text", text: input }] }],
-    })) {
-      if (chunk.type === "text-delta") raw += chunk.text;
-      if (chunk.type === "usage") {
-        telemetry.inputTokens += chunk.usage.inputTokens + (chunk.usage.cacheReadTokens ?? 0) + (chunk.usage.cacheWriteTokens ?? 0);
-        telemetry.outputTokens += chunk.usage.outputTokens;
-      }
-      if (chunk.type === "finish" && (chunk.reason.kind === "error" || chunk.reason.kind === "aborted"))
-        throw new Error(chunk.reason.failure.message);
-    }
-    rawOutputs.push(raw);
+      userText: input,
+    });
+    telemetry.inputTokens += res.inputTokens;
+    telemetry.outputTokens += res.outputTokens;
+    rawOutputs.push(res.text);
     let parsed: unknown;
-    try { parsed = JSON.parse(raw); } catch { continue; }
+    try { parsed = JSON.parse(res.text); } catch { continue; }
     const result = response.safeParse(parsed);
     if (!result.success || !branches.some((b) => b.id === result.data.branch)) continue;
     const { branch, confidence, reason } = result.data;

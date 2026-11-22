@@ -8,17 +8,12 @@ import type { FlowNode, TeamMemberView, TeamModel, TeamReference, TeamRuntimeBri
 import type { flowspaceDomain, TeamSessionRecord } from "./storage.ts";
 import type { DraftRoster, TeamAssets } from "./teamAssets.ts";
 import { isTeamNode, staffedIds } from "../core/team.ts";
+import { canonicalJson as stableJson } from "../core/utils.ts";
+import { KeyedSerialQueue } from "./serialQueue.ts";
 import { planDelegation, registerTeamDelegate, rosterSlots, slotOf, teamAgentOptions } from "./teamDelegate.ts";
 
 type Board = { enabled: boolean; tasks: TeamTaskView[] };
 const delegationTools = ["subagent", "subagent_fork", "workflow"];
-
-/** Key-order independent JSON, so stored and rebuilt rosters compare equal. */
-function stableJson(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) => item && typeof item === "object" && !Array.isArray(item)
-    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b)))
-    : item);
-}
 
 /** A canvas team without a lead model keeps the session's default model. */
 function leadDefault(agent: Agent): TeamModel {
@@ -40,11 +35,11 @@ export class TeamRuntime {
   private activations = new Map<string, string>();
   private refreshes = new Map<string, Promise<void>>();
   private waits = new Map<string, Promise<void>>();
-  private delegateTails = new Map<string, Promise<unknown>>();
+  private delegateQueue = new KeyedSerialQueue();
   private userTurns = new Map<string, number>();
   private epochs = new Set<string>();
   private pendingSaves = new Map<string, Promise<void>>();
-  private syncs = new Map<string, Promise<void>>();
+  private syncQueue = new KeyedSerialQueue();
 
   constructor(
     private ctx: Context,
@@ -158,8 +153,7 @@ export class TeamRuntime {
   sync(nodeId: string): Promise<void> {
     const sessionId = this.nodes().find((node) => node.id === nodeId)?.sessionId;
     if (!sessionId) return Promise.resolve();
-    const previous = this.syncs.get(sessionId) ?? Promise.resolve();
-    const next = previous.catch(() => {}).then(async () => {
+    return this.syncQueue.run(sessionId, async () => {
       const wanted = () => {
         const nodes = this.nodes();
         const node = nodes.find((candidate) => candidate.id === nodeId && candidate.sessionId === sessionId);
@@ -176,11 +170,6 @@ export class TeamRuntime {
         if (later && !later.team && this.records.has(sessionId)) await this.release(sessionId);
       }
     });
-    this.syncs.set(sessionId, next);
-    void next.finally(() => {
-      if (this.syncs.get(sessionId) === next) this.syncs.delete(sessionId);
-    }).catch(() => {});
-    return next;
   }
 
   private async release(sessionId: string) {
@@ -275,8 +264,7 @@ export class TeamRuntime {
   }
 
   delegate(parent: Agent, args: unknown, signal: AbortSignal) {
-    const previous = this.delegateTails.get(parent.id) ?? Promise.resolve();
-    const next = previous.catch(() => {}).then(async () => {
+    return this.delegateQueue.run(parent.id, async () => {
       const record = this.records.get(parent.id);
       if (!record) throw new Error("Only a FlowSpace team lead can delegate to a slot.");
       const rows = await this.ctx.subagents.listDescendants(parent.id, signal);
@@ -307,11 +295,6 @@ export class TeamRuntime {
         throw error;
       }
     });
-    this.delegateTails.set(parent.id, next);
-    void next.finally(() => {
-      if (this.delegateTails.get(parent.id) === next) this.delegateTails.delete(parent.id);
-    }).catch(() => {});
-    return next;
   }
 
   waitForIdle(sessionId: string): Promise<void> {

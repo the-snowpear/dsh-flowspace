@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { createStaticResolver, previewLines } from "../../core/nodes/data/preview.ts";
 import { dataMode } from "../../core/nodes/data/descriptors.ts";
 import type { DataPreview, FlowEdge, FlowNode, FlowspaceDocument, FlowspaceSnapshot } from "../../types.ts";
@@ -6,13 +6,11 @@ import type { CanvasBridge } from "../bridge.ts";
 import { t } from "../i18n.ts";
 import { dataCardHeight } from "../geometry.ts";
 import { runtimeIndex } from "../sceneModel.ts";
-import type { NodeViewProps } from "./index.ts";
-import { FlowShell } from "./judge/JudgeView.tsx";
+import { FlowShell } from "./FlowShell.tsx";
+import { CanvasPreviewContext, useFlowBodyHeight } from "./previewContext.ts";
+import type { NodeViewProps } from "./types.ts";
 
-export function useFlowBodyHeight(id: string, height: number) {
-  const resize = useContext(CanvasPreviewContext)?.size;
-  useLayoutEffect(() => { resize?.(id, height); }, [id, height, resize]);
-}
+export { CanvasPreviewContext, useFlowBodyHeight };
 
 type Reply = { key: string; data: DataPreview };
 type Job = { key: string; explicit: boolean; controller: AbortController };
@@ -95,7 +93,6 @@ export function useCanvasPreviews(doc: FlowspaceDocument, snapshot: FlowspaceSna
   }), [resolver, keyOf, request, revision, heights, size]);
 }
 
-export const CanvasPreviewContext = createContext<ReturnType<typeof useCanvasPreviews> | null>(null);
 function usePassive(id: string, key: string, enabled: boolean, request?: ReturnType<typeof useCanvasPreviews>["request"]) {
   useEffect(() => {
     if (!enabled || !request) return;

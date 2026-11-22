@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { tFor } from "../../../client/i18n.ts";
+import { tFor } from "../../i18n.ts";
 import type { NodeDescriptor } from "../types.ts";
 import { branchSchema, judgeBase, judgePorts, uniqueIds } from "./common.ts";
 

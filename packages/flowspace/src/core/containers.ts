@@ -2,6 +2,7 @@ import type {
   BoardCard, ContainerChange, ContainerEntry, ContainerPermission, FlowEdge, FlowNode, FlowspaceDocument,
 } from "../types.ts";
 import { findBoardCard, normalizeBoardColumns, pruneBoardReferences, referenceColumns, removeBoardCard } from "./board.ts";
+import { deepEqual as equal } from "./utils.ts";
 
 export const isContainer = (node: FlowNode | undefined) =>
   node?.kind === "board" || node?.kind === "note" || node?.kind === "file" || node?.flowType === "flowspace/variable";
@@ -53,8 +54,6 @@ export function writeCanvasEntry(node: FlowNode, itemId: string | undefined, ent
   });
   return true;
 }
-
-const equal = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);
 
 function mergeEntry(
   current: ContainerEntry | null, change: ContainerChange, history: boolean,

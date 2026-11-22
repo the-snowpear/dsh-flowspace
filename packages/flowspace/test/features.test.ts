@@ -15,7 +15,8 @@ import {
   sanitizeDocumentForWire,
   syncUntitledAgentTitles,
 } from "../src/core/document.ts";
-import { computeAutoLayout, launchPlan } from "../src/core/graph.ts";
+import { launchPlan } from "../src/core/graph.ts";
+import { computeAutoLayout } from "../src/client/canvasLayout.ts";
 import {
   capsuleStateOf,
   computeInputHubLayout,

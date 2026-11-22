@@ -1,8 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { ContextFormed, UserMessage } from "@deepseek-ai/dsh-llm";
 import { statSync } from "node:fs";
-import { open, readdir, readFile, realpath, stat } from "node:fs/promises";
-import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { Context, Service } from "@deepseek-ai/cordis";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import type { Domain } from "@deepseek-ai/dsh-storage-domain";
@@ -38,13 +37,21 @@ import { previewDataNode, resolveStaticFanout } from "./host/dataPreview.ts";
 import { DataFileWatch } from "./host/dataFileWatch.ts";
 import type { NodeDescriptor, NodeExecutor } from "./core/nodes/types.ts";
 import { isTeamNode, staffedIds } from "./core/team.ts";
+import { extractFileNodePaths } from "./core/utils.ts";
+import { MAX_INLINE_CONTEXT_BYTES } from "./host/content.ts";
+import {
+  formatTurnChangesSummary,
+  getTerminalController,
+  getWorkspaceChanges,
+  shortHash,
+} from "./host/dshServices.ts";
 import {
   computeFileNodeFingerprint,
   DshRuntime,
-  extractFileNodePaths,
   plainText,
 } from "./host/runtime.ts";
-import { HostGitService, isSubPath, sameFsPath } from "./host/git.ts";
+import { HostGitService, sameFsPath } from "./host/git.ts";
+import { WorkspaceFs } from "./host/workspaceFs.ts";
 import { registerFlowEmit } from "./host/flowEmit.ts";
 import { ContainerStore, registerContainerTools } from "./host/containers.ts";
 import { VariableStore } from "./host/variables.ts";
@@ -155,83 +162,6 @@ interface PreparedReferenceEntry {
   version: string;
 }
 
-interface HostWorkspaceChanges {
-  summary(
-    sessionId: SessionId,
-    seq: number,
-  ):
-    | {
-        turn: number;
-        cwd: string;
-        total: number;
-        added: number;
-        deleted: number;
-        files: {
-          path: string;
-          display: string;
-          added: number;
-          deleted: number;
-          binary?: true;
-          oversized?: true;
-        }[];
-      }
-    | undefined;
-  diff(
-    sessionId: SessionId,
-    seq: number,
-    index: number,
-    signal: AbortSignal,
-  ): Promise<
-    | {
-        kind: "text";
-        path: string;
-        display: string;
-        hunks: {
-          oldStart: number;
-          oldLines: number;
-          newStart: number;
-          newLines: number;
-          lines: string[];
-        }[];
-      }
-    | { kind: "binary" | "oversized"; path: string; display: string }
-    | undefined
-  >;
-}
-
-interface HostTerminalController {
-  list(
-    sessionId: SessionId,
-  ): {
-    id: string;
-    title: string;
-    cwd: string;
-    state: "running" | "exited" | "failed";
-    exitCode: number | null;
-    origin: "user" | "agent";
-  }[];
-  create(
-    agent: unknown,
-    req: { id: string; cols: number; rows: number },
-    signal: AbortSignal,
-  ): Promise<{
-    id: string;
-    title: string;
-    cwd: string;
-    state: "running" | "exited" | "failed";
-    exitCode: number | null;
-    origin: "user" | "agent";
-  }>;
-  readScreen(
-    agent: unknown,
-    id: string,
-    req: { offset: number; count: number; maxBytes: number },
-  ): Promise<{ text: string; totalLines: number; truncated: boolean }>;
-}
-
-const shortHash = (value: string): string =>
-  createHash("sha1").update(value).digest("hex").slice(0, 12);
-
 /** Persistent canvas and orchestration for ordinary DSH Sessions. @typert service flowspace */
 export class FlowspaceService extends TypertRemoteService {
   static inject = [
@@ -258,10 +188,10 @@ export class FlowspaceService extends TypertRemoteService {
     listeners: new Set<() => void>(),
     turnOutput: new Map<string, string>(),
     canvasSessions: new Set<string>(),
-    knownWorktrees: new Set<string>(),
     injectedSteps: new Set<string>(),
   };
   private domain!: Domain<typeof flowspaceDomain>;
+  private workspaceFs!: WorkspaceFs;
   private teamAssets!: TeamAssets;
   private teams!: TeamRuntime;
   private teamBriefs = new Map<string, string>();
@@ -336,8 +266,9 @@ export class FlowspaceService extends TypertRemoteService {
     validateTriggers(storedDoc);
     syncUntitledAgentTitles(storedDoc);
     this.state.doc = sanitizeDocumentForWire(storedDoc);
+    this.workspaceFs = new WorkspaceFs(this.ctx);
     for (const n of this.state.doc.nodes) {
-      if (n.worktreePath) this.state.knownWorktrees.add(resolve(n.worktreePath));
+      this.workspaceFs.trackWorktree(n.worktreePath);
     }
     this.state.runs = [...this.domain.table("runs").entries()]
       .map(([, r]) => structuredClone(r))
@@ -349,12 +280,7 @@ export class FlowspaceService extends TypertRemoteService {
       this.nodeExecutors,
       this.domain.table("content_spills"),
       () => this.state.doc.settings.listLimit,
-      async (path, cwd) => {
-        const { full } = await this.workspaceFile({ path, cwd });
-        const body = await readFile(full);
-        if (body.includes(0)) throw new Error(`二进制文件不能作为文本输入：${path}`);
-        return new TextDecoder().decode(body);
-      },
+      (path, cwd) => this.workspaceFs.readFullText(path, cwd),
     );
     const executors = judgeExecutors(this.ctx, this.runtime.contextText.bind(this.runtime));
     for (const descriptor of judges) this.registerNodeKind(descriptor, executors[descriptor.flowType]);
@@ -453,10 +379,10 @@ export class FlowspaceService extends TypertRemoteService {
       this.state.runs,
     );
     this.containers = new ContainerStore(this.ctx, this.domain.table("container_changes"),
-      () => this.state.doc, () => this.persist(), () => this.publish(), request => this.workspacePath(request));
+      () => this.state.doc, () => this.persist(), () => this.publish(), request => this.workspaceFs.workspacePath(request));
     await this.containers.recover();
     this.triggers = new TriggerService(this.ctx, this.domain.table("triggers"), this.scheduler, this.git,
-      () => this.state.doc, () => this.state.runs, () => this.publish(), request => this.workspacePath(request), () => [
+      () => this.state.doc, () => this.state.runs, () => this.publish(), request => this.workspaceFs.workspacePath(request), () => [
         ...this.containers.changes().map(change => ({ key: change.id, at: change.at, nodeId: change.nodeId,
           columnId: change.after?.kind === "board" ? change.after.columnId : undefined })),
         ...this.variables.list().flatMap(variable => variable.history.map(write => ({
@@ -497,15 +423,11 @@ export class FlowspaceService extends TypertRemoteService {
     await this.scheduler.recover().catch((e) =>
       this.ctx.logger.warn("FlowSpace run recovery warning: %s", e),
     );
-    this.dataFileWatch = new DataFileWatch(this.ctx.fs, async (path, cwd, signal) => {
-      const { base, full } = this.workspacePath({ path, cwd });
-      const physical = await realpath(full).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== "ENOENT") throw error;
-        return realpath(dirname(full));
-      });
-      if (!isSubPath(await realpath(base), physical)) throw new Error("文件路径超出当前工作区");
-      return this.ctx.fs.resolve(full, { signal });
-    }, ids => { void this.refreshDataFiles(ids).catch(error => this.ctx.logger.warn("FlowSpace 文件预览更新失败: %s", error)); });
+    this.dataFileWatch = new DataFileWatch(
+      this.ctx.fs,
+      (path, cwd, signal) => this.workspaceFs.checkedWatchTarget(path, cwd, signal),
+      ids => { void this.refreshDataFiles(ids).catch(error => this.ctx.logger.warn("FlowSpace 文件预览更新失败: %s", error)); },
+    );
     this.ctx.effect(() => () => this.dataFileWatch.dispose());
     await this.dataFileWatch.sync(this.state.doc);
     const fileIds = this.state.doc.nodes.filter(node => node.kind === "file").map(node => node.id);
@@ -868,7 +790,7 @@ export class FlowspaceService extends TypertRemoteService {
         const effectiveCwd =
           lastWorkdir?.data?.cwd ?? node.worktreePath ?? node.cwd;
         if (effectiveCwd) {
-          this.state.knownWorktrees.add(resolve(effectiveCwd));
+          this.workspaceFs.trackWorktree(effectiveCwd);
         }
         this.state.live.set(node.id, {
           nodeId: node.id,
@@ -942,11 +864,7 @@ export class FlowspaceService extends TypertRemoteService {
     sessionId: string,
     events: readonly SessionEvent[],
   ): SessionChangeTurn[] {
-    const wc = (
-      this.ctx as unknown as {
-        get(k: string): HostWorkspaceChanges | undefined;
-      }
-    ).get("workspaceChanges");
+    const wc = getWorkspaceChanges(this.ctx);
     if (!wc) return [];
     const byTurn = new Map<number, SessionChangeTurn>();
     for (const ev of events) {
@@ -1034,7 +952,7 @@ export class FlowspaceService extends TypertRemoteService {
 
     if (evAny.type === "working-directory/change" && evAny.data?.cwd) {
       const nextCwd = String(evAny.data.cwd);
-      this.state.knownWorktrees.add(resolve(nextCwd));
+      this.workspaceFs.trackWorktree(nextCwd);
       const old = this.state.live.get(node.id);
       this.state.live.set(node.id, {
         nodeId: node.id,
@@ -1078,11 +996,7 @@ export class FlowspaceService extends TypertRemoteService {
     }
 
     if (evAny.type === "workspace/changes") {
-      const wc = (
-        this.ctx as unknown as {
-          get(k: string): HostWorkspaceChanges | undefined;
-        }
-      ).get("workspaceChanges");
+      const wc = getWorkspaceChanges(this.ctx);
       const sum = wc?.summary(sessionId as SessionId, event.seq);
       if (sum) {
         const turnEntry: SessionChangeTurn = {
@@ -1126,11 +1040,7 @@ export class FlowspaceService extends TypertRemoteService {
           ) {
             chNode.changesSeq = event.seq;
             chNode.changesTurn = sum.turn;
-            chNode.text =
-              `Turn #${sum.turn} (${sum.total} files, +${sum.added} / -${sum.deleted})\n` +
-              sum.files
-                .map((f) => `- ${f.display} (+${f.added} / -${f.deleted})`)
-                .join("\n");
+            chNode.text = formatTurnChangesSummary(sum);
             docMutated = true;
           }
         }
@@ -1470,7 +1380,7 @@ export class FlowspaceService extends TypertRemoteService {
         throw new Error("团队主管会话必须由对应的画布团队节点创建");
       if (old) node.lastSubmittedTask = old.lastSubmittedTask;
       syncUntitledAgentNode(node);
-      if (node.worktreePath) this.state.knownWorktrees.add(resolve(node.worktreePath));
+      if (node.worktreePath) this.workspaceFs.trackWorktree(node.worktreePath);
       if (node.kind === "agent" && node.sessionId && old && old.planMode !== node.planMode) {
         void this.runtime.ensure(node).catch(() => {});
       }
@@ -1892,7 +1802,7 @@ export class FlowspaceService extends TypertRemoteService {
       ...(seq !== undefined ? { seq } : {}),
       byteLength,
       ...(itemCount !== undefined ? { itemCount, originalCount: structured?.originalCount } : {}),
-      willSpill: byteLength > 65536,
+      willSpill: byteLength > MAX_INLINE_CONTEXT_BYTES,
       freshness,
       summary,
       content,
@@ -1920,7 +1830,7 @@ export class FlowspaceService extends TypertRemoteService {
       node.branch = request.branch ?? node.branch;
       node.worktreePath = request.worktreePath ?? node.worktreePath;
       if (node.worktreePath) {
-        this.state.knownWorktrees.add(resolve(node.worktreePath));
+        this.workspaceFs.trackWorktree(node.worktreePath);
       }
       if (request.sessionId) {
         if (node.teamRef || this.teams.isLead(request.sessionId))
@@ -2013,7 +1923,7 @@ export class FlowspaceService extends TypertRemoteService {
         if (status?.topLevel && sameFsPath(status.topLevel, w.path)) {
           for (const wt of status.worktrees) {
             if (wt.path && !wt.isMain) {
-              this.state.knownWorktrees.add(resolve(wt.path));
+              this.workspaceFs.trackWorktree(wt.path);
             }
           }
         }
@@ -2039,7 +1949,7 @@ export class FlowspaceService extends TypertRemoteService {
     if (status.topLevel && sameFsPath(status.topLevel, base)) {
       for (const wt of status.worktrees) {
         if (wt.path && !wt.isMain) {
-          this.state.knownWorktrees.add(resolve(wt.path));
+          this.workspaceFs.trackWorktree(wt.path);
         }
       }
     }
@@ -2059,7 +1969,7 @@ export class FlowspaceService extends TypertRemoteService {
     if (status.topLevel && sameFsPath(status.topLevel, base)) {
       for (const wt of status.worktrees) {
         if (wt.path && !wt.isMain) {
-          this.state.knownWorktrees.add(resolve(wt.path));
+          this.workspaceFs.trackWorktree(wt.path);
         }
       }
     }
@@ -2083,11 +1993,7 @@ export class FlowspaceService extends TypertRemoteService {
   async sessionChangeDiff(
     request: SessionChangeDiffRequest,
   ): Promise<SessionFileDiffView> {
-    const wc = (
-      this.ctx as unknown as {
-        get(k: string): HostWorkspaceChanges | undefined;
-      }
-    ).get("workspaceChanges");
+    const wc = getWorkspaceChanges(this.ctx);
     if (!wc) {
       throw new Error("当前 Host 未挂载 workspace-changes 服务");
     }
@@ -2161,11 +2067,7 @@ export class FlowspaceService extends TypertRemoteService {
 
   @Remote
   sessionTerminals(request: SessionTerminalsRequest): SessionTerminalBrief[] {
-    const tc = (
-      this.ctx as unknown as {
-        get(k: string): HostTerminalController | undefined;
-      }
-    ).get("terminalController");
+    const tc = getTerminalController(this.ctx);
     if (!tc || !request.sessionId) return [];
     return tc.list(request.sessionId as SessionId).map((t) => ({
       id: t.id,
@@ -2182,11 +2084,7 @@ export class FlowspaceService extends TypertRemoteService {
   async openSessionTerminal(
     request: SessionTerminalsRequest,
   ): Promise<SessionTerminalBrief> {
-    const tc = (
-      this.ctx as unknown as {
-        get(k: string): HostTerminalController | undefined;
-      }
-    ).get("terminalController");
+    const tc = getTerminalController(this.ctx);
     if (!tc) throw new Error("当前环境未启用 terminalController");
     const resolved = await this.ctx.sessionController.resolveAgent(
       request.sessionId as SessionId,
@@ -2212,11 +2110,7 @@ export class FlowspaceService extends TypertRemoteService {
   async readTerminalScreen(
     request: TerminalScreenReadRequest,
   ): Promise<TerminalScreenSnapshot> {
-    const tc = (
-      this.ctx as unknown as {
-        get(k: string): HostTerminalController | undefined;
-      }
-    ).get("terminalController");
+    const tc = getTerminalController(this.ctx);
     if (!tc) throw new Error("当前环境未启用 terminalController");
     const sid = request.sessionId as SessionId;
     const list = tc.list(sid);
@@ -2240,7 +2134,7 @@ export class FlowspaceService extends TypertRemoteService {
     const page = await tc.readScreen(resolved.agent, chosen.id, {
       offset: 0,
       count: Math.min(400, Math.max(20, request.lines ?? 140)),
-      maxBytes: 65536,
+      maxBytes: MAX_INLINE_CONTEXT_BYTES,
     });
     return {
       sessionId: request.sessionId,
@@ -2254,124 +2148,18 @@ export class FlowspaceService extends TypertRemoteService {
   }
 
   @Remote
-  async workspaceFiles(request: WorkspaceFilesRequest): Promise<string[]> {
-    const base = this.resolveWorkspaceRoot(request.cwd);
-    const out: string[] = [];
-    const skip = new Set([
-      "node_modules",
-      ".git",
-      ".local",
-      ".backups",
-      "dist",
-      "lib",
-      ".next",
-      "coverage",
-    ]);
-    const walk = async (dir: string, depth: number): Promise<void> => {
-      if (depth > 3 || out.length >= 80) return;
-      let entries;
-      try {
-        entries = await readdir(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries) {
-        if (out.length >= 80) break;
-        if (skip.has(entry.name)) continue;
-        const full = resolve(dir, entry.name);
-        if (entry.isDirectory()) await walk(full, depth + 1);
-        else if (entry.isFile())
-          out.push(relative(base, full).replaceAll("\\", "/"));
-      }
-    };
-    await walk(base, 0);
-    return out;
-  }
-
-  private workspacePath(request: FilePreviewRequest) {
-    const base = this.resolveWorkspaceRoot(request.cwd);
-    const raw = request.path.trim();
-    if (!raw) throw new Error("未指定文件路径");
-    const full = resolve(base, raw);
-    const rel = relative(base, full);
-    if (rel.startsWith("..") || isAbsolute(rel))
-      throw new Error("文件路径超出当前工作区");
-    return { base, raw, full, rel };
-  }
-
-  private async workspaceFile(request: FilePreviewRequest) {
-    const { base, raw, full, rel } = this.workspacePath(request);
-    const info = await stat(full).catch(() => null);
-    if (!info || !info.isFile()) throw new Error(`文件不存在：${raw}`);
-    if (!isSubPath(await realpath(base), await realpath(full))) throw new Error("文件路径超出当前工作区");
-    return { full, rel, info, raw };
+  workspaceFiles(request: WorkspaceFilesRequest): Promise<string[]> {
+    return this.workspaceFs.listFiles(request);
   }
 
   /** Bounded viewer. A transform reads the complete selected text and spills its frozen input. */
   @Remote
-  async readWorkspaceFile(request: FilePreviewRequest): Promise<WorkspaceFilePreview> {
-    const { full, rel, info, raw } = await this.workspaceFile(request);
-    const maxReadBytes = 65536;
-    const maxChars = 24000;
-    const toRead = Math.min(info.size, maxReadBytes);
-    if (toRead === 0) {
-      return {
-        path: rel.replaceAll("\\", "/"),
-        content: "",
-        truncated: false,
-      };
-    }
-
-    const fh = await open(full, "r");
-    try {
-      const buf = Buffer.allocUnsafe(toRead);
-      const { bytesRead } = await fh.read(buf, 0, toRead, 0);
-      const slice = buf.subarray(0, bytesRead);
-      if (slice.includes(0)) {
-        throw new Error(`二进制文件不支持文本预览：${raw}`);
-      }
-      const decoded = new TextDecoder("utf-8", { fatal: false }).decode(slice);
-      const truncated = bytesRead < info.size || decoded.length > maxChars;
-      return {
-        path: rel.replaceAll("\\", "/"),
-        content: decoded.length > maxChars ? decoded.slice(0, maxChars) : decoded,
-        truncated,
-      };
-    } finally {
-      await fh.close();
-    }
+  readWorkspaceFile(request: FilePreviewRequest): Promise<WorkspaceFilePreview> {
+    return this.workspaceFs.readBoundedText(request);
   }
 
-  /**
-   * Confine `cwd` strictly to registered DSH workspaces, `<repo>-worktrees/*` managed directories,
-   * or verified Git worktrees discovered from those workspaces (no arbitrary `../*` sibling folders).
-   */
   public resolveWorkspaceRoot(cwd?: string): string {
-    const list = this.ctx.workspaceRegistry.list();
-    if (cwd) {
-      const candidate = resolve(cwd);
-      const inRegisteredWorkspace = list.some((w) =>
-        isSubPath(w.path, candidate),
-      );
-      const inManagedWorktreesDir = list.some((w) =>
-        isSubPath(
-          resolve(w.path, "..", `${basename(w.path)}-worktrees`),
-          candidate,
-        ),
-      );
-      const inVerifiedWorktree = [...this.state.knownWorktrees].some((wt) =>
-        isSubPath(wt, candidate),
-      );
-      if (
-        inRegisteredWorkspace ||
-        inManagedWorktreesDir ||
-        inVerifiedWorktree ||
-        isSubPath(resolve(process.cwd()), candidate)
-      ) {
-        return candidate;
-      }
-    }
-    return resolve(list[0]?.path ?? process.cwd());
+    return this.workspaceFs.resolveWorkspaceRoot(cwd);
   }
 
   @Remote

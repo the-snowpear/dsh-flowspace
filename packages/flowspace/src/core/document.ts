@@ -5,7 +5,7 @@ import type {
   FlowspaceDocument,
 } from "../types.ts";
 import { defaultBoardWithExamples, findBoardCard, formatBoardMarkdown, normalizeBoardColumns } from "./board.ts";
-import { tFor, type Locale } from "../client/i18n.ts";
+import { tFor, type Locale } from "./i18n.ts";
 import { DEFAULT_FLOW_SIZE, descriptorOf, sizeOf } from "./nodes/registry.ts";
 
 export function workflowNodes(document: FlowspaceDocument): FlowNode[] {

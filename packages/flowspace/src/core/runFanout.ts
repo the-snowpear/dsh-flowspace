@@ -8,7 +8,7 @@ import { fanoutPair, laneTitle, reconcileFanout } from "./fanout.ts";
 import { stampGeneratedBatch } from "./generation.ts";
 import { ancestorsOf } from "./graph.ts";
 import { snapshotWithContent } from "./nodes/input.ts";
-import type { RuntimeAdapter, SchedulerStore } from "./scheduler.ts";
+import type { RuntimeAdapter, SchedulerStore } from "./schedulerTypes.ts";
 
 const active = (step: RunStep) => ["queued", "running", "settling", "awaiting"].includes(step.state);
 const pending = (token: FlowToken) => !token.consumed && !token.dismissed;

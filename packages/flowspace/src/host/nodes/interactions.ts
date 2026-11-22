@@ -8,6 +8,8 @@ import type { NodeExecutor } from "../../core/nodes/types.ts";
 import type { ContextSnapshot, FlowNode, FlowNotice, FlowspaceDocument, FlowspaceRun, HumanField, JsonObject, TriggerStatus } from "../../types.ts";
 import type { Scheduler } from "../../core/scheduler.ts";
 import type { HostGitService } from "../git.ts";
+import { streamLlmText } from "../llm.ts";
+import { SerialQueue } from "../serialQueue.ts";
 
 declare module "@deepseek-ai/dsh-llm/types" {
   interface LlmRequestPurposeMap { "flowspace-form-prefill": true }
@@ -24,15 +26,16 @@ export const humanExecutor = (ctx: Context): NodeExecutor => async (node, step, 
   let initial: JsonObject = node.flowType === "flowspace/human-review" ? { text: step.sources.at(-1)?.text ?? "" } : {};
   if (config.timeoutAction === "default") initial = checkAnswers(fields, JSON.parse(config.defaultAnswer));
   if (config.aiPrefill && config.provider && config.model) {
-    let raw = "";
     try {
-      for await (const chunk of ctx.llm.stream({
-        provider: config.provider, model: config.model, signal, purpose: "flowspace-form-prefill",
+      const res = await streamLlmText(ctx.llm, {
+        provider: config.provider,
+        model: config.model,
+        signal,
+        purpose: "flowspace-form-prefill",
         system: "Suggest form answers in a single JSON object keyed by field name.",
-        messages: [{ role: "user", content: [{ type: "text",
-          text: JSON.stringify({ question: config.question, fields, source: step.sources.at(-1)?.text }) }] }],
-      })) if (chunk.type === "text-delta") raw += chunk.text;
-      initial = checkAnswers(fields, JSON.parse(raw));
+        userText: JSON.stringify({ question: config.question, fields, source: step.sources.at(-1)?.text }),
+      });
+      initial = checkAnswers(fields, JSON.parse(res.text));
     } catch { signal.throwIfAborted(); }
   }
   return { awaiting: {
@@ -74,7 +77,7 @@ export function validateTriggers(document: FlowspaceDocument) {
 
 export class TriggerService {
   private startedAt = Date.now();
-  private serial = Promise.resolve();
+  private readonly serial: SerialQueue;
   private timer?: ReturnType<typeof setInterval>;
   private running = false;
   private readonly observedAtBoot = new Set<string>();
@@ -88,7 +91,9 @@ export class TriggerService {
     private readonly publish: () => void,
     private readonly path: (request: { cwd?: string; path: string }) => { base: string; full: string; rel: string },
     private readonly changes: () => { nodeId: string; columnId?: string; at: number; key: string }[],
-  ) {}
+  ) {
+    this.serial = new SerialQueue((error) => this.ctx.logger.warn("FlowSpace 触发器：%s", error));
+  }
 
   list() { return [...this.table.entries()].map(([, value]) => value); }
 
@@ -103,9 +108,7 @@ export class TriggerService {
   }
 
   private queue<T>(action: () => Promise<T>) {
-    const next = this.serial.then(action);
-    this.serial = next.then(() => undefined, error => this.ctx.logger.warn("FlowSpace 触发器：%s", error));
-    return next;
+    return this.serial.run(action);
   }
 
   launch(id: string, values: JsonObject) {

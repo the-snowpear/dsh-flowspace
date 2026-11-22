@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
@@ -21,7 +20,7 @@ import type {
   FlowNode,
   RunStep,
 } from "../types.ts";
-import type { RuntimeAdapter } from "../core/scheduler.ts";
+import type { RuntimeAdapter } from "../core/schedulerTypes.ts";
 import type { NodeExecutor } from "../core/nodes/types.ts";
 import { boardContent, resolveBoardReference } from "../core/board.ts";
 import { DEFAULT_LIST_LIMIT, selectedFileContent, textOfContent } from "../core/content.ts";
@@ -33,55 +32,22 @@ import {
   syncUntitledAgentNode,
   uid,
 } from "../core/document.ts";
+import { extractFileNodePaths } from "../core/utils.ts";
+import {
+  formatTurnChangesSummary,
+  getPlanMode,
+  getSpillStore,
+  getTerminalController,
+  getWorkingDirectory,
+  getWorkspaceChanges,
+  resolveAgentOptional,
+  shortHash,
+} from "./dshServices.ts";
 import { sameFsPath } from "./git.ts";
 import type { TeamRuntime } from "./teamRuntime.ts";
 import { ContentSpills, MAX_INLINE_CONTEXT_BYTES, type ContentSpillTable } from "./content.ts";
 
-interface OptionalWorkingDirectoryService {
-  set(agent: unknown, path: string, signal?: AbortSignal): Promise<string>;
-}
-interface OptionalWorkspaceChangesService {
-  summary(
-    sessionId: SessionId,
-    seq: number,
-  ):
-    | {
-        turn: number;
-        cwd: string;
-        total: number;
-        added: number;
-        deleted: number;
-        files: {
-          path: string;
-          display: string;
-          added: number;
-          deleted: number;
-          binary?: true;
-          oversized?: true;
-        }[];
-      }
-    | undefined;
-}
-interface OptionalTerminalControllerService {
-  list(
-    sessionId: SessionId,
-  ): {
-    id: string;
-    title: string;
-    cwd: string;
-    state: "running" | "exited" | "failed";
-    exitCode: number | null;
-    origin: "user" | "agent";
-  }[];
-  readScreen(
-    agent: unknown,
-    id: string,
-    req: { offset: number; count: number; maxBytes: number },
-  ): Promise<{ text: string; totalLines: number; truncated: boolean }>;
-}
-
-const shortHash = (value: string): string =>
-  createHash("sha1").update(value).digest("hex").slice(0, 12);
+export { extractFileNodePaths };
 
 const escapeXmlAttr = (value: string): string =>
   value
@@ -95,16 +61,6 @@ export const plainText = (blocks: readonly ContentBlock[]): string =>
     .filter((b) => b.type === "text")
     .map((b) => b.text)
     .join("\n");
-
-export function extractFileNodePaths(node: FlowNode): string[] {
-  return (
-    node.selectedItems?.length
-      ? node.selectedItems
-      : node.text.split(/\r?\n/)
-  )
-    .map((p) => p.trim())
-    .filter(Boolean);
-}
 
 /**
  * Deterministic `mtimeMs:size` fingerprint for referenced workspace files so
@@ -183,9 +139,7 @@ export class DshRuntime implements RuntimeAdapter {
   }
 
   isPlanModeActive(sessionId: string): boolean {
-    const pm = this.ctx.get("planMode") as
-      | { get?(agent: unknown): { active: boolean; pending?: boolean } }
-      | undefined;
+    const pm = getPlanMode(this.ctx);
     if (!pm?.get) return false;
     const liveAgent = this.ctx.agents.get(sessionId as SessionId);
     if (!liveAgent) return false;
@@ -213,20 +167,14 @@ export class DshRuntime implements RuntimeAdapter {
     const laneModel = node.generatedBy ? node.teamModel : undefined;
     if (!needsWorkdirSet && !hasPlanPreference && !laneModel) return;
 
-    const resolved = await this.ctx.sessionController
-      .resolveAgent(sessionId as SessionId)
-      .catch(() => null);
-    if (!resolved || "error" in resolved) return;
-    if (laneModel) resolved.agent.model.select(laneModel as Parameters<typeof resolved.agent.model.select>[0]);
+    const agent = await resolveAgentOptional(this.ctx, sessionId);
+    if (!agent) return;
+    if (laneModel) agent.model.select(laneModel as Parameters<typeof agent.model.select>[0]);
 
     if (needsWorkdirSet && targetDir) {
-      const wd = (
-        this.ctx as unknown as {
-          get(k: string): OptionalWorkingDirectoryService | undefined;
-        }
-      ).get("workingDirectory");
+      const wd = getWorkingDirectory(this.ctx);
       if (wd) {
-        await wd.set(resolved.agent, targetDir).catch((err) => {
+        await wd.set(agent, targetDir).catch((err) => {
           this.ctx.logger.warn(
             "FlowSpace worktree workingDirectory.set failed: %s",
             err,
@@ -236,11 +184,9 @@ export class DshRuntime implements RuntimeAdapter {
     }
 
     if (hasPlanPreference) {
-      const pm = this.ctx.get("planMode") as
-        | { set?(agent: unknown, active: boolean): unknown }
-        | undefined;
+      const pm = getPlanMode(this.ctx);
       try {
-        pm?.set?.(resolved.agent, Boolean(node.planMode));
+        pm?.set?.(agent, Boolean(node.planMode));
       } catch (err) {
         this.ctx.logger.warn("FlowSpace planMode.set failed: %s", err);
       }
@@ -359,19 +305,23 @@ export class DshRuntime implements RuntimeAdapter {
       const { source } = entry;
       let body = source.text;
       if (entry.spill) {
-        const spill = this.ctx.get("spillStore");
-        if (!spill) throw new Error("长引用需要 DSH spill 存储");
-        const saved = await spill.saveText({
-          owner: { sessionId: sessionId as SessionId },
-          source: {
-            kind: "session-reference",
-            sessionId: (source.sourceSessionId ?? sessionId) as SessionId,
-            label: source.title,
-          },
-          suggestedName: `flowspace-${source.id}.md`,
-          content: body,
-        });
-        body = `${body.slice(0, 2000)}\n\n完整内容：${saved.locator}\n${saved.retrievalHint}`;
+        if (this.spills) {
+          body = await this.spills.saveInlineContext(body, source, sessionId);
+        } else {
+          const spill = getSpillStore(this.ctx);
+          if (!spill) throw new Error("长引用需要 DSH spill 存储");
+          const saved = await spill.saveText({
+            owner: { sessionId: sessionId as SessionId },
+            source: {
+              kind: "session-reference",
+              sessionId: (source.sourceSessionId ?? sessionId) as SessionId,
+              label: source.title,
+            },
+            suggestedName: `flowspace-${source.id}.md`,
+            content: body,
+          });
+          body = `${body.slice(0, 2000)}\n\n完整内容：${saved.locator}\n${saved.retrievalHint}`;
+        }
       }
 
       const fromId = source.sourceSessionId ?? source.sourceNodeId;
@@ -767,22 +717,12 @@ export class DshRuntime implements RuntimeAdapter {
     if (node.kind === "changes") {
       let text = node.text;
       if (!text && node.changesSessionId && node.changesSeq !== undefined) {
-        const wc = (
-          this.ctx as unknown as {
-            get(k: string): OptionalWorkspaceChangesService | undefined;
-          }
-        ).get("workspaceChanges");
+        const wc = getWorkspaceChanges(this.ctx);
         const sum = wc?.summary(
           node.changesSessionId as SessionId,
           node.changesSeq,
         );
-        if (sum) {
-          text =
-            `Turn #${sum.turn} (${sum.total} files, +${sum.added} / -${sum.deleted})\n` +
-            sum.files
-              .map((f) => `- ${f.display} (+${f.added} / -${f.deleted})`)
-              .join("\n");
-        }
+        if (sum) text = formatTurnChangesSummary(sum);
       }
       return {
         id: uid(),
@@ -800,23 +740,17 @@ export class DshRuntime implements RuntimeAdapter {
     if (node.kind === "terminal") {
       let text = node.text;
       if (node.terminalSessionId) {
-        const tc = (
-          this.ctx as unknown as {
-            get(k: string): OptionalTerminalControllerService | undefined;
-          }
-        ).get("terminalController");
+        const tc = getTerminalController(this.ctx);
         const list = tc?.list(node.terminalSessionId as SessionId) ?? [];
         const term =
           (node.terminalId
             ? list.find((item) => item.id === node.terminalId)
             : undefined) ?? list[0];
         if (tc && term) {
-          const resolved = await this.ctx.sessionController
-            .resolveAgent(node.terminalSessionId as SessionId)
-            .catch(() => null);
-          if (resolved && !("error" in resolved)) {
+          const agent = await resolveAgentOptional(this.ctx, node.terminalSessionId);
+          if (agent) {
             const page = await tc
-              .readScreen(resolved.agent, term.id, {
+              .readScreen(agent, term.id, {
                 offset: 0,
                 count: 140,
                 maxBytes: 49152,
