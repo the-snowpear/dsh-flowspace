@@ -446,7 +446,9 @@
   color: var(--text-3);
   font: 500 11px/24px var(--font-ui);
 }
-.fs-root .fs-config-item > legend + * { clear: both; }
+.fs-root .fs-config-item > .fs-config-field,
+.fs-root .fs-config-item > .fs-config-body,
+.fs-root .fs-config-item > .button-row { clear: both; }
 .fs-root .fs-config-item .button-row { margin: 0; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
 .fs-root .fs-config-item .button-row :is(.button-quiet, .text-button) { min-height: 24px; padding: 0 8px; font-size: 12px; }
 .fs-root .fs-config-field.fs-config-bool { display: flex; align-items: center; justify-content: space-between; min-height: 32px; gap: 8px; }

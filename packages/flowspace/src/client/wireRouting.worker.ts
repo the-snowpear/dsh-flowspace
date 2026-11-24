@@ -1,10 +1,10 @@
-import { buildGuideRoute, RouteObstacles, type GuideBatch, type GuideReply, type GuideResults } from "./sceneWires.ts";
+import { buildRoutingResult, RouteObstacles, type RoutingBatchRequest, type RoutingBatchReply } from "./sceneWires.ts";
 
 const obstacles = new RouteObstacles();
 const BATCH_SIZE = 12;
 const continuation = new MessageChannel();
 let queued = false;
-let current: { batch: GuideBatch; offset: number } | undefined;
+let current: { batch: RoutingBatchRequest; offset: number } | undefined;
 
 function schedule() {
   if (!current || queued) return;
@@ -17,17 +17,20 @@ continuation.port1.onmessage = () => {
   if (!current) return;
   const { batch, offset } = current;
   current.offset += BATCH_SIZE;
-  const paths: GuideResults = batch.tasks.slice(offset, current.offset).map(task => [task.id, buildGuideRoute(task, obstacles)]);
+  const results = batch.tasks.slice(offset, current.offset).flatMap(task => {
+    try { return [buildRoutingResult(task, obstacles)]; }
+    catch { return []; }
+  });
   const done = current.offset >= batch.tasks.length;
-  const reply: GuideReply = { id: batch.id, paths, done };
+  const reply: RoutingBatchReply = { id: batch.id, results, done };
   self.postMessage(reply);
   if (done) current = undefined;
   schedule();
 };
 
-self.addEventListener("message", ({ data }: MessageEvent<GuideBatch>) => {
+self.addEventListener("message", ({ data }: MessageEvent<RoutingBatchRequest>) => {
   if (current) {
-    const superseded: GuideReply = { id: current.batch.id, paths: [], done: true };
+    const superseded: RoutingBatchReply = { id: current.batch.id, results: [], done: true };
     self.postMessage(superseded);
   }
   if (data.obstacles) obstacles.apply(data.obstacles);

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   FlowEdge,
   FlowNode,
@@ -21,13 +21,16 @@ import {
   viewportBox,
   type GeometryEdit,
 } from "../sceneModel.ts";
-import { groupExchanges, SceneWires, type ExchangePair } from "../sceneWires.ts";
+import { edgeRouteTask, groupExchanges, SceneWires, type EdgeRouteTask, type ExchangePair } from "../sceneWires.ts";
+import { WireWorker } from "../wireWorker.ts";
 import { buildDerivedStructure } from "../structure.ts";
 import { nodeStatusOf } from "../SurfaceViews.tsx";
 import type { ResolvedCanvasPrefs, SelectionState } from "./canvasTypes.ts";
 import type { WireLayout } from "./ViewportCard.tsx";
+import type { CanvasInteractionStore } from "./interactionStore.ts";
 
 export interface UseCanvasSceneOptions {
+  interactionStore: CanvasInteractionStore;
   baseDoc: FlowspaceDocument;
   doc: FlowspaceDocument;
   graphDocument: FlowspaceDocument;
@@ -60,6 +63,7 @@ export interface UseCanvasSceneOptions {
 }
 
 export function useCanvasScene({
+  interactionStore,
   baseDoc,
   doc,
   graphDocument,
@@ -151,12 +155,13 @@ export function useCanvasScene({
 
   const previousExpanded = useRef(new Set<string>());
   const keepExpandedIds = useMemo(() => {
-    const ids = new Set<string>(selection.nodes);
+    const ids = new Set<string>(selection.nodes.filter(id => nodesById.get(id)?.expanded));
     if (editingNodeId) ids.add(editingNodeId);
+    const runtime = runtimeIndex(snapshot);
     for (const n of doc.nodes) {
-      if (n.kind !== "agent") continue;
+      if (n.kind !== "agent" && n.kind !== "flow") continue;
       const st = nodeStatusOf(snapshot, n.id);
-      if (st === "waiting" || st === "input") ids.add(n.id);
+      if (st === "waiting" || st === "input" || runtime.awaiting.has(n.id) || runtime.breakpoints.has(n.id)) ids.add(n.id);
     }
     if (
       ids.size === previousExpanded.current.size &&
@@ -166,7 +171,7 @@ export function useCanvasScene({
     }
     previousExpanded.current = ids;
     return ids;
-  }, [selection.nodes, editingNodeId, doc.nodes, snapshot]);
+  }, [selection.nodes, editingNodeId, doc.nodes, nodesById, snapshot]);
 
   const cardBoxes = useMemo(() => {
     const cache = new WeakMap<FlowNode, [Box, Box]>();
@@ -193,6 +198,11 @@ export function useCanvasScene({
   const sceneNodes = useMemo(
     () => visibleNodes.map((n) => ({ n, b: cardBoxes(n)[Number(lod)] })),
     [visibleNodes, cardBoxes, lod],
+  );
+  const minimapBoxes = useMemo(
+    () => baseDoc.nodes.filter((n) => passesNodeFilter(n) && !contentIndex.collapsed.get(n.id))
+      .map((n) => ({ n, b: cardBoxes(n)[Number(lod)] })),
+    [baseDoc.nodes, passesNodeFilter, contentIndex.collapsed, cardBoxes, lod],
   );
 
   const waitingAgentNodes = useMemo(
@@ -309,16 +319,15 @@ export function useCanvasScene({
     isNodeVisible,
   ]);
 
-  const routingBoxes = useMemo(
-    () => [
-      ...sceneNodes.map((item) => item.b),
-      ...visibleGroups
-        .filter((group) => group.collapsed)
-        .map((group) => expandedGroupBox(graphDocument, group)),
-      ...derivedStructure.cards.map((card) => card.box),
-    ],
-    [graphDocument, sceneNodes, visibleGroups, derivedStructure.cards],
-  );
+  const routingBoxesById = useMemo(() => {
+    const boxes = new Map(sceneNodes.map(({ n, b }) => [n.id, b]));
+    for (const group of visibleGroups) {
+      if (group.collapsed) boxes.set(group.id, expandedGroupBox(graphDocument, group));
+    }
+    for (const card of derivedStructure.cards) boxes.set(card.id, card.box);
+    return boxes;
+  }, [graphDocument, sceneNodes, visibleGroups, derivedStructure.cards]);
+  const routingBoxes = useMemo(() => [...routingBoxesById.values()], [routingBoxesById]);
 
   const wireViewport = useMemo(() => viewportBox(view, vpSize), [view, vpSize]);
 
@@ -427,19 +436,30 @@ export function useCanvasScene({
       scroll: typeof branchScroll;
       expanded: Set<string>;
       mode: typeof prefs.wireRouting;
+      deferred: boolean;
+      routeRefresh: number;
+      pending: EdgeRouteTask[];
       moves?: GeometryEdit["nodes"];
       byId: Map<string, WireLayout>;
       layouts: WireLayout[];
     }[]
   >([]);
+  const routeWorker = useMemo(() => new WireWorker(), []);
+  const [useWorker, setUseWorker] = useState(() => typeof Worker !== "undefined");
+  const [routeRefresh, setRouteRefresh] = useState(0);
+  const pendingEdgesRef = useRef<{ sig: string; tasks: EdgeRouteTask[] }>({ sig: "", tasks: [] });
+  const deferred = prefs.wireRouting === "avoid" && useWorker;
+  useEffect(() => () => routeWorker.dispose(), [routeWorker]);
 
-  const baseWireLayouts = useMemo(() => {
+  const layoutResult = useMemo(() => {
     const key = Number(lod);
     const previous = edgeLayouts.current[key];
     const reused =
       previous?.plan === wirePlan &&
       previous.expanded === keepExpandedIds &&
-      previous.mode === prefs.wireRouting;
+      previous.mode === prefs.wireRouting &&
+      previous.deferred === deferred &&
+      previous.routeRefresh === routeRefresh;
     const changed = new Set(wireScene.invalid);
     if (reused) {
       if (previous.scroll !== branchScroll) {
@@ -458,11 +478,12 @@ export function useCanvasScene({
           for (const edge of wirePlan.attached.get(id) ?? []) changed.add(edge);
         }
       }
-      if (!changed.size) return previous.layouts;
+      if (!changed.size) return { layouts: previous.layouts, pending: previous.pending };
     }
     const layoutsById = reused
       ? new Map(previous.byId)
       : new Map<string, WireLayout>();
+    const tasks = new Map(reused ? previous.pending.map(task => [task.id, task]) : []);
     for (const id of reused ? changed : wirePlan.edges.keys()) {
       const item = wirePlan.edges.get(id);
       if (!item) continue;
@@ -487,28 +508,36 @@ export function useCanvasScene({
         endpointIndex,
         edge.targetPort,
       );
-      const { geom, extent } = wireScene.cache.get(
-        edge,
-        from,
-        to,
-        prefs.wireRouting,
-      );
-      layoutsById.set(id, { edge, from, geom, extent, evState });
+      const task = deferred ? edgeRouteTask(edge, from, to, "avoid") : undefined;
+      const routed = task && wireScene.cache.lookupEdge(task);
+      if (task && !routed) tasks.set(id, task);
+      else tasks.delete(id);
+      const { geom, extent } = routed ?? wireScene.cache.get(edge, from, to, deferred ? "overlap" : prefs.wireRouting);
+      const old = previous?.byId.get(id);
+      layoutsById.set(id, old?.edge === edge && old.geom === geom && old.evState === evState
+        ? old : { edge, from, to, geom, extent, evState });
     }
     const layouts = Array.from(
       wirePlan.edges.keys(),
       (id) => layoutsById.get(id)!,
     );
+    const rawPending = [...tasks.values()];
+    const pendingSig = rawPending.map(task => `${task.id}=${task.key}`).join("|");
+    const pending = pendingSig === pendingEdgesRef.current.sig ? pendingEdgesRef.current.tasks : rawPending;
+    pendingEdgesRef.current = { sig: pendingSig, tasks: pending };
     edgeLayouts.current[key] = {
       plan: wirePlan,
       scroll: branchScroll,
       expanded: keepExpandedIds,
       mode: prefs.wireRouting,
+      deferred,
+      routeRefresh,
+      pending,
       moves: gesture?.nodes,
       byId: layoutsById,
       layouts,
     };
-    return layouts;
+    return { layouts, pending };
   }, [
     wirePlan,
     wireScene,
@@ -519,7 +548,47 @@ export function useCanvasScene({
     prefs.wireRouting,
     gesture?.nodes,
     branchScroll,
+    deferred,
+    routeRefresh,
   ]);
+  const { layouts: baseWireLayouts, pending } = layoutResult;
+  useEffect(() => {
+    if (!pending.length) return;
+    routeWorker.start(() => setUseWorker(false));
+    if (!routeWorker.available) {
+      setUseWorker(false);
+      return;
+    }
+    const { cache } = wireScene;
+    const revision = cache.obstacleRevision;
+    const keys = new Map(pending.map(task => [task.id, task.key]));
+    let changed = false;
+    let unsubscribe: (() => void) | undefined;
+    const publish = () => {
+      if (interactionStore.getDrag()) return;
+      unsubscribe?.();
+      setRouteRefresh(version => version + 1);
+    };
+    routeWorker.request({
+      boxes: routingBoxes,
+      tasks: pending,
+      receive(results, done) {
+        for (const result of results) {
+          if (result.kind !== "edge") continue;
+          const key = keys.get(result.id);
+          if (key && cache.acceptEdgeRoute(result.id, key, result, revision)) changed = true;
+        }
+        if (done && changed) {
+          if (interactionStore.getDrag()) unsubscribe = interactionStore.subscribeDrag(publish);
+          else publish();
+        }
+      },
+    });
+    return () => {
+      unsubscribe?.();
+      routeWorker.discard();
+    };
+  }, [routeWorker, wireScene, routingBoxes, pending, interactionStore]);
 
   const accessoryWires = useMemo(() => {
     const byId = new Map(doc.nodes.map((node) => [node.id, node]));
@@ -578,15 +647,18 @@ export function useCanvasScene({
     cardBoxes,
     visibleNodes,
     sceneNodes,
+    minimapBoxes,
     waitingAgentNodes,
     derivedStructure,
     childTree,
     exchanges,
     routingBoxes,
+    routingBoxesById,
     wireViewport,
     edgeVisualState,
     wireScene,
     baseWireLayouts,
+    attachedEdges: wirePlan.attached,
     accessoryWires,
   };
 }

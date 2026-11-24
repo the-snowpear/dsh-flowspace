@@ -71,17 +71,17 @@ export function WorkflowImportDialog({ request, bridge, onClose, onImported, ini
         {hasCode && <fieldset disabled={pending}>
           <legend>{t("flow_view_import_code")}</legend>
           <p className="inspector-description">{t("flow_view_code_sandbox")}</p>
-          <label className="fs-team-import-option"><input type="checkbox" checked={codeConfirmed}
+          <label className={`fs-team-import-option${codeConfirmed ? " is-checked" : ""}`}><input type="checkbox" checked={codeConfirmed}
             onChange={event => setCodeConfirmed(event.target.checked)} /><span>{t("flow_view_accept_code")}</span></label>
         </fieldset>}
-        {hasTriggers && <label className="fs-team-import-option"><input type="checkbox" checked={enableTriggers}
+        {hasTriggers && <label className={`fs-team-import-option${enableTriggers ? " is-checked" : ""}`}><input type="checkbox" checked={enableTriggers}
           onChange={event => setEnableTriggers(event.target.checked)} /><span>{t("flow_trig_enable_import")}</span></label>}
         {canCopy && (
           <fieldset disabled={pending}>
             <legend>{t("workflowImportAssets")}</legend>
-            <label className="fs-team-import-option"><Icon name="branch" /><span>{t("workflowReuseAssets")}</span><input type="radio" name="team-import" checked={!copyAssets}
+            <label className={`fs-team-import-option${!copyAssets ? " is-checked" : ""}`}><Icon name="branch" /><span>{t("workflowReuseAssets")}</span><input type="radio" name="team-import" checked={!copyAssets}
               onChange={() => setCopyAssets(false)} /></label>
-            <label className="fs-team-import-option"><Icon name="copy" /><span>{t("workflowCopyAssets")}</span><input type="radio" name="team-import" checked={copyAssets}
+            <label className={`fs-team-import-option${copyAssets ? " is-checked" : ""}`}><Icon name="copy" /><span>{t("workflowCopyAssets")}</span><input type="radio" name="team-import" checked={copyAssets}
               onChange={() => setCopyAssets(true)} /></label>
             <p className="fs-team-muted">{t("workflowAssetModeHint")}</p>
           </fieldset>

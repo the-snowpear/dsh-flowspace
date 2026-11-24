@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 const css = readFileSync(new URL("../src/client/styles/flow-ext.css", import.meta.url), "utf8")
@@ -20,6 +20,14 @@ test("flow extension motion durations come from timing tokens", () => {
 
 test("flow extension selectors and effects avoid expensive canvas operations", () => {
   assert.doesNotMatch(css, /(?:[\s;{]|^)(?:-webkit-)?(?:backdrop-)?filter\s*:|:has\s*\(/i);
+});
+
+test("FlowSpace styles avoid relational selectors", () => {
+  const directory = new URL("../src/client/styles/", import.meta.url);
+  for (const file of readdirSync(directory).filter(name => name.endsWith(".css"))) {
+    const styles = readFileSync(new URL(file, directory), "utf8");
+    assert.doesNotMatch(styles.replace(/\/\*[\s\S]*?\*\//g, ""), /:has\s*\(/i, file);
+  }
 });
 
 test("flow extension keyframes have the fsx namespace", () => {

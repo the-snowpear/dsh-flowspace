@@ -130,7 +130,7 @@ function ArrayField({ name, schema, items, change, dataType }: { name: string; s
       {item.type === "object" ? <Fields schema={item} data={value as JsonObject} dataType={dataType}
         change={v => change(items.map((old, i) => i === index ? v : old))} />
         : dataType === "flowspace/template" && name === "inputs"
-          ? <input className="text-field fs-data-mono" aria-label={t("flow_data_field_inputs")} value={String(value ?? "")}
+          ? <input className="text-field fs-data-mono fs-config-body" aria-label={t("flow_data_field_inputs")} value={String(value ?? "")}
               onChange={event => change(items.map((old, i) => i === index ? event.target.value : old))} />
         : <Field name={name} schema={item} value={value} dataType={dataType}
           change={v => change(items.map((old, i) => i === index ? v! : old))} />}
@@ -211,7 +211,7 @@ export function ConfigForm({ descriptor, value, bridge, connectedPorts, apply }:
 export function EdgeLogicForm({ edge, apply }: { edge: FlowEdge; apply: (logic: FlowEdge["logic"]) => void }) {
   const logic = edge.logic ?? {};
   return <fieldset className="fs-config-item"><legend>{label("edge_logic")}</legend>
-    <div className="switch-row"><span className="field-label">{label("negate")}</span>
+    <div className="switch-row fs-config-body"><span className="field-label">{label("negate")}</span>
       <button type="button" className="switch" role="switch" aria-label={label("negate")} aria-checked={!!logic.negate}
         onClick={() => apply({ ...logic, negate: !logic.negate })} /></div>
     {(["fromRound", "maxTimes", "delayMs"] as const).map(key =>

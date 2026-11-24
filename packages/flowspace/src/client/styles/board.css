@@ -537,7 +537,8 @@
 .fs-root textarea.board-field { min-height: 42px; max-height: 170px; field-sizing: content; resize: vertical; }
 .fs-root textarea.board-title-field { min-height: 28px; font-size: 15px; font-weight: 630; line-height: 1.35; }
 .fs-root .board-detail-properties { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
-.fs-root :is(.board-detail-properties, .board-column-form) label { display: grid; min-width: 0; gap: 4px; }
+.fs-root .board-detail-properties label,
+.fs-root .board-column-form label { display: grid; min-width: 0; gap: 4px; }
 .fs-root :is(.board-detail-properties, .board-column-form) label > span,
 .fs-root .board-field-label { color: var(--text-3); font-size: 11px; }
 .fs-root .board-detail-section { display: grid; gap: 5px; min-width: 0; padding-top: 8px; border-top: 1px solid var(--border); }
@@ -690,8 +691,18 @@
   .fs-root .board-card-actions { opacity: 1; pointer-events: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .fs-root :is(.board-drawer, .board-search-panel, .board-check > .ic) { animation: none; }
-  .fs-root :is(.board-task, .board-check, .board-progress-track > i, .board-card-actions) { transition: none; }
+  .fs-root .board-drawer,
+  .fs-root .board-search-panel,
+  .fs-root .board-check > .ic { animation: none; }
+  .fs-root .board-task,
+  .fs-root .board-check,
+  .fs-root .board-progress-track > i,
+  .fs-root .board-card-actions { transition: none; }
 }
-.fs-root[data-perf-tier="L1"] :is(.board-drawer, .board-search-panel, .board-check > .ic) { animation: none; }
-.fs-root[data-perf-tier="L1"] :is(.board-task, .board-check, .board-progress-track > i, .board-card-actions) { transition: none; }
+.fs-root[data-perf-tier="L1"] .board-drawer,
+.fs-root[data-perf-tier="L1"] .board-search-panel,
+.fs-root[data-perf-tier="L1"] .board-check > .ic { animation: none; }
+.fs-root[data-perf-tier="L1"] .board-task,
+.fs-root[data-perf-tier="L1"] .board-check,
+.fs-root[data-perf-tier="L1"] .board-progress-track > i,
+.fs-root[data-perf-tier="L1"] .board-card-actions { transition: none; }

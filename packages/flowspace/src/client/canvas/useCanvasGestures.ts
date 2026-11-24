@@ -10,6 +10,9 @@ import {
   type RefObject,
   type SetStateAction,
 } from "react";
+import { flushSync } from "react-dom";
+import { paintLayer, settleLayer } from "../cameraFrame.ts";
+import type { CanvasInteractionStore, DragDelta, DragSession } from "./interactionStore.ts";
 import type {
   FlowEdge,
   FlowNode,
@@ -37,7 +40,7 @@ import {
 import { t } from "../i18n.ts";
 import type { WireDropContext } from "../QuickCreateMenu.tsx";
 import { applyGeometry, padded, type GeometryEdit } from "../sceneModel.ts";
-import { pathExtent, pathTouches } from "../sceneWires.ts";
+import { pathExtent } from "../sceneWires.ts";
 import type { DraftAffiliation } from "../structure.ts";
 import type { StaffWire } from "../TeamCanvas.tsx";
 import type { MenuItem } from "../ui/ContextMenu.tsx";
@@ -53,7 +56,6 @@ import type {
   AnchorTarget,
   ConnectingState,
   EditDocFn,
-  MarqueeRect,
   ResolvedCanvasPrefs,
   SelectionState,
   StaffDragState,
@@ -62,6 +64,8 @@ import type { WireLayout } from "./ViewportCard.tsx";
 import { PAN_INERTIA_TAU_MS } from "./viewportMath.ts";
 
 export interface UseCanvasGesturesOptions {
+  interactionStore: CanvasInteractionStore;
+  attachedEdges: Map<string, Set<string>>;
   areaRef: RefObject<HTMLDivElement>;
   viewportRef: RefObject<HTMLDivElement>;
   doc: FlowspaceDocument;
@@ -88,7 +92,6 @@ export interface UseCanvasGesturesOptions {
   keepExpandedIds: Set<string>;
   routingBoxes: Box[];
   baseWireLayouts: WireLayout[];
-  paintArea: Box;
   prefs: ResolvedCanvasPrefs;
   lod: boolean;
   reducedMotion: boolean;
@@ -100,7 +103,6 @@ export interface UseCanvasGesturesOptions {
   setHoveredEdgeId: Dispatch<SetStateAction<string | null>>;
   setConnecting: Dispatch<SetStateAction<ConnectingState | null>>;
   connecting: ConnectingState | null;
-  setMarquee: Dispatch<SetStateAction<MarqueeRect | null>>;
   setSnapPreview: Dispatch<SetStateAction<"left" | "right" | "max" | null>>;
   setIsDragging: Dispatch<SetStateAction<boolean>>;
   setHistory: Dispatch<SetStateAction<FlowspaceDocument[]>>;
@@ -154,6 +156,8 @@ export interface UseCanvasGesturesOptions {
 }
 
 export function useCanvasGestures({
+  interactionStore,
+  attachedEdges,
   areaRef,
   viewportRef,
   doc,
@@ -171,7 +175,6 @@ export function useCanvasGestures({
   keepExpandedIds,
   routingBoxes,
   baseWireLayouts,
-  paintArea,
   prefs,
   lod,
   reducedMotion,
@@ -183,7 +186,6 @@ export function useCanvasGestures({
   setHoveredEdgeId,
   setConnecting,
   connecting,
-  setMarquee,
   setSnapPreview,
   setIsDragging,
   setHistory,
@@ -214,12 +216,39 @@ export function useCanvasGestures({
   } | null>(null);
   const hubCloseTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const hubProgressRef = useRef(0);
+  const activeTrackCancelRef = useRef<(() => void) | null>(null);
 
   const [staffDrag, setStaffDrag] = useState<StaffDragState | null>(null);
   const [staffTip, setStaffTip] = useState<{ x: number; y: number } | null>(
     null,
   );
   const [staffTarget, setStaffTarget] = useState<string>();
+
+  useEffect(() => () => {
+    activeTrackCancelRef.current?.();
+    activeTrackCancelRef.current = null;
+  }, []);
+
+  const nodeAtPoint = useCallback(
+    (worldPt: { x: number; y: number }) => {
+      const nodes = docRef.current.nodes;
+      for (let index = nodes.length - 1; index >= 0; index--) {
+        const node = nodes[index];
+        if (!isNodeVisible(node)) continue;
+        const box = nodeBox(node, lod, keepExpandedIds.has(node.id));
+        if (
+          worldPt.x >= box.x &&
+          worldPt.x <= box.x + box.w &&
+          worldPt.y >= box.y &&
+          worldPt.y <= box.y + box.h
+        ) {
+          return node;
+        }
+      }
+      return undefined;
+    },
+    [docRef, isNodeVisible, lod, keepExpandedIds],
+  );
 
   /* Pointer Tracking Utility */
   const trackPointer = useCallback(
@@ -229,8 +258,10 @@ export function useCanvasGestures({
       onEnd?: (ev: PointerEvent | KeyboardEvent, canceled: boolean) => void,
     ) => {
       startEvent.preventDefault();
+      activeTrackCancelRef.current?.();
       let pending: PointerEvent | undefined;
       let frame = 0;
+      let finished = false;
       let lastX = startEvent.clientX,
         lastY = startEvent.clientY;
       const pointerId = startEvent.pointerId;
@@ -249,14 +280,19 @@ export function useCanvasGestures({
       };
       const up = (ev: PointerEvent) => finish(ev, false);
       const cancel = (ev: PointerEvent) => finish(ev, true);
+      const blur = () => finish(new KeyboardEvent("keydown", { key: "Escape" }), true);
       const key = (ev: KeyboardEvent) => {
         if (ev.key === "Escape") {
           ev.preventDefault();
+          ev.stopImmediatePropagation();
           finish(ev, true);
         }
       };
       function finish(ev: PointerEvent | KeyboardEvent, canceled: boolean) {
+        if (finished) return;
         if ("pointerId" in ev && ev.pointerId !== pointerId) return;
+        finished = true;
+        if (activeTrackCancelRef.current === abort) activeTrackCancelRef.current = null;
         cancelAnimationFrame(frame);
         if (
           !canceled &&
@@ -270,12 +306,16 @@ export function useCanvasGestures({
         window.removeEventListener("pointerup", up);
         window.removeEventListener("pointercancel", cancel);
         window.removeEventListener("keydown", key, true);
+        window.removeEventListener("blur", blur);
         onEnd?.(ev, canceled);
       }
+      const abort = () => finish(new KeyboardEvent("keydown", { key: "Escape" }), true);
+      activeTrackCancelRef.current = abort;
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
       window.addEventListener("pointercancel", cancel);
       window.addEventListener("keydown", key, true);
+      window.addEventListener("blur", blur);
     },
     [],
   );
@@ -288,12 +328,8 @@ export function useCanvasGestures({
     [gestureRef, setGesture],
   );
 
-  const finishGeometry = useCallback(
-    (canceled: boolean, finalize?: (next: FlowspaceDocument) => void) => {
-      const patch = gestureRef.current;
-      gestureRef.current = null;
-      setGesture(null);
-      if (canceled || !patch) return;
+  const commitGeometry = useCallback(
+    (patch: GeometryEdit, finalize?: (next: FlowspaceDocument) => void) => {
       const previous = docRef.current;
       const next = applyGeometry(previous, patch);
       finalize?.(next);
@@ -301,8 +337,73 @@ export function useCanvasGestures({
       setFuture([]);
       commitEdit(next, 250);
     },
-    [gestureRef, setGesture, docRef, setHistory, setFuture, commitEdit],
+    [docRef, setHistory, setFuture, commitEdit],
   );
+
+  const finishGeometry = useCallback(
+    (canceled: boolean, finalize?: (next: FlowspaceDocument) => void) => {
+      const patch = gestureRef.current;
+      gestureRef.current = null;
+      setGesture(null);
+      if (!canceled && patch) commitGeometry(patch, finalize);
+    },
+    [gestureRef, setGesture, commitGeometry],
+  );
+
+  const trackMove = useCallback((
+    event: ReactPointerEvent,
+    mode: "node" | "group",
+    originals: readonly FlowNode[],
+    onEnd: (event: PointerEvent | KeyboardEvent, patch: GeometryEdit | null) => void,
+  ) => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const rect = viewport.getBoundingClientRect();
+    const origin = toWorld(docRef.current.viewport, rect, event.clientX, event.clientY);
+    const affectedEdgeIds = new Set<string>();
+    for (const node of originals) {
+      for (const id of attachedEdges.get(node.id) ?? []) affectedEdgeIds.add(id);
+    }
+    let delta: DragDelta | undefined;
+    const movingElements = new Set<HTMLElement>();
+    trackPointer(event, pointer => {
+      const point = toWorld(docRef.current.viewport, rect, pointer.clientX, pointer.clientY);
+      const dx = point.x - origin.x;
+      const dy = point.y - origin.y;
+      if (!delta && Math.hypot(dx, dy) < 3) return;
+      delta = { dx, dy };
+      const deltas = new Map<string, DragDelta>();
+      const transform = `translate3d(${dx}px, ${dy}px, 0)`;
+      for (const node of originals) {
+        deltas.set(node.id, delta);
+        const element = interactionStore.getElement(node.id);
+        if (!element) continue;
+        if (!movingElements.has(element)) {
+          movingElements.add(element);
+          element.classList.add("fs-moving-card");
+        }
+        paintLayer(element, { transform });
+      }
+      interactionStore.setDrag({ mode, deltas, affectedEdgeIds });
+    }, (pointer, canceled) => {
+      if (!delta) {
+        if (!canceled) onEnd(pointer, null);
+        return;
+      }
+      const { dx, dy } = delta;
+      const patch = canceled ? null : { nodes: new Map(originals.map(node => [
+        node.id, { x: node.x + dx, y: node.y + dy },
+      ])) };
+      flushSync(() => {
+        if (!canceled) onEnd(pointer, patch);
+        for (const element of movingElements) {
+          settleLayer(element);
+          element.classList.remove("fs-moving-card");
+        }
+        interactionStore.setDrag(null);
+      });
+    });
+  }, [viewportRef, docRef, attachedEdges, interactionStore, trackPointer]);
 
   const startPan = useCallback(
     (ev: ReactPointerEvent) => {
@@ -495,7 +596,9 @@ export function useCanvasGestures({
 
   const startNodeMove = useCallback(
     (ev: ReactPointerEvent, nodeId: string) => {
-      const node = docRef.current.nodes.find((n) => n.id === nodeId);
+      if (ev.button !== 0) return;
+      const currentNodes = docRef.current.nodes;
+      const node = currentNodes.find((n) => n.id === nodeId);
       if (!node) return;
       if (node.window) {
         startWindowMove(ev, nodeId);
@@ -513,191 +616,77 @@ export function useCanvasGestures({
       const activeIds = selection.nodes.includes(nodeId)
         ? selection.nodes
         : [nodeId];
-      if (!selection.nodes.includes(nodeId)) {
-        selectNode(nodeId);
-      }
-      const vpRect = viewportRef.current?.getBoundingClientRect();
-      if (!vpRect) return;
-      const startWorld = toWorld(
-        docRef.current.viewport,
-        vpRect,
-        ev.clientX,
-        ev.clientY,
-      );
+      const byId = new Map(currentNodes.map(item => [item.id, item]));
       const originals = activeIds
-        .map((id) => docRef.current.nodes.find((n) => n.id === id))
-        .filter((n): n is FlowNode => !!n)
-        .map((n) => ({
-          id: n.id,
-          x: n.x,
-          y: n.y,
-          parentId: n.parentId,
-        }));
-      let moved = false;
-      trackPointer(
-        ev,
-        (next) => {
-          const cur = toWorld(
-            docRef.current.viewport,
-            vpRect,
-            next.clientX,
-            next.clientY,
-          );
-          const dx = cur.x - startWorld.x,
-            dy = cur.y - startWorld.y;
-          if (!moved && Math.hypot(dx, dy) < 3) return;
-          if (!moved) {
-            moved = true;
-            setIsDragging(true);
-          }
-          previewGeometry({
-            nodes: new Map(
-              originals.map((orig) => [
-                orig.id,
-                { x: orig.x + dx, y: orig.y + dy },
-              ]),
-            ),
-          });
-        },
-        (endEv, canceled) => {
-          setIsDragging(false);
-          if (!moved) return;
-          if (canceled) {
-            finishGeometry(true);
-            return;
-          }
-          const noSnap = "ctrlKey" in endEv && endEv.ctrlKey;
-          finishGeometry(false, (d) => {
-            const candidateGroups = d.nodes
-              .filter((g) => g.kind === "group" && !g.collapsed)
-              .sort((a, b) => a.width * a.height - b.width * b.height);
-            for (const orig of originals) {
-              const target = d.nodes.find((x) => x.id === orig.id);
-              if (!target) continue;
-              delete target.nudge;
-              if (prefs.snap && !noSnap) {
-                target.x = Math.round(target.x / 12) * 12;
-                target.y = Math.round(target.y / 12) * 12;
-              }
-              const box = nodeBox(target);
-              const cx = box.x + box.w / 2,
-                cy = box.y + box.h / 2;
-              const hitGroup = candidateGroups.find(
-                (g) =>
-                  g.id !== target.id &&
-                  cx > g.x &&
-                  cx < g.x + g.width &&
-                  cy > g.y + 42 &&
-                  cy < g.y + g.height,
-              );
-              const frame = candidateGroups.find(
-                (group) => group.id === target.parentId && group.fanout,
-              );
-              if (
-                frame &&
-                (target.masterOf ||
-                  target.generatedBy ||
-                  frame.fanout!.fanId === target.id ||
-                  frame.fanout!.mergeId === target.id)
-              ) {
-                target.x = Math.max(frame.x + 24, target.x);
-                target.y = Math.max(frame.y + 54, target.y);
-                frame.width = Math.max(
-                  frame.width,
-                  target.x + box.w - frame.x + 24,
-                );
-                frame.height = Math.max(
-                  frame.height,
-                  target.y + box.h - frame.y + 24,
-                );
-              } else target.parentId = hitGroup?.id;
+        .map(id => byId.get(id))
+        .filter((item): item is FlowNode => !!item);
+      trackMove(ev, "node", originals, (endEvent, patch) => {
+        if (!selection.nodes.includes(nodeId)) selectNode(nodeId);
+        if (!patch) return;
+        const noSnap = "ctrlKey" in endEvent && endEvent.ctrlKey;
+        commitGeometry(patch, d => {
+          const candidateGroups = d.nodes
+            .filter(g => g.kind === "group" && !g.collapsed)
+            .sort((a, b) => a.width * a.height - b.width * b.height);
+          for (const orig of originals) {
+            const target = d.nodes.find(x => x.id === orig.id);
+            if (!target) continue;
+            delete target.nudge;
+            if (prefs.snap && !noSnap) {
+              target.x = Math.round(target.x / 12) * 12;
+              target.y = Math.round(target.y / 12) * 12;
             }
-          });
-        },
-      );
+            const box = nodeBox(target);
+            const cx = box.x + box.w / 2;
+            const cy = box.y + box.h / 2;
+            const hitGroup = candidateGroups.find(g =>
+              g.id !== target.id && cx > g.x && cx < g.x + g.width &&
+              cy > g.y + 42 && cy < g.y + g.height,
+            );
+            const frameIndex = candidateGroups.findIndex(
+              group => group.id === target.parentId && group.fanout,
+            );
+            const frame = candidateGroups[frameIndex];
+            if (frame?.fanout && (target.masterOf || target.generatedBy ||
+              frame.fanout.fanId === target.id || frame.fanout.mergeId === target.id)) {
+              target.x = Math.max(frame.x + 24, target.x);
+              target.y = Math.max(frame.y + 54, target.y);
+              const resized = { ...frame,
+                width: Math.max(frame.width, target.x + box.w - frame.x + 24),
+                height: Math.max(frame.height, target.y + box.h - frame.y + 24),
+              };
+              candidateGroups[frameIndex] = resized;
+              d.nodes[d.nodes.indexOf(frame)] = resized;
+            } else target.parentId = hitGroup?.id;
+          }
+        });
+      });
     },
-    [
-      docRef,
-      viewportRef,
-      startWindowMove,
-      openWindow,
-      selectNode,
-      selection.nodes,
-      trackPointer,
-      setIsDragging,
-      previewGeometry,
-      finishGeometry,
-      prefs.snap,
-    ],
+    [docRef, startWindowMove, openWindow, selectNode, selection.nodes, trackMove, commitGeometry, prefs.snap],
   );
 
   const startGroupMove = useCallback(
     (ev: ReactPointerEvent, groupId: string) => {
+      if (ev.button !== 0) return;
       if (ev.shiftKey) {
         selectNode(groupId, true);
         return;
       }
-      setSelection({ nodes: [], groups: [groupId], edge: null });
-      const vpRect = viewportRef.current?.getBoundingClientRect();
-      if (!vpRect) return;
-      const startWorld = toWorld(
-        docRef.current.viewport,
-        vpRect,
-        ev.clientX,
-        ev.clientY,
-      );
-      const movingIds = [groupId, ...groupDescendants(docRef.current, groupId)];
-      const originals = movingIds
-        .map((id) => docRef.current.nodes.find((n) => n.id === id))
-        .filter((n): n is FlowNode => !!n)
-        .map((n) => ({ id: n.id, x: n.x, y: n.y }));
-      let moved = false;
-      trackPointer(
-        ev,
-        (next) => {
-          const cur = toWorld(
-            docRef.current.viewport,
-            vpRect,
-            next.clientX,
-            next.clientY,
-          );
-          const dx = cur.x - startWorld.x,
-            dy = cur.y - startWorld.y;
-          if (!moved && Math.hypot(dx, dy) < 3) return;
-          if (!moved) {
-            moved = true;
-            setIsDragging(true);
+      const currentNodes = docRef.current.nodes;
+      const byId = new Map(currentNodes.map(item => [item.id, item]));
+      const movingIds = new Set([groupId, ...groupDescendants(docRef.current, groupId)]);
+      const originals = Array.from(movingIds, id => byId.get(id)).filter((item): item is FlowNode => !!item);
+      trackMove(ev, "group", originals, (_, patch) => {
+        setSelection({ nodes: [], groups: [groupId], edge: null });
+        if (!patch) return;
+        commitGeometry(patch, d => {
+          for (const item of d.nodes) {
+            if (movingIds.has(item.id)) delete item.nudge;
           }
-          previewGeometry({
-            nodes: new Map(
-              originals.map((orig) => [
-                orig.id,
-                { x: orig.x + dx, y: orig.y + dy },
-              ]),
-            ),
-          });
-        },
-        (_, canceled) => {
-          setIsDragging(false);
-          if (!moved) return;
-          finishGeometry(canceled, (d) => {
-            for (const item of d.nodes) {
-              if (movingIds.includes(item.id)) delete item.nudge;
-            }
-          });
-        },
-      );
+        });
+      });
     },
-    [
-      docRef,
-      viewportRef,
-      selectNode,
-      setSelection,
-      trackPointer,
-      setIsDragging,
-      previewGeometry,
-      finishGeometry,
-    ],
+    [docRef, selectNode, setSelection, trackMove, commitGeometry],
   );
 
   const startResize = useCallback(
@@ -706,6 +695,7 @@ export function useCanvasGestures({
       nodeId: string,
       mode: "node" | "group" | "window",
     ) => {
+      if (ev.button !== 0) return;
       ev.stopPropagation();
       const target = docRef.current.nodes.find((n) => n.id === nodeId);
       if (!target) return;
@@ -939,21 +929,14 @@ export function useCanvasGestures({
             obstacles: routingBoxes,
             waypoints: edge.waypoints,
           });
-          return { ...wire, geom, extent: padded(pathExtent(geom.path), 72) };
+          return { ...wire, to: satellite.wireIn, geom, extent: padded(pathExtent(geom.path), 72) };
         });
-    const withLabels = padded(paintArea, 72);
-    return wires.filter(
-      (wire) =>
-        wire.edge.id === selection.edge ||
-        pathTouches(wire.geom, withLabels, wire.extent),
-    );
+    return wires;
   }, [
     baseWireLayouts,
     hubSatByEdgeId,
     prefs.wireRouting,
     routingBoxes,
-    paintArea,
-    selection.edge,
   ]);
 
   /* Port snapping & wiring gestures */
@@ -1121,7 +1104,7 @@ export function useCanvasGestures({
 
       const cardId =
         hit?.closest<HTMLElement>("[data-node-card]")?.dataset.nodeCard;
-      const card = cardId ? nodesById.get(cardId) : undefined;
+      const card = (cardId ? nodesById.get(cardId) : undefined) ?? nodeAtPoint(current);
       reason = undefined;
       if (card) {
         const ports = wirePortIds(card, kind, direction);
@@ -1142,6 +1125,7 @@ export function useCanvasGestures({
       visibleGroups,
       lod,
       keepExpandedIds,
+      nodeAtPoint,
     ],
   );
 
@@ -1261,7 +1245,8 @@ export function useCanvasGestures({
             hitEl?.closest(".fs-viewport") &&
             !hitEl.closest(
               ".node,.workflow-group,.fs-minimap,.fs-canvas-controls",
-            )
+            ) &&
+            !nodeAtPoint(dropWorld)
           ) {
             if (sourceItemKey !== undefined) {
               const sourceNode = docRef.current.nodes.find(
@@ -1327,6 +1312,7 @@ export function useCanvasGestures({
       openAnchoredMenu,
       createBoardCompanion,
       insertFanout,
+      nodeAtPoint,
     ],
   );
 
@@ -1380,6 +1366,7 @@ export function useCanvasGestures({
 
   const startStaffDrag = useCallback(
     (ev: ReactPointerEvent, from: { roleId?: string; teamId?: string }) => {
+      if (ev.button !== 0) return;
       ev.stopPropagation();
       const vpRect = viewportRef.current?.getBoundingClientRect();
       const origin = docRef.current.nodes.find(
@@ -1396,7 +1383,7 @@ export function useCanvasGestures({
         )?.closest<HTMLElement>("[data-node-card]");
         const node = card
           ? docRef.current.nodes.find((n) => n.id === card.dataset.nodeCard)
-          : undefined;
+          : nodeAtPoint(toWorld(docRef.current.viewport, vpRect, clientX, clientY));
         if (!node || node.id === origin.id) return undefined;
         return node.kind === (from.roleId ? "agent" : "role")
           ? node
@@ -1451,19 +1438,20 @@ export function useCanvasGestures({
             end.clientX,
             end.clientY,
           ) as HTMLElement | null;
-          if (
-            !hitEl?.closest(".fs-viewport") ||
-            hitEl.closest(
-              ".node,.workflow-group,.fs-minimap,.fs-canvas-controls",
-            )
-          )
-            return;
           const at = toWorld(
             docRef.current.viewport,
             vpRect,
             end.clientX,
             end.clientY,
           );
+          if (
+            !hitEl?.closest(".fs-viewport") ||
+            hitEl.closest(
+              ".node,.workflow-group,.fs-minimap,.fs-canvas-controls",
+            ) ||
+            nodeAtPoint(at)
+          )
+            return;
           const created = createCanvasNode("role", at, undefined, false, {
             place: (n) => ({
               x: Math.round((at.x - n.width / 2) / 12) * 12,
@@ -1489,6 +1477,7 @@ export function useCanvasGestures({
       edit,
       staffInto,
       createCanvasNode,
+      nodeAtPoint,
     ],
   );
 
@@ -1686,9 +1675,16 @@ export function useCanvasGestures({
           }
 
           const hit = document.elementFromPoint(endEv.clientX, endEv.clientY);
+          const dropWorld = toWorld(
+            docRef.current.viewport,
+            vpRect,
+            endEv.clientX,
+            endEv.clientY,
+          );
           if (
             !hit?.closest(".fs-viewport") ||
-            hit.closest(".node,.workflow-group,.fs-minimap,.fs-canvas-controls")
+            hit.closest(".node,.workflow-group,.fs-minimap,.fs-canvas-controls") ||
+            nodeAtPoint(dropWorld)
           )
             return;
           edit((d) => {
@@ -1716,48 +1712,30 @@ export function useCanvasGestures({
       trackPointer,
       edit,
       showToast,
+      nodeAtPoint,
     ],
   );
 
-  const startWaypointDrag = useCallback(
-    (ev: ReactPointerEvent, edgeId: string, wpIndex: number) => {
-      ev.stopPropagation();
-      const vpRect = viewportRef.current?.getBoundingClientRect();
-      const edge = docRef.current.edges.find((e) => e.id === edgeId);
-      const origWp = edge?.waypoints?.[wpIndex]
-        ? { ...edge.waypoints[wpIndex] }
-        : null;
-      if (!vpRect || !origWp) return;
-      setIsDragging(true);
-      trackPointer(
-        ev,
-        (next) => {
-          const pt = toWorld(
-            docRef.current.viewport,
-            vpRect,
-            next.clientX,
-            next.clientY,
-          );
-          const waypoints = edge!.waypoints!.map((waypoint, index) =>
-            index === wpIndex ? pt : waypoint,
-          );
-          previewGeometry({ edge: { id: edgeId, waypoints } });
-        },
-        (_, canceled) => {
-          setIsDragging(false);
-          finishGeometry(canceled);
-        },
-      );
-    },
-    [
-      viewportRef,
-      docRef,
-      setIsDragging,
-      trackPointer,
-      previewGeometry,
-      finishGeometry,
-    ],
-  );
+  const startWaypointDrag = useCallback((ev: ReactPointerEvent, edgeId: string, wpIndex: number) => {
+    if (ev.button !== 0) return;
+    ev.stopPropagation();
+    const rect = viewportRef.current?.getBoundingClientRect();
+    const original = docRef.current.edges.find(edge => edge.id === edgeId)?.waypoints;
+    if (!rect || !original?.[wpIndex]) return;
+    const affectedEdgeIds = new Set([edgeId]);
+    const deltas = new Map<string, DragDelta>();
+    let waypointEdit: DragSession["waypointEdit"];
+    trackPointer(ev, pointer => {
+      const point = toWorld(docRef.current.viewport, rect, pointer.clientX, pointer.clientY);
+      waypointEdit = { edgeId, waypoints: original.map((waypoint, index) => index === wpIndex ? point : waypoint) };
+      interactionStore.setDrag({ mode: "waypoint", deltas, affectedEdgeIds, waypointEdit });
+    }, (_, canceled) => {
+      flushSync(() => {
+        if (!canceled && waypointEdit) commitGeometry({ edge: { id: edgeId, waypoints: waypointEdit.waypoints } });
+        interactionStore.setDrag(null);
+      });
+    });
+  }, [viewportRef, docRef, trackPointer, interactionStore, commitGeometry]);
 
   const startMarquee = useCallback(
     (ev: ReactPointerEvent) => {
@@ -1770,7 +1748,7 @@ export function useCanvasGestures({
         ev.clientY,
       );
       const baseNodes = new Set(ev.shiftKey ? selection.nodes : []);
-      setIsDragging(true);
+      let marqueeBox: Box | undefined;
       trackPointer(
         ev,
         (next) => {
@@ -1784,13 +1762,19 @@ export function useCanvasGestures({
             y = Math.min(start.y, cur.y),
             w = Math.abs(cur.x - start.x),
             h = Math.abs(cur.y - start.y);
+          marqueeBox = { x, y, w, h };
           const v = docRef.current.viewport;
-          setMarquee({
+          interactionStore.setMarquee({
             x: x * v.zoom + v.x,
             y: y * v.zoom + v.y,
             w: w * v.zoom,
             h: h * v.zoom,
           });
+        },
+        (_, canceled) => {
+          interactionStore.setMarquee(null);
+          if (canceled || !marqueeBox) return;
+          const { x, y, w, h } = marqueeBox;
           const hit = docRef.current.nodes
             .filter((n) => {
               if (!isNodeVisible(n)) return false;
@@ -1809,18 +1793,13 @@ export function useCanvasGestures({
             edge: null,
           });
         },
-        () => {
-          setIsDragging(false);
-          setMarquee(null);
-        },
       );
     },
     [
       viewportRef,
       docRef,
       selection.nodes,
-      setIsDragging,
-      setMarquee,
+      interactionStore,
       setSelection,
       trackPointer,
       isNodeVisible,

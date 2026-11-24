@@ -901,6 +901,79 @@
   pointer-events: none;
   z-index: 1;
 }
+.fs-root .fs-wire-stage {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  contain: strict;
+  will-change: transform;
+}
+.fs-root .fs-overview-canvas,
+.fs-root .fs-group-background {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  contain: strict;
+}
+.fs-root .fs-overview-actions {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 3px 12px -5px var(--shadow);
+}
+.fs-root .fs-overview-actions::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 10px;
+}
+.fs-root .fs-overview-port {
+  position: absolute;
+  z-index: 5;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  background: var(--surface);
+  transform: translate(-50%, -50%);
+  cursor: crosshair;
+}
+.fs-root .fs-overview-focus {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.fs-root .fs-wire-static-canvas,
+.fs-root .fs-wire-stage .fs-wire-flow-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.fs-root .fs-temp-wire-stage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 7;
+  pointer-events: none;
+}
+.fs-root .fs-live-edge-tags {
+  transform: translateZ(0);
+}
 .fs-root .pan-mode {
   cursor: grab;
 }

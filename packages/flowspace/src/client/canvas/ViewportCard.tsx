@@ -20,6 +20,7 @@ import { runtimeIndex } from "../sceneModel.ts";
 import type { WireEnd } from "../sceneWires.ts";
 import type { WireRoute } from "../wireRouting.ts";
 import { EMBED_RETAIN_ATTEMPTS } from "./viewportMath.ts";
+import { useCanvasInteractionStore } from "./interactionStore.ts";
 
 export const SessionOnCanvas = createContext(true);
 
@@ -90,6 +91,7 @@ export function EmbeddedSession({
 }
 
 export type CardUiState = {
+  preserveBody?: boolean;
   selected?: boolean;
   snapPortId?: string;
   fileDraft?: string;
@@ -113,6 +115,7 @@ export type CardRenderer = (
 export type WireLayout = {
   edge: FlowEdge;
   from: WireEnd;
+  to: WireEnd;
   geom: WireRoute;
   extent: Box;
   evState: string;
@@ -182,7 +185,9 @@ export const ViewportCard = memo(
   function ViewportCard({
     node,
     visible,
+    keepSlot,
     prepare,
+    rasterScene,
     semantic,
     box,
     dx,
@@ -200,7 +205,9 @@ export const ViewportCard = memo(
   }: {
     node: FlowNode;
     visible: boolean;
+    keepSlot: boolean;
     prepare: boolean;
+    rasterScene: boolean;
     semantic: boolean;
     box: Box;
     dx: number;
@@ -218,13 +225,16 @@ export const ViewportCard = memo(
     quoteText?: string;
   }) {
     const slot = useRef<HTMLDivElement>(null);
+    const interactionStore = useCanvasInteractionStore();
     const scroll = useRef(new Map<string, number>());
+    const embeddedScroll = useRef(new Map<HTMLElement, number>());
     const visited = useRef(false);
     const keepMounted =
       node.expanded &&
       (Boolean(node.sessionId) ||
         ["git", "changes", "terminal"].includes(node.kind));
     const mounted = visible || (keepMounted ? visited.current : prepare);
+    const preserveBody = !rasterScene || node.kind !== "agent" || !!node.sessionId;
     const prewarmFull = prepare && visible && !keepMounted && node.expanded;
     const contentVersion = useMemo(
       () => ({}),
@@ -243,6 +253,7 @@ export const ViewportCard = memo(
               contentVersion,
               branchOffset,
               {
+                preserveBody,
                 selected,
                 snapPortId,
                 fileDraft,
@@ -260,6 +271,7 @@ export const ViewportCard = memo(
         box,
         semantic,
         prewarmFull,
+        preserveBody,
         contentVersion,
         branchOffset,
         selected,
@@ -271,29 +283,54 @@ export const ViewportCard = memo(
       ],
     );
     useLayoutEffect(() => {
-      const card = slot.current?.firstElementChild;
+      const card = slot.current?.querySelector<HTMLElement>("[data-node-card]");
       if (!card) return;
       if (dx || dy) paintLayer(card, { transform: `translate(${dx}px, ${dy}px)` });
       else settleLayer(card);
     }, [mounted, dx, dy]);
     useLayoutEffect(() => {
+      const card = slot.current?.querySelector<HTMLElement>("[data-node-card]");
+      if (!card) return;
+      interactionStore.registerElement(node.id, card);
+      return () => interactionStore.registerElement(node.id, null);
+    }, [interactionStore, node.id, mounted]);
+    useLayoutEffect(() => {
       if (visible) visited.current = true;
-      if (!visible || !scroll.current.size || !slot.current) return;
-      for (const element of Array.from(
-        slot.current.querySelectorAll<HTMLElement>(".node-scroll,textarea"),
-      )) {
-        const value = scroll.current.get(element.className);
-        if (value) element.scrollTop = value;
+      if (!visible || !slot.current) return;
+      const card = slot.current.querySelector<HTMLElement>("[data-node-card]");
+      if (card && typeof card.getAnimations === "function") {
+        for (const animation of card.getAnimations()) {
+          if (animation.id === "fs-overview-fade") animation.cancel();
+        }
+      }
+      if (scroll.current.size) {
+        for (const element of Array.from(slot.current.querySelectorAll<HTMLElement>(".node-scroll,textarea"))) {
+          const value = scroll.current.get(element.className);
+          if (value) element.scrollTop = value;
+        }
+      }
+      if (!box.compact) {
+        for (const [element, top] of embeddedScroll.current) {
+          if (element.isConnected) element.scrollTop = top;
+          else embeddedScroll.current.delete(element);
+        }
       }
     }, [visible, box.compact]);
-    if (!mounted) return null;
+    if (!mounted && !(keepSlot && visited.current)) return null;
     return (
       <div
         className="fs-card-slot"
         ref={slot}
-        hidden={!visible}
+        hidden={mounted && !visible}
+        style={mounted && !visible ? { contentVisibility: "hidden" } : undefined}
         onScrollCapture={(event) => {
           const element = event.target as HTMLElement;
+          if (element.closest(".fs-embedded")) {
+            if (visible && !box.compact && element.scrollHeight > element.clientHeight) {
+              embeddedScroll.current.set(element, element.scrollTop);
+            }
+            return;
+          }
           if (element.matches(".fs-branch-list")) {
             onBranchScroll(node.id, element.scrollTop);
           }
@@ -302,6 +339,8 @@ export const ViewportCard = memo(
           }
         }}
       >
+        {/* Keep :empty stable while the heavy card subtree is unmounted. */}
+        <span hidden />
         {content}
       </div>
     );
@@ -311,7 +350,9 @@ export const ViewportCard = memo(
       before.branchOffset !== after.branchOffset ||
       before.node !== after.node ||
       before.visible !== after.visible ||
+      before.keepSlot !== after.keepSlot ||
       before.prepare !== after.prepare ||
+      before.rasterScene !== after.rasterScene ||
       before.semantic !== after.semantic ||
       before.box !== after.box ||
       before.dx !== after.dx ||

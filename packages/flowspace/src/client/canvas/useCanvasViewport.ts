@@ -1,11 +1,9 @@
 import {
-  startTransition,
   useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
-  useState,
   type Dispatch,
   type MutableRefObject,
   type RefObject,
@@ -44,8 +42,10 @@ import {
   worldTransform,
   type MiniFrame,
 } from "./viewportMath.ts";
+import type { CanvasInteractionStore } from "./interactionStore.ts";
 
 export interface UseCanvasViewportOptions {
+  interactionStore: CanvasInteractionStore;
   rootRef: RefObject<HTMLDivElement>;
   viewportRef: RefObject<HTMLDivElement>;
   docRef: MutableRefObject<FlowspaceDocument>;
@@ -65,9 +65,11 @@ export interface UseCanvasViewportOptions {
   routeName: RouteId;
   minimapOpen: boolean;
   wheelPref: "zoom" | "pan";
+  replayActive?: boolean;
 }
 
 export function useCanvasViewport({
+  interactionStore,
   rootRef,
   viewportRef,
   docRef,
@@ -87,14 +89,11 @@ export function useCanvasViewport({
   routeName,
   minimapOpen,
   wheelPref,
+  replayActive = false,
 }: UseCanvasViewportOptions) {
-  const [zoomPreparation, setZoomPreparation] = useState<{
-    area: Box;
-    compact: boolean;
-  } | null>(null);
-  const preparedCrossing = useRef<boolean | undefined>(undefined);
   const viewAnimToken = useRef(0);
   const worldRef = useRef<HTMLDivElement>(null);
+  const groupsLayerRef = useRef<HTMLDivElement>(null);
   const cameraRef = useRef<HTMLDivElement>(null);
   const rasterView = useRef<FlowspaceDocument["viewport"]>();
   const gridRef = useRef<HTMLDivElement>(null);
@@ -110,8 +109,7 @@ export function useCanvasViewport({
   const movingTimer = useRef<ReturnType<typeof setTimeout>>();
   const committedLodRef = useRef(false);
   committedLodRef.current = lod;
-  const typeScaleRef = useRef(1);
-  const typeElements = useRef(new Set<HTMLElement>());
+  const typeScaleRef = useRef<{ world: HTMLElement; lod: boolean; scale: number }>();
   const wheelTargetRef = useRef<{
     view: { x: number; y: number; zoom: number };
     anchor: { x: number; y: number };
@@ -215,6 +213,7 @@ export function useCanvasViewport({
   );
 
   useEffect(() => {
+    if (replayActive) return;
     const vp = viewportRef.current;
     const root = cursorFxRef.current;
     if (!vp || !root) return;
@@ -283,10 +282,11 @@ export function useCanvasViewport({
       cursorFx.current.raf = 0;
       for (const layer of layers) if (layer) settleLayer(layer);
     };
-  }, [stepCursorFx, viewportRef]);
+  }, [stepCursorFx, viewportRef, replayActive]);
 
   /* Liquid-glass capsule pointer glint */
   useEffect(() => {
+    if (replayActive) return;
     const root = rootRef.current;
     if (!root) return;
     const CAPSULE =
@@ -316,7 +316,7 @@ export function useCanvasViewport({
       root.removeEventListener("pointermove", onMove);
       cancelAnimationFrame(raf);
     };
-  }, [rootRef]);
+  }, [rootRef, replayActive]);
 
   const applyViewToDom = useCallback(
     (v: { x: number; y: number; zoom: number }, settle = false) => {
@@ -353,14 +353,22 @@ export function useCanvasViewport({
             }),
           });
         }
-        const ts = typeScaleFor(rasterView.current?.zoom ?? v.zoom);
-        if (ts !== typeScaleRef.current) {
-          typeScaleRef.current = ts;
-          for (const element of typeElements.current) {
-            element.style.setProperty("--fs-type-scale", String(ts));
+        const compact = v.zoom < LOD_ZOOM;
+        const previous = typeScaleRef.current;
+        if (settle || previous?.lod !== compact || previous.world !== world) {
+          const scale = typeScaleFor(v.zoom);
+          if (previous?.world !== world || previous.scale !== scale) {
+            // Overview tiles own their typography. Full DOM cards keep a stable
+            // inherited scale during the handoff and while native bodies are hidden.
+            groupsLayerRef.current?.style.setProperty("--fs-type-scale", String(scale));
           }
+          typeScaleRef.current = { world, lod: compact, scale };
         }
       }
+      interactionStore.setCamera({
+        ...v, moving: !settle, lod: v.zoom < LOD_ZOOM,
+        zoomBucket: typeScaleRef.current?.scale ?? typeScaleFor(v.zoom),
+      });
       const grid = gridRef.current;
       if (grid) {
         gridFrameRef.current = applyGridFrame(
@@ -395,7 +403,7 @@ export function useCanvasViewport({
         }
       }
     },
-    [paintCursorLensGrid, rasterScene],
+    [paintCursorLensGrid, rasterScene, interactionStore],
   );
 
   const markViewMoving = useCallback(() => {
@@ -406,34 +414,8 @@ export function useCanvasViewport({
     movingTimer.current = setTimeout(() => {
       delete world.dataset.moving;
       applyViewToDom(docRef.current.viewport, true);
-      if (preparedCrossing.current !== undefined) {
-        preparedCrossing.current = undefined;
-        setZoomPreparation(null);
-      }
     }, 200);
   }, [applyViewToDom, docRef]);
-
-  const prepareZoom = useCallback(
-    (target: FlowspaceDocument["viewport"]) => {
-      const origin = docRef.current.viewport;
-      const compact = target.zoom < LOD_ZOOM;
-      if (compact === (origin.zoom < LOD_ZOOM)) {
-        if (preparedCrossing.current !== undefined) {
-          preparedCrossing.current = undefined;
-          startTransition(() => setZoomPreparation(null));
-        }
-        return;
-      }
-      if (preparedCrossing.current === compact) return;
-      preparedCrossing.current = compact;
-      const area = padded(
-        viewportBox(viewAtDetailBoundary(origin, target), vpSize),
-        48,
-      );
-      startTransition(() => setZoomPreparation({ area, compact }));
-    },
-    [vpSize, docRef],
-  );
 
   const setViewportDirect = useCallback(
     (nextView: { x: number; y: number; zoom: number }, persistDelay = 500) => {
@@ -525,23 +507,6 @@ export function useCanvasViewport({
     applyViewToDom(docRef.current.viewport, !worldRef.current?.dataset.moving);
   }, [applyViewToDom, view, routeName, minimapOpen, docRef]);
 
-  useLayoutEffect(() => {
-    if (!lod && !typeElements.current.size) return;
-    const matches =
-      lod &&
-      worldRef.current?.querySelectorAll<HTMLElement>(
-        ".fs-card-slot:not([hidden]) :is(.port,.compact .node-heading strong,.compact-status .status,.compact-status .fs-team-node-summary,.compact-kind,.compact-overview-detail,.compact .node-actions,.compact .fs-lane-badges,.compact-release),.group-header > :is(strong,.fs-lane-metrics)",
-      );
-    const elements = new Set(matches ? Array.from(matches) : []);
-    const scale = String(typeScaleRef.current);
-    for (const element of elements) {
-      if (!typeElements.current.has(element)) {
-        element.style.setProperty("--fs-type-scale", scale);
-      }
-    }
-    typeElements.current = elements;
-  });
-
   const animateView = useCallback(
     (
       target: { x: number; y: number; zoom: number },
@@ -554,7 +519,6 @@ export function useCanvasViewport({
         setViewportDirect(target, 300);
         return;
       }
-      prepareZoom(target);
       const started = performance.now();
       const logFrom = Math.log(from.zoom);
       const logTo = Math.log(target.zoom);
@@ -572,7 +536,7 @@ export function useCanvasViewport({
       };
       requestAnimationFrame(step);
     },
-    [reducedMotion, setViewportDirect, prepareZoom, docRef],
+    [reducedMotion, setViewportDirect, docRef],
   );
 
   const glideViewTo = useCallback(
@@ -586,7 +550,6 @@ export function useCanvasViewport({
         return;
       }
       wheelTargetRef.current = { view: target, anchor };
-      prepareZoom(target);
       if (wheelRafRef.current) return;
       let last = performance.now();
       const tick = (now: number) => {
@@ -627,7 +590,7 @@ export function useCanvasViewport({
       };
       wheelRafRef.current = requestAnimationFrame(tick);
     },
-    [reducedMotion, setViewportDirect, prepareZoom, docRef],
+    [reducedMotion, setViewportDirect, docRef],
   );
 
   const fitBoxes = useCallback(
@@ -661,6 +624,7 @@ export function useCanvasViewport({
 
   /* Wheel Zoom / Pan on Canvas Viewport */
   useEffect(() => {
+    if (replayActive) return;
     const vp = viewportRef.current;
     if (!vp) return;
     const onWheel = (ev: WheelEvent) => {
@@ -688,14 +652,12 @@ export function useCanvasViewport({
     };
     vp.addEventListener("wheel", onWheel, { passive: false });
     return () => vp.removeEventListener("wheel", onWheel);
-  }, [wheelPref, glideViewTo, viewportRef, docRef]);
-
-  const preparing = zoomPreparation?.compact !== lod ? zoomPreparation : null;
+  }, [wheelPref, glideViewTo, viewportRef, docRef, replayActive]);
 
   return {
     paintArea,
-    preparing,
     worldRef,
+    groupsLayerRef,
     cameraRef,
     gridRef,
     zoomLabelRef,

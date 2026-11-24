@@ -79,7 +79,7 @@ export function renderNodeCompactBody({
     // Same frames as the built-in tool cards: a kind label at semantic zoom, an inset summary line otherwise.
     return semantic ? (
       <div className="compact-overview">
-        <span className="compact-kind">{kindTitle}</span>
+        <span className={`compact-kind${descriptorOf(node.flowType) ? " has-detail" : ""}`}>{kindTitle}</span>
         {detail}
       </div>
     ) : (
@@ -130,7 +130,7 @@ export function renderNodeCompactBody({
     }
     return (
       <div className="compact-overview">
-        <span className="compact-kind">{t(`nodeKind_${node.kind}`)}</span>
+        <span className={`compact-kind${detail ? " has-detail" : ""}`}>{t(`nodeKind_${node.kind}`)}</span>
         {detail && (
           <span
             className={`compact-overview-detail ${detailStatus ? `status status-${detailStatus}` : "user-content"}`}
@@ -157,7 +157,7 @@ export function renderNodeCompactBody({
     return (
       <>
         <div className="compact-status">
-          <span className="compact-kind">
+          <span className={`compact-kind ${!emissionReminder && team ? "has-team-summary" : "has-detail"}`}>
             {t(isTeam ? "teamLibrary" : "nodeKind_agent")}
           </span>
           <span className={`status status-${state}`}>

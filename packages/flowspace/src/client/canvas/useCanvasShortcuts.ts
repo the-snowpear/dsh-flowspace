@@ -52,6 +52,7 @@ export function useCanvasShortcuts(input: CanvasShortcutsInput): void {
 
   useEffect(() => {
     const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.defaultPrevented) return;
       const s = latest.current;
       if (s.replayLocked.current) return;
       const target = ev.target instanceof HTMLElement ? ev.target : null;

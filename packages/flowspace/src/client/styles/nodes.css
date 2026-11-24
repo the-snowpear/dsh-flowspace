@@ -3,13 +3,6 @@
    Migrated from omp-studio agent-canvas prototype (nodes.css)
    ============================================================ */
 
-/* The camera writes compensation only to the glyphs, labels and ports that use it. */
-@property --fs-type-scale {
-  syntax: "<number>";
-  inherits: false;
-  initial-value: 1;
-}
-
 .fs-root .node {
   position: absolute;
   contain: layout style;
@@ -351,6 +344,9 @@
   border-radius: 0 0 11px 11px;
 }
 .fs-root .fs-card-slot {
+  display: contents;
+}
+.fs-root .fs-structure-slots {
   display: contents;
 }
 .fs-root .fs-card-slot > .node {
@@ -879,6 +875,9 @@
   inset: 0;
   background: linear-gradient(90deg, transparent, var(--sheen), transparent);
   animation: omp-sweep var(--loop-pulse) linear infinite;
+}
+.fs-root .progress-line:not(.is-running) i::after {
+  animation: none;
 }
 
 .fs-root .node-empty {
@@ -2289,4 +2288,39 @@
 .fs-root .conversation-agent .agent-footer {
   padding: 0 20px;
   height: 52px;
+}
+
+/* Disable card shell transitions on the raster layer. */
+.fs-root .fs-camera[data-raster] .node,
+.fs-root .fs-camera[data-raster] .node::before,
+.fs-root .fs-camera[data-raster] .node::after,
+.fs-root .fs-camera[data-raster] .node > .port,
+.fs-root .fs-camera[data-raster] .node-header .node-avatar,
+.fs-root .fs-camera[data-raster] .node-header .node-actions,
+.fs-root .fs-camera[data-raster] .node-header .icon-button,
+.fs-root .fs-camera[data-raster] .node.full .node-actions > .icon-button:not(.node-stop-button),
+.fs-root .fs-camera[data-raster] .workflow-group {
+  transition-duration: 0s;
+}
+.fs-root .fs-moving-card,
+.fs-root .fs-camera[data-raster] .fs-card-slot:not([hidden]) > .node,
+.fs-root .fs-camera[data-raster] .workflow-group:not([hidden]) {
+  will-change: transform;
+}
+
+/* The translucent region is painted below the wire stage. Its interactive
+   header and outline stay with the cards in the transformed world. */
+.fs-root .fs-groups-layer > .workflow-group:not(.composite) {
+  background: none;
+}
+.fs-root .fs-camera[data-raster] .node.full > .node-body {
+  animation: none;
+}
+.fs-root .fs-camera[data-raster] .node > .port > .port-mark,
+.fs-root .fs-camera[data-raster] .node > .port > .port-mark::before,
+.fs-root .fs-camera[data-raster] .node > .port .port-rim,
+.fs-root .fs-camera[data-raster] .node > .port .port-well,
+.fs-root .fs-camera[data-raster] .node > .port .port-core,
+.fs-root .fs-camera[data-raster] .node > .port .port-halo {
+  transition-duration: 0s;
 }

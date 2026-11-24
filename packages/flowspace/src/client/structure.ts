@@ -29,6 +29,7 @@ export interface DerivedStructureLink {
   fromBox: Box;
   toBox: Box;
   active?: boolean;
+  targetNodeId?: string;
 }
 
 export interface DraftAffiliation {
@@ -297,6 +298,7 @@ export function buildDerivedStructure(opts: {
         fromBox: anchor.box,
         toBox: aBox,
         active: opts.runningNodeIds.has(agent.id),
+        targetNodeId: agent.id,
       });
     }
 

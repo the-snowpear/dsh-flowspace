@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import type { CanvasTeamConfig, FlowNode, FlowspaceSnapshot, TeamLayout, TeamMemberView, TeamModelRoute } from "../types.ts";
 import type { CanvasBridge } from "./bridge.ts";
 import { buildCrew, type CrewMessage, type CrewRow } from "./teamCrew.ts";
-import { staffPath, type ChildCard, type ChildLink } from "./childTree.ts";
+import type { ChildCard } from "./childTree.ts";
 import { useModelRoutes } from "./hooks/useModelRoutes.ts";
 import { ModelChip, ModelSelect, Stepper, TeamAvatar, TeamSwitch, hueStyle } from "./TeamControls.tsx";
 import { ProgressRing } from "./ui/ProgressRing.tsx";
@@ -372,7 +372,7 @@ export function CrewFrame({ node, nodes, snapshot, status, routes, onEditTeam, o
         </div>
       )}
 
-      <div className="fs-crew-stage" ref={stage} style={{ height: placed.height } as CSSProperties}>
+      <div className={`fs-crew-stage${seats.length ? "" : " is-empty"}`} ref={stage} style={{ height: placed.height } as CSSProperties}>
         {width > 0 && (
           <svg className="fs-crew-links" width={frame.w} height={frame.h} aria-hidden="true">
             {seats.map((seat, index) => {
@@ -483,56 +483,7 @@ export interface StaffWire {
   active: boolean;
 }
 
-export function StaffWires({ wires, drag, onMenu }: {
-  wires: StaffWire[];
-  drag?: { from: Pt; to: Pt; snapped: boolean } | null;
-  onMenu: (roleId: string, at: Pt) => void;
-}) {
-  return (
-    <g className="fs-staff-wires">
-      {wires.map((wire) => {
-        const d = staffPath(wire.from, wire.to);
-        return (
-          <g key={wire.id} className="fs-staff-wire" data-staff-id={wire.id} data-active={wire.active || undefined}
-            {...staffHover(wire.id)}>
-            <path className="edge-path fs-staff-line" d={d} />
-            {wire.active && <path className="edge-path fs-staff-flow" d={d} />}
-            <circle className="fs-staff-dot" cx={wire.to.x} cy={wire.to.y} r={3} />
-            <path className="edge-hit" d={d} onContextMenu={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              onMenu(wire.id, { x: event.clientX, y: event.clientY });
-            }} />
-          </g>
-        );
-      })}
-      {drag && (
-        <path className="edge-path fs-staff-line fs-staff-temp" data-snapped={drag.snapped || undefined}
-          d={staffPath(drag.from, drag.to)} />
-      )}
-    </g>
-  );
-}
-
 /* ---------- Native children: subagent rows and member trees (world space) ---------- */
-
-export function ChildLinks({ links }: { links: readonly ChildLink[] }) {
-  return (
-    <g className="fs-child-links">
-      {links.map((link) => {
-        const d = staffPath(link.from, link.to);
-        return (
-          <g key={link.id} className="fs-child-link" data-active={link.active || undefined} data-staff-id={link.staffId}>
-            <path className="edge-path fs-child-line" d={d} />
-            {link.active && <path className="edge-path fs-child-flow" d={d} />}
-            <circle className="fs-child-root" cx={link.from.x} cy={link.from.y} r={3} />
-            <circle className="fs-child-end" cx={link.to.x} cy={link.to.y} r={2.5} />
-          </g>
-        );
-      })}
-    </g>
-  );
-}
 
 export function ChildCards({ cards, onOpen }: { cards: readonly ChildCard[]; onOpen: (card: ChildCard) => void }) {
   return (

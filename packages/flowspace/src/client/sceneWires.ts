@@ -1,4 +1,4 @@
-import type { FlowEdge, NativeAgentMessage, WireRoutingMode } from "../types.ts";
+import type { FlowEdge, NativeAgentMessage, Waypoint, WireRoutingMode } from "../types.ts";
 import { BoxIndex } from "./boxIndex.ts";
 import { bounds, encloses, intersects, padded, type Box } from "./boxes.ts";
 import { route, routePath, type WireRoute } from "./wireRouting.ts";
@@ -28,9 +28,21 @@ export function groupExchanges(messages: NativeAgentMessage[], endpoint: (id: st
   return [...grouped.values()];
 }
 
-export type WireEnd = { x: number; y: number; box: Box };
-type CachedWire = { key: string; region: Box; geom: WireRoute; extent: Box };
-export type CachedPath = { key: string; region?: Box; path: string; extent: Box };
+export type WireEnd = { x: number; y: number; box: Box; groupId?: string };
+export type CachedWire = { key: string; region: Box; geom: WireRoute; extent: Box; path2d?: Path2D };
+export type CachedPath = { key: string; region?: Box; path: string; extent: Box; path2d?: Path2D };
+
+/** Browser-only resources are created on first paint, never in the routing worker. */
+export function cachedPath2D(entry: { path?: string; geom?: WireRoute; path2d?: Path2D }) {
+  if (typeof Path2D === "undefined") return undefined;
+  return entry.path2d ??= new Path2D(entry.geom?.path ?? entry.path!);
+}
+
+export interface WireHitResult {
+  edgeId: string;
+  distance: number;
+  worldPoint: { x: number; y: number };
+}
 const boxKey = (box: Box) => `${box.x},${box.y},${box.w},${box.h}`;
 
 export interface GuideRoute {
@@ -113,29 +125,77 @@ export function buildGuideRoute(task: GuideRoute, obstacles: RouteObstacles): Ca
   return { key, region: corridor?.region, path, extent: padded(pathExtent(path), 24) };
 }
 
-export interface GuideBatch {
-  id: number;
-  obstacles?: ObstacleDelta;
-  tasks: GuideRoute[];
+export interface EdgeRouteTask {
+  kind: "edge";
+  id: string;
+  key: string;
+  edgeKind: FlowEdge["kind"];
+  mode: WireRoutingMode;
+  from: WireEnd;
+  to: WireEnd;
+  waypoints: Waypoint[];
 }
 
-export type GuideResults = [id: string, path: CachedPath][];
-export interface GuideReply {
+export interface GuideRouteTask extends Omit<GuideRoute, "kind"> {
+  kind: "guide";
+  edgeKind: FlowEdge["kind"];
+}
+
+export type RoutingTask = EdgeRouteTask | GuideRouteTask;
+
+export interface RoutingBatchRequest {
   id: number;
-  paths: GuideResults;
+  obstacles?: ObstacleDelta;
+  tasks: RoutingTask[];
+}
+
+export type RoutingResultItem =
+  | { kind: "guide"; id: string; entry: CachedPath }
+  | ({ kind: "edge"; id: string } & CachedWire);
+
+export interface RoutingBatchReply {
+  id: number;
+  results: RoutingResultItem[];
   done: boolean;
 }
 
+export function edgeRouteTask(edge: FlowEdge, from: WireEnd, to: WireEnd, mode: WireRoutingMode): EdgeRouteTask {
+  const waypoints = edge.waypoints ?? [];
+  const key = `${mode}:${edge.kind}:${boxKey(from.box)}:${from.x},${from.y}:${boxKey(to.box)}:${to.x},${to.y}:${waypoints.map(point => `${point.x},${point.y}`).join("/")}`;
+  return { kind: "edge", id: edge.id, key, edgeKind: edge.kind, from, to, waypoints, mode };
+}
+
+export function buildEdgeRoute(task: EdgeRouteTask, obstacles: RouteObstacles): CachedWire {
+  const { from, to, mode, edgeKind: kind, waypoints, key } = task;
+  const anchors = [from.box, to.box, ...waypoints.map(point => ({ ...point, w: 0, h: 0 }))];
+  const local = padded(bounds(anchors), 320);
+  const { region, boxes } = mode === "avoid"
+    ? obstacles.corridor(local)
+    : { region: local, boxes: obstacles.query(local) };
+  const geom = route(from, to, { mode, kind, waypoints, obstacles: boxes });
+  const extent = padded(pathExtent(geom.path), 72);
+  // In overlap mode obstacles can only move the label within reach of the fixed path.
+  return { key, region: mode === "avoid" ? region : extent, geom, extent };
+}
+
+export function buildRoutingResult(task: RoutingTask, obstacles: RouteObstacles): RoutingResultItem {
+  return task.kind === "edge"
+    ? { kind: "edge", id: task.id, ...buildEdgeRoute(task, obstacles) }
+    : { kind: "guide", id: task.id, entry: buildGuideRoute({ ...task, kind: task.edgeKind }, obstacles) };
+}
+
 export function pathExtent(path: string): Box {
-  const coordinates = path.match(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi) ?? [];
+  const coordinates = path.match(/-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g) ?? [];
   let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
-  for (let index = 0; index < coordinates.length; index += 2) {
+  for (let index = 0; index + 1 < coordinates.length; index += 2) {
     const x = Number(coordinates[index]), y = Number(coordinates[index + 1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     left = Math.min(left, x);
     top = Math.min(top, y);
     right = Math.max(right, x);
     bottom = Math.max(bottom, y);
   }
+  if (!Number.isFinite(left)) return { x: 0, y: 0, w: 0, h: 0 };
   return { x: left, y: top, w: right - left, h: bottom - top };
 }
 
@@ -157,14 +217,22 @@ function segment(points: Point[]): Segment {
 function pathSegments(wire: { path: string }): Segment[] {
   const cached = contours.get(wire);
   if (cached) return cached;
-  const commands = wire.path.match(/[MLQC]|-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi) ?? [];
+  const commands = wire.path.match(/[MLQC]|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g) ?? [];
   const segments: Segment[] = [];
   let previous = { x: 0, y: 0 };
   for (let index = 0; index < commands.length;) {
     const command = commands[index++];
-    const points = [previous];
+    if (command !== "M" && command !== "L" && command !== "Q" && command !== "C") continue;
     const count = command === "C" ? 3 : command === "Q" ? 2 : 1;
-    for (let pair = 0; pair < count; pair++) points.push({ x: +commands[index++], y: +commands[index++] });
+    if (index + count * 2 > commands.length) break;
+    const points = [previous];
+    let valid = true;
+    for (let pair = 0; pair < count; pair++) {
+      const x = Number(commands[index++]), y = Number(commands[index++]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) { valid = false; break; }
+      points.push({ x, y });
+    }
+    if (!valid) continue;
     previous = points.at(-1)!;
     if (command !== "M") segments.push(segment(points));
   }
@@ -184,6 +252,32 @@ function splitSegment(points: Point[], at = 0.5): [Segment, Segment] {
   const bcd = mix(bc, cd);
   const abcd = mix(abc, bcd);
   return [segment([a, ab, abc, abcd]), segment([abcd, bcd, cd, d])];
+}
+
+/** Flatten M/L/Q/C routes with a bounded chord error and accumulate arc length. */
+export function sampleWirePath(path: string, tolerance = 0.025) {
+  const samples: { point: Point; distance: number }[] = [];
+  let distance = 0;
+  const append = (point: Point) => {
+    const previous = samples.at(-1)?.point;
+    if (previous) distance += Math.hypot(point.x - previous.x, point.y - previous.y);
+    if (!previous || point.x !== previous.x || point.y !== previous.y) samples.push({ point, distance });
+  };
+  const flatten = (curve: Segment, depth: number) => {
+    const points = curve.points;
+    const first = points[0], last = points.at(-1)!;
+    const polygon = points.slice(1).reduce((sum, p, i) => sum + Math.hypot(p.x - points[i].x, p.y - points[i].y), 0);
+    if (depth < 16 && polygon - Math.hypot(last.x - first.x, last.y - first.y) > tolerance) {
+      const [left, right] = splitSegment(points);
+      flatten(left, depth + 1);
+      flatten(right, depth + 1);
+    } else append(last);
+  };
+  for (const curve of pathSegments({ path })) {
+    append(curve.points[0]);
+    flatten(curve, 0);
+  }
+  return samples;
 }
 
 function containsPoint(area: Box, point: Point) {
@@ -235,7 +329,7 @@ export function guidePathInArea(wire: { path: string; extent: Box }, area: Box) 
     }
     return path;
   }
-  return wire.path;
+  return segments.length ? "" : wire.path;
 }
 
 export class SceneWires {
@@ -243,6 +337,8 @@ export class SceneWires {
   private paths = new Map<string, CachedPath>();
   private edgeRegions = new BoxIndex<string>();
   private guideRegions = new BoxIndex<string>();
+  readonly wireHitIndex = new BoxIndex<string>();
+  private hitWires = new Map<string, { geom: WireRoute; extent: Box }>();
   private dirtyPaths = new Set<string>();
   private obstacleChanges: Box[][] = [];
   private edges?: FlowEdge[];
@@ -270,6 +366,8 @@ export class SceneWires {
     for (const id of invalid) {
       this.entries.delete(id);
       this.edgeRegions.delete(id);
+      this.wireHitIndex.delete(id);
+      this.hitWires.delete(id);
     }
     if (pathIds !== this.pathIds) {
       this.pathIds = pathIds;
@@ -308,12 +406,17 @@ export class SceneWires {
   }
 
   acceptGuide(task: GuideRoute, entry: CachedPath, revision: number) {
-    if (task.key !== entry.key || this.lookupGuide(task).current) return;
-    const elapsed = this.obstacleRevision - revision;
-    const region = entry.region;
-    if (region && elapsed && (elapsed > this.obstacleChanges.length ||
-      this.obstacleChanges.slice(-elapsed).some(change => change.some(box => intersects(region, box))))) return;
+    if (task.key !== entry.key || this.lookupGuide(task).current) return false;
+    if (!this.routeIsCurrent(entry.region, revision)) return false;
     this.saveGuide(task.id, entry);
+    return true;
+  }
+
+  private routeIsCurrent(region: Box | undefined, revision: number) {
+    const elapsed = this.obstacleRevision - revision;
+    return elapsed >= 0 && (!region || elapsed === 0 ||
+      (elapsed <= this.obstacleChanges.length &&
+        !this.obstacleChanges.slice(-elapsed).some(change => change.some(box => intersects(region, box)))));
   }
 
   getPath(id: string, from: WireEnd, to: WireEnd, mode: WireRoutingMode, kind: FlowEdge["kind"] = "continuation"): CachedPath {
@@ -322,22 +425,70 @@ export class SceneWires {
     return current ? path! : this.saveGuide(id, buildGuideRoute(task, this.obstacles));
   }
 
-  get(edge: FlowEdge, from: WireEnd, to: WireEnd, mode: WireRoutingMode): CachedWire {
-    const waypoints = edge.waypoints ?? [];
-    const key = `${mode}:${edge.kind}:${boxKey(from.box)}:${from.x},${from.y}:${boxKey(to.box)}:${to.x},${to.y}:${waypoints.map(point => `${point.x},${point.y}`).join("/")}`;
-    const cached = this.entries.get(edge.id);
-    if (cached?.key === key) return cached;
-    const anchors = [from.box, to.box, ...waypoints.map(point => ({ ...point, w: 0, h: 0 }))];
-    const local = padded(bounds(anchors), 320);
-    const { region, boxes } = mode === "avoid"
-      ? this.obstacles.corridor(local)
-      : { region: local, boxes: this.obstacles.query(local) };
-    const geom = route(from, to, { mode, kind: edge.kind, waypoints, obstacles: boxes });
-    const extent = padded(pathExtent(geom.path), 72);
-    // In overlap mode an obstacle can move the label only within reach of the fixed path.
-    const entry = { key, region: mode === "avoid" ? region : extent, geom, extent };
-    this.entries.set(edge.id, entry);
-    this.edgeRegions.set(edge.id, entry.region);
+  lookupEdge(task: EdgeRouteTask) {
+    const entry = this.entries.get(task.id);
+    return entry?.key === task.key ? entry : undefined;
+  }
+
+  cachedEdge(id: string) {
+    return this.entries.get(id);
+  }
+
+  private saveEdge(id: string, entry: CachedWire) {
+    this.entries.set(id, entry);
+    this.edgeRegions.set(id, entry.region);
+    this.wireHitIndex.set(id, entry.extent);
+    this.hitWires.set(id, entry);
     return entry;
+  }
+
+  /** Satellite endpoints can differ from the worker cache while the input hub is open. */
+  setHitWires(wires: { edge: FlowEdge; geom: WireRoute; extent: Box }[]) {
+    const ids = new Set(wires.map(wire => wire.edge.id));
+    for (const id of this.hitWires.keys()) {
+      if (ids.has(id)) continue;
+      this.hitWires.delete(id);
+      this.wireHitIndex.delete(id);
+    }
+    for (const wire of wires) {
+      if (this.hitWires.get(wire.edge.id)?.geom === wire.geom) continue;
+      this.hitWires.set(wire.edge.id, wire);
+      this.wireHitIndex.set(wire.edge.id, wire.extent);
+    }
+  }
+
+  hitTestEdge(worldPt: Point, tolerance: number, candidates?: ReadonlySet<string>): WireHitResult | null {
+    let nearest: WireHitResult | null = null;
+    let best = tolerance * tolerance;
+    const area = { x: worldPt.x - tolerance, y: worldPt.y - tolerance, w: tolerance * 2, h: tolerance * 2 };
+    for (const id of this.wireHitIndex.query(area)) {
+      if (candidates && !candidates.has(id)) continue;
+      const entry = this.hitWires.get(id)!;
+      for (const leg of entry.geom.legs) {
+        for (let index = 1; index < leg.length; index++) {
+          const a = leg[index - 1], b = leg[index];
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const length = dx * dx + dy * dy;
+          const at = length ? Math.max(0, Math.min(1, ((worldPt.x - a.x) * dx + (worldPt.y - a.y) * dy) / length)) : 0;
+          const point = { x: a.x + dx * at, y: a.y + dy * at };
+          const squared = (point.x - worldPt.x) ** 2 + (point.y - worldPt.y) ** 2;
+          if (squared > best) continue;
+          best = squared;
+          nearest = { edgeId: id, distance: Math.sqrt(squared), worldPoint: point };
+        }
+      }
+    }
+    return nearest;
+  }
+
+  acceptEdgeRoute(edgeId: string, key: string, entry: CachedWire, revision: number) {
+    if (entry.key !== key || !this.routeIsCurrent(entry.region, revision)) return false;
+    this.saveEdge(edgeId, entry);
+    return true;
+  }
+
+  get(edge: FlowEdge, from: WireEnd, to: WireEnd, mode: WireRoutingMode): CachedWire {
+    const task = edgeRouteTask(edge, from, to, mode);
+    return this.lookupEdge(task) ?? this.saveEdge(task.id, buildEdgeRoute(task, this.obstacles));
   }
 }

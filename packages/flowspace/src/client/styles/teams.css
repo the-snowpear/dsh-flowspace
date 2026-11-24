@@ -32,7 +32,8 @@
   --team-panel: color-mix(in oklab, var(--surface-2) 58%, var(--surface));
   --team-sel: var(--surface);
 }
-.fs-root :is(.fs-team-shelf, .fs-team-view)::before { content: none; }
+.fs-root .fs-team-shelf::before,
+.fs-root .fs-team-view::before { content: none; }
 
 /* ---------- Sigil avatar: face from the seed, colour from the model ---------- */
 .fs-root .fs-tavatar,
@@ -44,14 +45,16 @@
   --sg-edge: color-mix(in oklab, var(--hue) 30%, transparent);
   --sg-crown: #f0ad42;
 }
-.fs-root :is(.fs-tavatar[data-variant="lead"], .fs-orbit-node[data-kind="lead"]) {
+.fs-root .fs-tavatar[data-variant="lead"],
+.fs-root .fs-orbit-node[data-kind="lead"] {
   --sg-tile: var(--text);
   --sg-head: var(--surface);
   --sg-ink: var(--text-3);
   --sg-eye: var(--text);
   --sg-edge: transparent;
 }
-.fs-root :is(.fs-tavatar[data-variant="vacant"], .fs-orbit-node[data-kind="vacant"]) {
+.fs-root .fs-tavatar[data-variant="vacant"],
+.fs-root .fs-orbit-node[data-kind="vacant"] {
   --sg-tile: transparent;
   --sg-head: color-mix(in oklab, var(--hue) 34%, var(--border-strong));
   --sg-ink: var(--surface);
@@ -90,7 +93,8 @@
 .fs-root .fs-sg-beacon { fill: var(--sg-head); }
 .fs-root .fs-sg-eyes { fill: var(--sg-eye); transform-box: fill-box; transform-origin: center; }
 .fs-root [data-tone="running"] .fs-sg-beacon { fill: var(--green); }
-.fs-root [data-tone="failed"] :is(.fs-sg-eyes, .fs-sg-beacon) { fill: var(--red); }
+.fs-root [data-tone="failed"] .fs-sg-eyes,
+.fs-root [data-tone="failed"] .fs-sg-beacon { fill: var(--red); }
 .fs-root .fs-tavatar[data-active]::before {
   content: ""; position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border-radius: 50%;
   background: var(--green); box-shadow: 0 0 0 2px var(--surface); z-index: 1;
@@ -184,8 +188,10 @@
   pointer-events: none;
   transition: transform var(--team-spring), width 320ms var(--ease-nav), height 320ms var(--ease-nav), opacity var(--dur-fast);
 }
-.fs-root :is(.fs-indicator-host, .fs-team-switch)[data-indicator="on"]::before { opacity: 1; }
-.fs-root :is(.fs-indicator-host, .fs-team-switch)[data-indicator-still]::before { transition: none; }
+.fs-root .fs-indicator-host[data-indicator="on"]::before,
+.fs-root .fs-team-switch[data-indicator="on"]::before { opacity: 1; }
+.fs-root .fs-indicator-host[data-indicator-still]::before,
+.fs-root .fs-team-switch[data-indicator-still]::before { transition: none; }
 
 .fs-root .fs-team-switch {
   position: relative;
@@ -378,7 +384,7 @@
   font-size: 12px; color: var(--text-3); cursor: pointer;
 }
 .fs-root .fs-team-archive-filter input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
-.fs-root .fs-team-archive-filter:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.fs-root .fs-team-archive-filter input:focus-visible ~ i { outline: 2px solid var(--accent); outline-offset: 2px; }
 .fs-root .fs-team-archive-filter > .ic { width: 14px; height: 14px; }
 .fs-root .fs-team-archive-filter i {
   position: relative; margin-inline-start: auto; width: 28px; height: 16px; border-radius: 9px;
@@ -581,7 +587,8 @@
   font: 13px/1.55 var(--font-ui);
   transition: box-shadow var(--dur-fast) var(--ease), background-color var(--dur-fast);
 }
-.fs-root :is(.fs-team-editor, .fs-workflow-import) :is(.fs-field, label:not(.fs-team-effort)) > :is(input, textarea, select):hover { box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--text) 26%, transparent); }
+.fs-root .fs-team-editor :is(.fs-field, label:not(.fs-team-effort)) > :is(input, textarea, select):hover,
+.fs-root .fs-workflow-import :is(.fs-field, label:not(.fs-team-effort)) > :is(input, textarea, select):hover { box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--text) 26%, transparent); }
 .fs-root :is(.fs-team-editor, .fs-workflow-import) :is(.fs-field, label:not(.fs-team-effort)) > :is(input, textarea, select):focus-visible,
 .fs-root .fs-team-effort:focus-within { outline: 0; box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-soft); }
 .fs-root .fs-team-editor textarea { resize: vertical; field-sizing: content; min-height: 76px; max-height: 300px; }
@@ -714,8 +721,8 @@
 }
 .fs-root .fs-team-import-option .ic { width: 15px; height: 15px; color: var(--text-3); }
 .fs-root .fs-team-import-option input { margin-inline-start: auto; accent-color: var(--accent); }
-.fs-root .fs-team-import-option:has(:checked) { box-shadow: inset 0 0 0 1.5px var(--accent); background: var(--team-tint); }
-.fs-root .fs-team-import-option > .ic:has(~ input:checked) { color: var(--team-ink); }
+.fs-root .fs-team-import-option.is-checked { box-shadow: inset 0 0 0 1.5px var(--accent); background: var(--team-tint); }
+.fs-root .fs-team-import-option.is-checked > .ic { color: var(--team-ink); }
 .fs-root .fs-workflow-import .fs-team-actions { justify-content: flex-end; margin-top: 8px; }
 .fs-root .fs-team-editor .fs-team-muted, .fs-root .fs-workflow-import .fs-team-muted { font-size: 12px; }
 

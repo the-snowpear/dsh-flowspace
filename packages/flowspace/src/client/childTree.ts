@@ -40,6 +40,8 @@ export interface ChildLink {
   from: Pt;
   to: Pt;
   active: boolean;
+  /** Canvas node (agent or role) whose bottom port anchors this link. */
+  sourceNodeId?: string;
   /** Role node whose cross-highlight this link joins. */
   staffId?: string;
 }
@@ -129,7 +131,7 @@ export function buildChildTree(opts: {
         running: !!sub?.running, agentNodeId: agent.id, member: false, outside: false, box: boxes[index],
       };
       cards.push(card);
-      links.push({ id: card.id, from: port, to: { x: card.box.x + CHILD_W / 2, y: card.box.y }, active: card.running });
+      links.push({ id: card.id, from: port, to: { x: card.box.x + CHILD_W / 2, y: card.box.y }, active: card.running, sourceNodeId: agent.id });
     });
   }
 
@@ -142,7 +144,7 @@ export function buildChildTree(opts: {
       const card = memberCard(member, role.staffOf!, boxes[index], role.id);
       cards.push(card);
       links.push({ id: card.id, from: port, to: { x: card.box.x + CHILD_W / 2, y: card.box.y }, active: card.running,
-        staffId: role.id });
+        sourceNodeId: role.id, staffId: role.id });
     });
   }
   return { cards, links, members };

@@ -51,6 +51,7 @@ import {
   renderNodeCompactBody,
 } from "./cards/BasicNodeBodies.tsx";
 import { CardBody, type CardRenderer, type CardUiState } from "./ViewportCard.tsx";
+import type { CanvasInteractionStore } from "./interactionStore.ts";
 
 export interface UseNodeCardRendererOptions {
   doc: FlowspaceDocument;
@@ -59,6 +60,7 @@ export interface UseNodeCardRendererOptions {
   vpSizeRef: MutableRefObject<{ width: number; height: number }>;
   connectingRef: MutableRefObject<ConnectingState | null>;
   isDraggingRef: MutableRefObject<boolean>;
+  interactionStore: CanvasInteractionStore;
   contentIndex: {
     nodesById: Map<string, FlowNode>;
     referenceSources: Set<string>;
@@ -104,6 +106,7 @@ export function useNodeCardRenderer({
   vpSizeRef,
   connectingRef,
   isDraggingRef,
+  interactionStore,
   contentIndex,
   edgeIndex,
   crewNodes,
@@ -337,6 +340,7 @@ export function useNodeCardRenderer({
             data-port-id={portId}
             data-port-kind={kind}
             data-port-direction={direction}
+            data-edge-id={!multi && lastEdge ? lastEdge.id : undefined}
             className={[
               "port",
               `port-${kind}`,
@@ -362,7 +366,8 @@ export function useNodeCardRenderer({
             title={title}
             aria-label={title}
             onPointerEnter={() => {
-              if (connectingRef.current || isDraggingRef.current || !lastEdge)
+              if (connectingRef.current || isDraggingRef.current ||
+                interactionStore.getDrag() || interactionStore.getMarquee() || !lastEdge)
                 return;
               if (multi) openInputHub(node.id, kind);
               else setHoveredEdgeId(lastEdge.id);
@@ -965,7 +970,7 @@ export function useNodeCardRenderer({
           )}
           <CardBody
             compact={compact}
-            preserve={placement === "canvas" && node.expanded && !node.pinned}
+            preserve={placement === "canvas" && node.expanded && !node.pinned && ui?.preserveBody !== false}
             prewarmFull={prewarmFull}
             contentVersion={contentVersion}
             full={renderFullBody}
@@ -1055,6 +1060,7 @@ export function useNodeCardRenderer({
       contentIndex,
       cardActions,
       edgeIndex,
+      interactionStore,
       workspaces,
       bridge,
       reportError,

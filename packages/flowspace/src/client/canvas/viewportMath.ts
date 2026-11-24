@@ -40,8 +40,12 @@ export function viewAtDetailBoundary(
 }
 
 /** Semantic-zoom text compensation, quantised so zooming does not relayout every frame. */
+const TYPE_SCALES = [1, 1.4, 1.8, 2.2];
+
 export function typeScaleFor(zoom: number): number {
-  return zoom < LOD_ZOOM ? Math.round(clamp(1 / zoom, 1, 2.6) * 10) / 10 : 1;
+  if (!(zoom > 0) || !Number.isFinite(zoom)) return TYPE_SCALES[TYPE_SCALES.length - 1];
+  if (zoom >= LOD_ZOOM) return 1;
+  return TYPE_SCALES[Math.max(0, Math.min(Math.round((1 / zoom - 1) / 0.4), TYPE_SCALES.length - 1))];
 }
 
 /** Zoom at which each grid layer's tiles were last rasterised. */

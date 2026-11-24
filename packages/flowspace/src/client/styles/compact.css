@@ -107,13 +107,6 @@
   color: var(--text-3);
   font: 450 calc(10px * min(var(--fs-type-scale, 1), 2)) / 1.4 var(--font-ui);
 }
-.fs-root .node.compact[data-fs-semantic] .compact-kind:has(+ :is(.status, .compact-overview-detail))::after {
-  content: "";
-  width: 1px;
-  height: 0.75em;
-  margin-left: 12px;
-  background: var(--border-strong);
-}
 .fs-root .node.compact[data-fs-semantic] :is(.compact-status .status, .compact-overview-detail) {
   min-width: 0;
   height: auto;
@@ -128,6 +121,22 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.fs-root .node.compact[data-fs-semantic] .compact-kind.has-detail + .status,
+.fs-root .node.compact[data-fs-semantic] .compact-kind.has-detail + .compact-overview-detail {
+  position: relative;
+  padding-left: 13px;
+}
+.fs-root .node.compact[data-fs-semantic] .compact-kind.has-detail + .status::before,
+.fs-root .node.compact[data-fs-semantic] .compact-kind.has-detail + .compact-overview-detail::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 0.75em;
+  background: var(--border-strong);
+}
 .fs-root .node.compact[data-fs-semantic] .status:not(.status-draft) {
   color: var(--sc);
 }
@@ -140,7 +149,7 @@
   background: var(--sc);
   box-shadow: none;
 }
-.fs-root .node.compact[data-fs-semantic] .compact-status .compact-kind:has(~ .fs-team-node-summary) {
+.fs-root .node.compact[data-fs-semantic] .compact-status .compact-kind.has-team-summary {
   display: none;
 }
 .fs-root .node.compact[data-fs-semantic] .compact-status .fs-team-node-summary {

@@ -41,8 +41,10 @@
 /* ---------- Deck grid ---------- */
 .fs-root .fs-deck { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 12px var(--inspector); }
 .fs-root .fs-team-view[data-resizing] { cursor: col-resize; user-select: none; }
-.fs-root .fs-team-view[data-resizing] :is(.fs-crew-inspector, .fs-deck-main) { pointer-events: none; }
-.fs-root :is(.fs-deck-main, .fs-crew-inspector) {
+.fs-root .fs-team-view[data-resizing] .fs-crew-inspector,
+.fs-root .fs-team-view[data-resizing] .fs-deck-main { pointer-events: none; }
+.fs-root .fs-deck-main,
+.fs-root .fs-crew-inspector {
   display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
   border-radius: 18px; background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--deck-line), 0 18px 48px -34px var(--shadow);
@@ -55,7 +57,8 @@
 }
 .fs-root .fs-room-resizer:is(:hover, :focus-visible)::after,
 .fs-root .fs-team-view[data-resizing] .fs-room-resizer::after { opacity: 1; scale: 1; }
-.fs-root :is(.fs-room-resizer:focus-visible, .fs-team-view[data-resizing] .fs-room-resizer)::after { background: var(--accent); }
+.fs-root .fs-room-resizer:focus-visible::after,
+.fs-root .fs-team-view[data-resizing] .fs-room-resizer::after { background: var(--accent); }
 
 /* ---------- Pulse ---------- */
 .fs-root .fs-pulse { flex: none; display: grid; gap: 9px; padding: 12px 16px 12px; border-bottom: 1px solid var(--deck-line); }
@@ -76,9 +79,12 @@
 .fs-root .fs-ribbon-seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .fs-root .fs-ribbon[data-filtered] .fs-ribbon-seg:not([aria-pressed="true"]) { opacity: .3; }
 .fs-root .fs-ribbon-empty { flex: 1; border-radius: var(--r-full); background: var(--surface-3); }
-.fs-root :is(.fs-ribbon-seg, .fs-chip)[data-group="running"] { --seg: var(--green); }
-.fs-root :is(.fs-ribbon-seg, .fs-chip)[data-group="idle"] { --seg: color-mix(in oklab, var(--text-3) 50%, transparent); }
-.fs-root :is(.fs-ribbon-seg, .fs-chip)[data-group="vacant"] { --seg: color-mix(in oklab, var(--text-3) 24%, transparent); }
+.fs-root .fs-ribbon-seg[data-group="running"],
+.fs-root .fs-chip[data-group="running"] { --seg: var(--green); }
+.fs-root .fs-ribbon-seg[data-group="idle"],
+.fs-root .fs-chip[data-group="idle"] { --seg: color-mix(in oklab, var(--text-3) 50%, transparent); }
+.fs-root .fs-ribbon-seg[data-group="vacant"],
+.fs-root .fs-chip[data-group="vacant"] { --seg: color-mix(in oklab, var(--text-3) 24%, transparent); }
 .fs-root .fs-ribbon-seg[data-group="vacant"] {
   background: repeating-linear-gradient(90deg, var(--border-strong) 0 4px, transparent 4px 7px);
 }
@@ -228,7 +234,8 @@
 .fs-root .fs-orbit-edges path[data-tone="running"] { stroke: var(--hue); stroke-width: 1.7; stroke-dasharray: 4 5; }
 .fs-root .fs-orbit-edges path[data-tone="vacant"] { stroke-dasharray: 2 5; opacity: .6; }
 .fs-root .fs-orbit-chords path { stroke: color-mix(in oklab, var(--accent) 42%, transparent); stroke-dasharray: 5 4; }
-.fs-root :is(.fs-orbit-edges, .fs-orbit-chords) path[data-dimmed] { opacity: .12; }
+.fs-root .fs-orbit-edges path[data-dimmed],
+.fs-root .fs-orbit-chords path[data-dimmed] { opacity: .12; }
 .fs-root .fs-orbit-packets circle { fill: var(--hue); filter: drop-shadow(0 0 4px var(--hue)); offset-rotate: 0deg; opacity: 0; }
 .fs-root .fs-orbit-node {
   cursor: pointer; outline: none;
@@ -465,7 +472,7 @@
 .fs-root .fs-team-node-summary .fs-team-node-dot { width: 6px; height: 6px; margin-inline-end: 4px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green); }
 .fs-root .node-team .compact-status .fs-team-node-summary { margin-inline-start: auto; }
 .fs-root .semantic-zoom .node-team .compact-status { display: grid; justify-items: start; gap: 3px; }
-.fs-root .node-team[data-fs-semantic] .compact-status .fs-team-node-summary { margin: 0; font-size: calc(10.5px * var(--fs-type-scale, 1)); line-height: 1.2; }
+.fs-root .node-team[data-fs-semantic] .compact-status .fs-team-node-summary { margin: 0; font-size: calc(10.5px * min(var(--fs-type-scale, 1), 2.2)); line-height: 1.2; }
 .fs-root [data-fs-semantic] .fs-team-node-summary .ic { width: .95em; height: .95em; }
 .fs-root .node-team .fs-team-enter { color: var(--team-ink); }
 .fs-root .fs-team-enter .ic:last-child { width: 10px; transition: translate var(--dur) var(--ease-out); }
@@ -493,7 +500,8 @@
   .fs-root:not([data-perf-tier="L1"]) .fs-orbit-ripple { animation: fs-team-ripple 2.8s var(--ease-out) infinite; }
   .fs-root:not([data-perf-tier="L1"]) .fs-orbit-packets circle { animation: fs-team-travel 1.3s var(--ease-nav) forwards; }
   .fs-root:not([data-perf-tier="L1"]) .fs-tavatar[data-active]::after { animation: fs-team-breathe 1.8s var(--ease-loop) infinite; }
-  .fs-root:not([data-perf-tier="L1"]) :is(.fs-stage-pane, .fs-ins-body) { animation: fs-team-in 300ms var(--ease-out) backwards; }
+  .fs-root:not([data-perf-tier="L1"]) .fs-stage-pane,
+  .fs-root:not([data-perf-tier="L1"]) .fs-ins-body { animation: fs-team-in 300ms var(--ease-out) backwards; }
   .fs-root:not([data-perf-tier="L1"]) .fs-crew-inspector { animation: fs-team-in 260ms var(--ease-out) backwards; }
   .fs-root:not([data-perf-tier="L1"]) .fs-post[data-fresh] { animation: fs-team-in 360ms var(--ease-out) backwards, fs-team-flash 1.2s var(--ease-out) backwards; }
   .fs-root:not([data-perf-tier="L1"]) .fs-team-node-dot { animation: fs-team-blink 1.4s var(--ease-loop) infinite; }

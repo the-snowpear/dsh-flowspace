@@ -147,14 +147,6 @@
   stroke-dasharray: 5 5;
   opacity: 1;
 }
-.fs-root [data-flow-wire] > :is(.edge-flow, .edge-glow) {
-  animation-delay: var(--fs-wire-flow-delay, 0ms);
-}
-.fs-root [data-gpu-flow] > .edge-path:is(.edge-flow, .edge-glow),
-.fs-root [data-gpu-flow] > :is(.edge-flow, .edge-glow) {
-  visibility: hidden;
-  animation: none;
-}
 .fs-root .fs-wire-flow-canvas:not([hidden]) {
   display: block;
   width: 100%;
@@ -447,7 +439,7 @@
   border-left: 2px solid var(--m-f);
 }
 .fs-root .fs-tags-layer[data-fs-semantic] .exchange-tag em,
-.fs-root .fs-tags-layer[data-fs-semantic] .edge-tag:not(.edge-state-waiting):not(.edge-state-boundary) {
+.fs-root .fs-tags-layer[data-fs-semantic] .edge-tag:not(:is(.edge-state-waiting, .edge-state-boundary, .selected, .edge-spotlight)) {
   display: none;
 }
 
@@ -469,6 +461,11 @@
 .fs-root .waypoint:hover {
   scale: 1.35;
   background: var(--accent);
+}
+.fs-root .fs-live-edge-tags .edge-tag,
+.fs-root .fs-live-edge-tags .waypoint {
+  animation: none;
+  transition-duration: 0s;
 }
 .fs-root .waypoint::before {
   content: "";

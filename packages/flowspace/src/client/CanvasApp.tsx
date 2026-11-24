@@ -43,7 +43,6 @@ import {
 } from "./canvas/canvasGraphOps.ts";
 import type {
   ConnectingState,
-  MarqueeRect,
   SelectionState,
 } from "./canvas/canvasTypes.ts";
 import {
@@ -65,6 +64,44 @@ import { useCanvasScene } from "./canvas/useCanvasScene.ts";
 import { useCanvasShortcuts } from "./canvas/useCanvasShortcuts.ts";
 import { useCanvasViewport } from "./canvas/useCanvasViewport.ts";
 import { useCardActions } from "./canvas/ViewportCard.tsx";
+import { CanvasInteractionContext, createCanvasInteractionStore } from "./canvas/interactionStore.ts";
+
+const reducedMotionStyles = (
+  <style data-fs-reduced-motion>{`
+@layer overrides {
+  .fs-root[data-perf-tier="L1"] :where(
+      div,
+      section,
+      article,
+      aside,
+      header,
+      footer,
+      main,
+      nav,
+      button,
+      input,
+      textarea,
+      select,
+      dialog,
+      a,
+      span,
+      i,
+      svg,
+      path,
+      circle,
+      rect.port-rim
+    ),
+  .fs-root[data-perf-tier="L1"] :where(div, button, span, i, dialog)::before,
+  .fs-root[data-perf-tier="L1"] :where(div, button, span, i, dialog)::after,
+  .fs-root[data-perf-tier="L1"] dialog.fs-modal-dialog::backdrop {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+  }
+}
+`}</style>
+);
 
 export { detectHostDark };
 
@@ -169,8 +206,11 @@ export function CanvasApp({
   >({});
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [connecting, setConnecting] = useState<ConnectingState | null>(null);
-  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
-  const [marquee, setMarquee] = useState<MarqueeRect | null>(null);
+  const [interactionStore] = useState(createCanvasInteractionStore);
+  const setHoveredEdgeId = useCallback((update: string | null | ((id: string | null) => string | null)) => {
+    const current = interactionStore.getHover().edgeId;
+    interactionStore.setHover({ edgeId: typeof update === "function" ? update(current) : update });
+  }, [interactionStore]);
   const [snapPreview, setSnapPreview] = useState<
     "left" | "right" | "max" | null
   >(null);
@@ -290,7 +330,9 @@ export function CanvasApp({
     return () => mq.removeEventListener("change", onMq);
   }, []);
 
+  const replayActive = Boolean(replayRun);
   useEffect(() => {
+    if (replayActive) return;
     const vp = viewportRef.current;
     const root = rootRef.current;
     if (!vp || !root) return;
@@ -307,7 +349,7 @@ export function CanvasApp({
     ro.observe(vp);
     ro.observe(root);
     return () => ro.disconnect();
-  }, []);
+  }, [replayActive]);
 
   const refreshProjectStructures = useCallback(() => {
     void bridge
@@ -423,6 +465,7 @@ export function CanvasApp({
 
   /* Stage 2: Viewport camera, cursor lens FX & wheel glide */
   const viewport = useCanvasViewport({
+    interactionStore,
     rootRef,
     viewportRef,
     docRef,
@@ -442,6 +485,7 @@ export function CanvasApp({
     routeName,
     minimapOpen,
     wheelPref: prefs.wheel,
+    replayActive,
   });
 
   /* Focus request from Native DSH ChatBadge */
@@ -461,6 +505,7 @@ export function CanvasApp({
 
   /* Stage 3: Visibility, derived structures, child tree & base wire geometry */
   const scene = useCanvasScene({
+    interactionStore,
     baseDoc,
     doc,
     graphDocument,
@@ -605,6 +650,8 @@ export function CanvasApp({
 
   /* Stage 6: Pointer gestures, input fan-out hub, port/staff wiring & marquee */
   const gestures = useCanvasGestures({
+    interactionStore,
+    attachedEdges: scene.attachedEdges,
     areaRef,
     viewportRef,
     doc,
@@ -622,7 +669,6 @@ export function CanvasApp({
     keepExpandedIds: scene.keepExpandedIds,
     routingBoxes: scene.routingBoxes,
     baseWireLayouts: scene.baseWireLayouts,
-    paintArea: viewport.paintArea,
     prefs,
     lod,
     reducedMotion,
@@ -634,7 +680,6 @@ export function CanvasApp({
     setHoveredEdgeId,
     setConnecting,
     connecting,
-    setMarquee,
     setSnapPreview,
     setIsDragging,
     setHistory,
@@ -852,6 +897,7 @@ export function CanvasApp({
     vpSizeRef,
     connectingRef,
     isDraggingRef,
+    interactionStore,
     contentIndex,
     edgeIndex,
     crewNodes,
@@ -884,22 +930,26 @@ export function CanvasApp({
 
   if (replayRun) {
     return (
-      <CanvasReplayView
-        doc={doc}
-        snapshot={snapshot}
-        replayRun={replayRun}
-        replayTime={replayTime}
-        setReplayTime={setReplayTime}
-        onExit={() => setReplayRun(undefined)}
-        displayedTheme={actions.displayedTheme}
-        reducedMotion={reducedMotion}
-        vpSize={vpSize}
-        renderNodeCard={renderNodeCard}
-      />
+      <>
+        {reducedMotion && reducedMotionStyles}
+        <CanvasReplayView
+          doc={doc}
+          snapshot={snapshot}
+          replayRun={replayRun}
+          replayTime={replayTime}
+          setReplayTime={setReplayTime}
+          onExit={() => setReplayRun(undefined)}
+          displayedTheme={actions.displayedTheme}
+          reducedMotion={reducedMotion}
+          vpSize={vpSize}
+          renderNodeCard={renderNodeCard}
+        />
+      </>
     );
   }
 
   return (
+    <CanvasInteractionContext.Provider value={interactionStore}>
     <CanvasPreviewContext.Provider value={dataPreviews}>
       <div
         ref={rootRef}
@@ -907,6 +957,7 @@ export function CanvasApp({
         data-theme={actions.displayedTheme}
         data-perf-tier={reducedMotion ? "L1" : "L3"}
       >
+        {reducedMotion && reducedMotionStyles}
         {notice && renderNotice?.(notice, () => setNotice(undefined))}
         <CanvasSidebar
           baseDoc={baseDoc}
@@ -995,14 +1046,13 @@ export function CanvasApp({
                   routeName={routeName}
                   setRouteName={setRouteName}
                   prefs={prefs}
-                  effectiveTheme={effectiveTheme}
                   displayedTheme={actions.displayedTheme}
                   reducedMotion={reducedMotion}
                   view={view}
                   vpSize={vpSize}
                   lod={lod}
+                  languageRevision={languageRevision}
                   paintArea={viewport.paintArea}
-                  svgBounds={viewport.paintArea}
                   wireViewport={scene.wireViewport}
                   rasterScene={rasterScene}
                   tool={tool}
@@ -1022,6 +1072,7 @@ export function CanvasApp({
                   lensGridRef={viewport.lensGridRef}
                   cameraRef={viewport.cameraRef}
                   worldRef={viewport.worldRef}
+                  groupsLayerRef={viewport.groupsLayerRef}
                   zoomLabelRef={viewport.zoomLabelRef}
                   miniViewportRef={viewport.miniViewportRef}
                   miniFrameRef={viewport.miniFrameRef}
@@ -1036,12 +1087,9 @@ export function CanvasApp({
                   setSelectedStructureId={setSelectedStructureId}
                   editingNodeId={editingNodeId}
                   focusedCard={focusedCard}
-                  hoveredEdgeId={hoveredEdgeId}
                   setHoveredEdgeId={setHoveredEdgeId}
                   connecting={connecting}
-                  marquee={marquee}
                   gesture={gesture}
-                  preparing={viewport.preparing}
                   contentIndex={contentIndex}
                   nodesById={nodesById}
                   membersOf={membersOf}
@@ -1050,6 +1098,7 @@ export function CanvasApp({
                   writeByEdge={writeByEdge}
                   visibleGroups={scene.visibleGroups}
                   sceneNodes={scene.sceneNodes}
+                  minimapBoxes={scene.minimapBoxes}
                   keepExpandedIds={scene.keepExpandedIds}
                   waitingAgentNodes={scene.waitingAgentNodes}
                   cardBoxes={scene.cardBoxes}
@@ -1064,6 +1113,7 @@ export function CanvasApp({
                   accessoryWires={scene.accessoryWires}
                   exchanges={scene.exchanges}
                   routingBoxes={scene.routingBoxes}
+                  routingBoxesById={scene.routingBoxesById}
                   activeHubLayout={gestures.activeHubLayout}
                   staffWires={gestures.staffWires}
                   staffDrag={gestures.staffDrag}
@@ -1077,6 +1127,11 @@ export function CanvasApp({
                   editEdge={actions.editEdge}
                   createCanvasNode={actions.createCanvasNode}
                   startPan={gestures.startPan}
+                  startNodeMove={gestures.startNodeMove}
+                  selectNode={actions.selectNode}
+                  toggleNodeForm={actions.toggleNodeForm}
+                  stopNode={actions.stopNode}
+                  openNodeContextMenu={menus.openNodeContextMenu}
                   startMarquee={gestures.startMarquee}
                   startGroupMove={gestures.startGroupMove}
                   startResize={gestures.startResize}
@@ -1321,5 +1376,6 @@ export function CanvasApp({
         </div>
       </div>
     </CanvasPreviewContext.Provider>
+    </CanvasInteractionContext.Provider>
   );
 }

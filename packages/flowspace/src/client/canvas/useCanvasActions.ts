@@ -335,9 +335,13 @@ export function useCanvasActions({
     [docRef, setMobileSidebar, setRouteName, setSelection, fitBoxes],
   );
 
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+
   const fitView = useCallback(
     (all = false, instant = false) => {
       const curDoc = docRef.current;
+      const curSelection = selectionRef.current;
       const curZoom = curDoc.viewport.zoom;
       const curLod = curZoom < LOD_ZOOM;
       const hiddenWs = curDoc.prefs?.hiddenWorkspaces ?? [];
@@ -355,15 +359,15 @@ export function useCanvasActions({
         }
         return true;
       };
-      if (!all && selection.groups.length) {
-        const boxes = selection.groups
+      if (!all && curSelection.groups.length) {
+        const boxes = curSelection.groups
           .map((id) => curDoc.nodes.find((n) => n.id === id))
           .filter((g): g is FlowNode => !!g)
           .map((g) => groupBox(g));
         return fitBoxes(boxes, instant);
       }
-      if (!all && selection.nodes.length) {
-        const boxes = selection.nodes
+      if (!all && curSelection.nodes.length) {
+        const boxes = curSelection.nodes
           .map((id) => curDoc.nodes.find((n) => n.id === id))
           .filter((n): n is FlowNode => !!n)
           .map((n) => nodeBox(n, false, true));
@@ -392,7 +396,7 @@ export function useCanvasActions({
       ];
       fitBoxes(allBoxes, instant);
     },
-    [docRef, selection, fitBoxes, snapshot],
+    [docRef, fitBoxes, snapshot],
   );
 
   const focusCreatedGroup = useCallback(
